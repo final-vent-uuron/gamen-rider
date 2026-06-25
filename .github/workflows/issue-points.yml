@@ -64,7 +64,7 @@ jobs:
       - name: Update Project Points field
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
+          token: ${{ secrets.PROJECT_TOKEN }}
           script: |
             const pointValue = parseInt("${{ steps.point.outputs.value }}", 10);
             const org = "final-vent-uuron";
