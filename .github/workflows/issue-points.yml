@@ -66,17 +66,20 @@ jobs:
       - name: Update Project Points field
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }} # ← 警告解消：token から github-token に変更
+          github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
             const pointValue = parseInt("${{ steps.point.outputs.value }}", 10);
-            const owner = "final-vent-uuron"; 
-            const projectNumber = 1; // ProjectのURLが /projects/1 であることを確認してください
+            const org = "final-vent-uuron"; 
+            
+            // ⚠️ 注意: 実際のプロジェクトURL（projects/〇〇）の数字に書き換えてください
+            const projectNumber = 1; 
+            
             const issueNodeId = context.payload.issue.node_id;
 
-            // 1. エラー解消：organization ではなく user から Project を取得するように修正
+            // user ではなく organization に戻します
             const projData = await github.graphql(`
-              query($owner: String!, $number: Int!) {
-                user(login: $owner) {
+              query($org: String!, $number: Int!) {
+                organization(login: $org) {
                   projectV2(number: $number) {
                     id
                     fields(first: 50) {
@@ -87,17 +90,23 @@ jobs:
                   }
                 }
               }
-            `, { owner, number: projectNumber });
+            `, { org, number: projectNumber });
 
-            const project = projData.user.projectV2; // ← organization を user に変更
-            const projectId = project.id;
-            const pointsField = project.fields.nodes.find(f => f.name === "Points");
-            if (!pointsField) {
-              core.setFailed("Points フィールドが見つかりません");
+            // プロジェクトが見つからなかった場合のわかりやすいエラーハンドリング
+            if (!projData.organization || !projData.organization.projectV2) {
+              core.setFailed(`Project番号 ${projectNumber} が見つかりません。番号が間違っているか、PROJECT_TOKEN に Organization Project の読み取り権限がありません。`);
               return;
             }
 
-            // 2. Issue が Project に乗っているか確認し、なければ追加して item ID を得る
+            const project = projData.organization.projectV2;
+            const projectId = project.id;
+            const pointsField = project.fields.nodes.find(f => f.name === "Points");
+            if (!pointsField) {
+              core.setFailed("Points フィールドが見つかりません。Projectに 'Points' という名前のNumberフィールドが存在するか確認してください。");
+              return;
+            }
+
+            // Issue が Project に乗っているか確認し、なければ追加して item ID を得る
             const addRes = await github.graphql(`
               mutation($projectId: ID!, $contentId: ID!) {
                 addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
@@ -108,7 +117,7 @@ jobs:
 
             const itemId = addRes.addProjectV2ItemById.item.id;
 
-            // 3. Points フィールドに数値をセット
+            // Points フィールドに数値をセット
             await github.graphql(`
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
                 updateProjectV2ItemFieldValue(input: {
