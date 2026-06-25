@@ -17,7 +17,8 @@ jobs:
         id: ai
         uses: actions/ai-inference@v1
         with:
-          model: meta/meta-llama-3.1-8b-instruct
+          provider: copilot
+          model: gpt-4o-mini
           token: ${{ secrets.PROJECT_TOKEN }}
           system-prompt: |
             You are an agile estimation assistant. You read a GitHub issue
