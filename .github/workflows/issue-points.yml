@@ -131,17 +131,17 @@ jobs:
 
             console.log(`Points フィールドに ${pointValue} をセットしました`);
 
-            - name: Notify Discord about points
-                    env:
-                      DISCORD_WEBHOOK: ${{ secrets.POINT_BOT }}
-                    run: |
-                      POINT="${{ steps.point.outputs.value }}"
-                      ISSUE_NUMBER="${{ github.event.issue.number }}"
-                      ISSUE_TITLE="${{ github.event.issue.title }}"
-                      ISSUE_URL="${{ github.event.issue.html_url }}"
-            
-                      curl -X POST "$DISCORD_WEBHOOK" \
-                        -H "Content-Type: application/json" \
-                        -d "{
-                          \"content\": \"🎯 Issue #${ISSUE_NUMBER} 『${ISSUE_TITLE}』に **${POINT}ポイント** が付きました！\n${ISSUE_URL}\"
-                        }"
+      - name: Notify Discord about points
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.POINT_BOT }}
+        run: |
+          POINT="${{ steps.point.outputs.value }}"
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          ISSUE_URL="${{ github.event.issue.html_url }}"
+
+          curl -X POST "$DISCORD_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"content\": \"🎯 Issue #${ISSUE_NUMBER} 『${ISSUE_TITLE}』に **${POINT}ポイント** が付きました！\n${ISSUE_URL}\"
+            }"
