@@ -133,7 +133,7 @@ jobs:
 
             - name: Notify Discord about points
                     env:
-                      DISCORD_WEBHOOK: ${{ secrets.point_bot }}
+                      DISCORD_WEBHOOK: ${{ secrets.POINT_BOT }}
                     run: |
                       POINT="${{ steps.point.outputs.value }}"
                       ISSUE_NUMBER="${{ github.event.issue.number }}"
