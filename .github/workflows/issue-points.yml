@@ -1,0 +1,120 @@
+name: Issue Points Estimator
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  estimate-points:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask AI for difficulty points
+        id: ai
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4o-mini
+          system-prompt: |
+            You are an agile estimation assistant. You read a GitHub issue
+            and estimate its difficulty using the Fibonacci scale:
+            1, 2, 3, 5, 8, 13.
+            1 = trivial, 13 = very large (should probably be split).
+            Reply with ONLY the single number. No words, no explanation.
+          prompt: |
+            Title: ${{ github.event.issue.title }}
+
+            Body:
+            ${{ github.event.issue.body }}
+
+      - name: Extract point value
+        id: point
+        run: |
+          RAW="${{ steps.ai.outputs.response }}"
+          # 最初に出てくる数字だけ取り出す
+          NUM=$(echo "$RAW" | grep -oE '[0-9]+' | head -n1)
+          # フィボナッチの許可値以外は3に丸める
+          case "$NUM" in
+            1|2|3|5|8|13) ;;
+            *) NUM=3 ;;
+          esac
+          echo "value=$NUM" >> "$GITHUB_OUTPUT"
+          echo "AIが見積もったポイント: $NUM"
+
+      - name: Add label to issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          POINT="${{ steps.point.outputs.value }}"
+          LABEL="point: $POINT"
+          # ラベルが無ければ作成（失敗しても無視）
+          gh label create "$LABEL" --color FFD700 --repo "${{ github.repository }}" 2>/dev/null || true
+          # 既存の point: ラベルを一旦外す
+          for L in 1 2 3 5 8 13; do
+            gh issue edit ${{ github.event.issue.number }} \
+              --remove-label "point: $L" --repo "${{ github.repository }}" 2>/dev/null || true
+          done
+          gh issue edit ${{ github.event.issue.number }} \
+            --add-label "$LABEL" --repo "${{ github.repository }}"
+
+      - name: Update Project Points field
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const pointValue = parseInt("${{ steps.point.outputs.value }}", 10);
+            const org = "final-vent-uuron";
+            const projectNumber = 1;
+            const issueNodeId = context.payload.issue.node_id;
+
+            // 1. Project の ID と Points フィールドの ID を取得
+            const projData = await github.graphql(`
+              query($org: String!, $number: Int!) {
+                organization(login: $org) {
+                  projectV2(number: $number) {
+                    id
+                    fields(first: 50) {
+                      nodes {
+                        ... on ProjectV2FieldCommon { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { org, number: projectNumber });
+
+            const project = projData.organization.projectV2;
+            const projectId = project.id;
+            const pointsField = project.fields.nodes.find(f => f.name === "Points");
+            if (!pointsField) {
+              core.setFailed("Points フィールドが見つかりません");
+              return;
+            }
+
+            // 2. Issue が Project に乗っているか確認し、なければ追加して item ID を得る
+            const addRes = await github.graphql(`
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                  item { id }
+                }
+              }
+            `, { projectId, contentId: issueNodeId });
+
+            const itemId = addRes.addProjectV2ItemById.item.id;
+
+            // 3. Points フィールドに数値をセット
+            await github.graphql(`
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: { number: $value }
+                }) { projectV2Item { id } }
+              }
+            `, { projectId, itemId, fieldId: pointsField.id, value: pointValue });
+
+            console.log(`Points フィールドに ${pointValue} をセットしました`);
