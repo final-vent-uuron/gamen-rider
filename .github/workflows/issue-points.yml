@@ -18,7 +18,7 @@ jobs:
         uses: actions/ai-inference@v1
         with:
           model: openai/gpt-4o-mini
-          github-token: ${{ secrets.PROJECT_TOKEN }}
+          token: ${{ secrets.PROJECT_TOKEN }}
           system-prompt: |
             You are an agile estimation assistant. You read a GitHub issue
             and estimate its difficulty using the Fibonacci scale:
