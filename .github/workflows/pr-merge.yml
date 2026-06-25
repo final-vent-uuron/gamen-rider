@@ -1,0 +1,22 @@
+name: PR Merge Point Ranking
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  post-ranking-on-merge:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ranking workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: "final-vent-uuron",
+              repo: "gamen-rider",
+              workflow_id: "point-ranking.yml",
+              ref: "main",
+            });
