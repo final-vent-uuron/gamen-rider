@@ -66,17 +66,17 @@ jobs:
       - name: Update Project Points field
         uses: actions/github-script@v7
         with:
-          token: ${{ secrets.PROJECT_TOKEN }}
+          github-token: ${{ secrets.PROJECT_TOKEN }} # ← 警告解消：token から github-token に変更
           script: |
             const pointValue = parseInt("${{ steps.point.outputs.value }}", 10);
-            const org = "final-vent-uuron";
-            const projectNumber = 1;
+            const owner = "final-vent-uuron"; 
+            const projectNumber = 1; // ProjectのURLが /projects/1 であることを確認してください
             const issueNodeId = context.payload.issue.node_id;
 
-            // 1. Project の ID と Points フィールドの ID を取得
+            // 1. エラー解消：organization ではなく user から Project を取得するように修正
             const projData = await github.graphql(`
-              query($org: String!, $number: Int!) {
-                organization(login: $org) {
+              query($owner: String!, $number: Int!) {
+                user(login: $owner) {
                   projectV2(number: $number) {
                     id
                     fields(first: 50) {
@@ -87,9 +87,9 @@ jobs:
                   }
                 }
               }
-            `, { org, number: projectNumber });
+            `, { owner, number: projectNumber });
 
-            const project = projData.organization.projectV2;
+            const project = projData.user.projectV2; // ← organization を user に変更
             const projectId = project.id;
             const pointsField = project.fields.nodes.find(f => f.name === "Points");
             if (!pointsField) {
