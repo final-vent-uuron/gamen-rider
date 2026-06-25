@@ -1,0 +1,35 @@
+{
+	"name": "final-vent",
+	"private": true,
+	"type": "module",
+	"imports": {
+		"#/*": "./src/*"
+	},
+	"engines": {
+		"npm": "use pnpm please!",
+		"yarn": "use pnpm please!"
+	},
+	"scripts": {
+		"dev": "vite dev --port 3000",
+		"generate-routes": "tsr generate",
+		"build": "vite build",
+		"preview": "vite preview"
+	},
+	"dependencies": {
+		"@mediapipe/tasks-vision": "^0.10.35",
+		"@tanstack/react-router": "latest",
+		"@tanstack/react-start": "latest",
+		"@tanstack/router-plugin": "^1.132.0",
+		"nitro": "npm:nitro-nightly@latest",
+		"react": "^19.2.0",
+		"react-dom": "^19.2.0"
+	},
+	"devDependencies": {
+		"@tanstack/router-cli": "^1.132.0",
+		"@types/react": "^19.2.0",
+		"@types/react-dom": "^19.2.0",
+		"@vitejs/plugin-react": "^6.0.1",
+		"typescript": "^6.0.2",
+		"vite": "^8.0.0"
+	}
+}
