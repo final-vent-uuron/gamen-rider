@@ -17,9 +17,10 @@ jobs:
         id: ai
         uses: actions/ai-inference@v1
         with:
-          provider: copilot
           model: gpt-4o-mini
+          # provider: copilot  <-- この行は削除
           token: ${{ secrets.PROJECT_TOKEN }}
+          endpoint: https://models.inference.ai.azure.com # または適切なGitHub Modelsのエンドポイント
           system-prompt: |
             You are an agile estimation assistant. You read a GitHub issue
             and estimate its difficulty using the Fibonacci scale:
