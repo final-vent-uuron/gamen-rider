@@ -1,0 +1,82 @@
+name: Point Ranking Notifier
+
+on:
+  schedule:
+    - cron: '0 9 */3 * *'  # 3日ごと 日本時間18時
+  workflow_dispatch:  # 手動実行も可能
+
+jobs:
+  post-ranking:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect and post ranking
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const org = "final-vent-uuron";
+            const projectNumber = 1;
+
+            // マージ済みPRを取得
+            const { data: prs } = await github.rest.pulls.list({
+              owner: org,
+              repo: "gamen-rider",
+              state: "closed",
+              per_page: 100,
+            });
+
+            const mergedPRs = prs.filter(pr => pr.merged_at);
+
+            // PRに紐づくIssueのポイントを集計
+            const userPoints = {};
+
+            for (const pr of mergedPRs) {
+              const merger = pr.merged_by?.login;
+              if (!merger) continue;
+
+              // PRの本文から "Closes #N" を探す
+              const body = pr.body || "";
+              const matches = body.matchAll(/#(\d+)/g);
+
+              for (const match of matches) {
+                const issueNumber = parseInt(match[1]);
+                try {
+                  const { data: issue } = await github.rest.issues.get({
+                    owner: org,
+                    repo: "gamen-rider",
+                    issue_number: issueNumber,
+                  });
+
+                  // point: N ラベルからポイントを取得
+                  const pointLabel = issue.labels.find(l => l.name.startsWith("point:"));
+                  if (pointLabel) {
+                    const point = parseInt(pointLabel.name.replace("point:", "").trim());
+                    userPoints[merger] = (userPoints[merger] || 0) + point;
+                  }
+                } catch (e) {
+                  // Issue が見つからない場合はスキップ
+                }
+              }
+            }
+
+            // ランキング作成
+            const ranking = Object.entries(userPoints)
+              .sort((a, b) => b[1] - a[1])
+              .map(([user, points], i) => {
+                const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
+                return `${medal} **${user}** ${points}pt`;
+              })
+              .join("\n");
+
+            const message = ranking
+              ? `📊 **ポイントランキング**\n\n${ranking}`
+              : "📊 **ポイントランキング**\n\nまだポイント獲得者がいません！";
+
+            // Discord に投稿
+            await fetch(process.env.DISCORD_WEBHOOK, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: message }),
+            });
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.POINT_RANKING }}
