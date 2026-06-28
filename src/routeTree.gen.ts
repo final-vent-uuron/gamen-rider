@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as PoseRouteImport } from './routes/pose'
+import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
 import { Route as IndexRouteImport } from './routes/index'
 
 const PoseRoute = PoseRouteImport.update({
   id: '/pose',
   path: '/pose',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HenshinRoute = HenshinRouteImport.update({
+  id: '/henshin',
+  path: '/henshin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DetectRoute = DetectRouteImport.update({
@@ -32,30 +38,34 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
+  '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
+  '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
+  '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/detect' | '/pose'
+  fullPaths: '/' | '/detect' | '/henshin' | '/pose'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/detect' | '/pose'
-  id: '__root__' | '/' | '/detect' | '/pose'
+  to: '/' | '/detect' | '/henshin' | '/pose'
+  id: '__root__' | '/' | '/detect' | '/henshin' | '/pose'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DetectRoute: typeof DetectRoute
+  HenshinRoute: typeof HenshinRoute
   PoseRoute: typeof PoseRoute
 }
 
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/pose'
       fullPath: '/pose'
       preLoaderRoute: typeof PoseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/henshin': {
+      id: '/henshin'
+      path: '/henshin'
+      fullPath: '/henshin'
+      preLoaderRoute: typeof HenshinRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/detect': {
@@ -88,6 +105,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DetectRoute: DetectRoute,
+  HenshinRoute: HenshinRoute,
   PoseRoute: PoseRoute,
 }
 export const routeTree = rootRouteImport
