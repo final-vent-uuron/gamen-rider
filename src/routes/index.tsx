@@ -44,6 +44,20 @@ function Home() {
         >
           画像検知 →
         </Link>
+        <Link
+          to="/henshin"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#a78bfa',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          変身フロー →
+        </Link>
       </div>
     </div>
   )
