@@ -3,3 +3,4 @@ dist
 .nitro
 .output
 .tanstack
+.wrangler
