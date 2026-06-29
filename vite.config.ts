@@ -6,7 +6,9 @@ import { nitro } from 'nitro/vite'
 export default defineConfig({
   resolve: { tsconfigPaths: true },
   plugins: [
-    nitro({ rollupConfig: { external: [/^@sentry\//] } }),
+    nitro({
+      config: { preset: 'cloudflare-module', rollupConfig: { external: [/^@sentry\//] } },
+    }),
     tanstackStart(),
     viteReact(),
   ],
