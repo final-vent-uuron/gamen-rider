@@ -20,7 +20,6 @@
 		"@tanstack/react-router": "latest",
 		"@tanstack/react-start": "latest",
 		"@tanstack/router-plugin": "^1.132.0",
-		"@techstark/opencv-js": "5.0.0-release.1",
 		"nitro": "npm:nitro-nightly@latest",
 		"react": "^19.2.0",
 		"react-dom": "^19.2.0"

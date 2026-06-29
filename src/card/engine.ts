@@ -50,13 +50,40 @@ export interface CardMatch {
 
 type Signature = { ref: CardRef; kp: any; des: any; w: number; h: number }
 
+// OpenCV.js（13MB超）はバンドルに同梱せず、CDN から <script> で読み込む。
+// （npm 同梱だと Cloudflare Workers の容量上限を超えるため。MediaPipe と同様に jsdelivr で版固定。）
+const CV_CDN_URL =
+  'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@5.0.0-release.1/dist/opencv.js'
+
+// CDN の opencv.js を1度だけ <script> 注入する。ブラウザでは window.cv に
+// （未初期化なら）Promise がセットされる UMD ビルド。
+function loadCvScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const w = window as any
+    if (w.cv) return resolve()
+    const existing = document.querySelector<HTMLScriptElement>('script[data-opencv]')
+    if (existing) {
+      existing.addEventListener('load', () => resolve())
+      existing.addEventListener('error', () => reject(new Error('opencv.js load failed')))
+      return
+    }
+    const script = document.createElement('script')
+    script.src = CV_CDN_URL
+    script.async = true
+    script.dataset.opencv = 'true'
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('opencv.js load failed'))
+    document.head.appendChild(script)
+  })
+}
+
 // OpenCV.js（WASM）はクライアントでのみ・一度だけ読み込む。SSR バンドルに載せない。
 let cvPromise: Promise<Cv> | null = null
 function loadCv(): Promise<Cv> {
   if (cvPromise) return cvPromise
   cvPromise = (async () => {
-    const mod: any = await import('@techstark/opencv-js')
-    const candidate = mod.default ?? mod
+    await loadCvScript()
+    const candidate: any = (window as any).cv
     const cv = candidate instanceof Promise ? await candidate : candidate
     if (cv.Mat) return cv
     await new Promise<void>((resolve) => {
