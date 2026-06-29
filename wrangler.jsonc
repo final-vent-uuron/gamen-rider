@@ -1,0 +1,11 @@
+{
+  // Cloudflare Pages（Git連携ビルド）用設定。
+  // name は Cloudflare 側のプロジェクト名に合わせること。
+  "name": "final-vent",
+  // Nitro の cloudflare_pages プリセットが出力する成果物の場所。
+  // ここに _worker.js / _routes.json / assets が入る。
+  "pages_build_output_dir": "dist",
+  "compatibility_date": "2024-11-01",
+  // Nitro 製 SSR Worker は Node 互換 API を使うため必須。
+  "compatibility_flags": ["nodejs_compat"]
+}
