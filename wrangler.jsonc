@@ -3,7 +3,7 @@
   // ビルドは Nitro の cloudflare-module プリセット（vite.config.ts で固定）で
   // .output/ に出力される。デプロイはリポジトリルートから `npx wrangler deploy`。
   // name は Cloudflare 側のプロジェクト名に合わせること。
-  "name": "final-vent",
+  "name": "gamen-rider",
   // SSR を担う module worker のエントリ。
   "main": ".output/server/index.mjs",
   "compatibility_date": "2024-11-01",
