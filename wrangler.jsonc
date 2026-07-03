@@ -1,17 +1,17 @@
 {
-  // Cloudflare Workers（Git連携ビルド / `wrangler deploy`）用設定。
-  // ビルドは Nitro の cloudflare-module プリセット（vite.config.ts で固定）で
-  // .output/ に出力される。デプロイはリポジトリルートから `npx wrangler deploy`。
+  // Cloudflare Workers（Git連携 / `wrangler deploy`）用設定。SSR 構成。
+  // TanStack Start が出力する dist/server/server.js（export default { fetch }）を
+  // そのまま module worker の main として載せ、dist/client を静的資産として配信する。
   // name は Cloudflare 側のプロジェクト名に合わせること。
   "name": "gamen-rider",
-  // SSR を担う module worker のエントリ。
-  "main": ".output/server/index.mjs",
-  "compatibility_date": "2024-11-01",
-  // Nitro 製 SSR Worker は Node 互換 API を使うため必須。
+  "main": "dist/server/server.js",
+  "compatibility_date": "2025-05-05",
+  // server.js は node:http / async_hooks / process 等を使うため必須。
   "compatibility_flags": ["nodejs_compat"],
-  // 静的資産。worker は env.ASSETS バインディング経由でこれを配信する。
   "assets": {
-    "directory": ".output/public",
+    // クライアント資産。パスが一致する静的ファイルは worker より先に配信され、
+    // 一致しないルート（/, /detect 等）は worker(SSR) が処理する。
+    "directory": "dist/client",
     "binding": "ASSETS"
   }
 }
