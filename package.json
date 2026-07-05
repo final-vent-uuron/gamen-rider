@@ -30,6 +30,7 @@
 	"devDependencies": {
 		"@cloudflare/workers-types": "^5.20260704.1",
 		"@tanstack/router-cli": "^1.132.0",
+		"@types/node": "^26.1.0",
 		"@types/react": "^19.2.0",
 		"@types/react-dom": "^19.2.0",
 		"@types/three": "^0.185.0",
