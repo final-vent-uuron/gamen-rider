@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
@@ -8,9 +8,11 @@ import grapeUrl from '#/assets/refs/grape.png'
 import agonekoUrl from '#/assets/refs/agoneko.png'
 import { createCardMatcher } from '../../card'
 import type { CardMatcher, CardRef } from '../../card'
-import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner } from '../../pose'
-import type { MediaPipeModules, RoutineRunner, RunnerState } from '../../pose'
+import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner, customToRoutine } from '../../pose'
+import type { HenshinRoutine, MediaPipeModules, RoutineRunner, RunnerState } from '../../pose'
 import { cardToRiderId, emitHenshin } from '../../henshin'
+import { listRiders } from '../../rider-registry'
+import type { RegisteredRiderWithImage } from '../../rider-registry'
 
 export const Route = createFileRoute('/auth/')({ component: AuthPage })
 
@@ -32,6 +34,8 @@ function AuthPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const matcherRef = useRef<CardMatcher | null>(null)
+  // 認証対象の全手順（既定＋登録済みライダー）。init で確定し以後変わらない。
+  const routinesRef = useRef<HenshinRoutine[]>(RIDER_ROUTINES)
   const landmarkerRef = useRef<PoseLandmarker | null>(null)
   const mpRef = useRef<MediaPipeModules | null>(null)
   const runnerRef = useRef<RoutineRunner | null>(null)
@@ -52,12 +56,33 @@ function AuthPage() {
 
   // ロード完了後すぐカメラを起動してカード認証から開始する（Start ボタンなし）
   useEffect(() => {
-    const matcher = createCardMatcher(REFERENCES)
-    matcherRef.current = matcher
     let cancelled = false
 
     async function init() {
       try {
+        // 登録済みライダー（/auth/register で作成）を参照画像と変身手順に合流させる。
+        // 読み込み失敗時（デプロイ先など）はプレースホルダのみで続行する。
+        let registered: RegisteredRiderWithImage[] = []
+        try {
+          registered = await listRiders()
+        } catch {
+          registered = []
+        }
+        if (cancelled) return
+
+        const refs: CardRef[] = [
+          ...REFERENCES,
+          ...registered.map((r) => ({ id: r.id, label: r.name, url: r.imageDataUrl })),
+        ]
+        routinesRef.current = [
+          ...RIDER_ROUTINES,
+          ...registered.map((r) =>
+            customToRoutine({ riderId: r.id, riderName: r.name, steps: r.steps }),
+          ),
+        ]
+        const matcher = createCardMatcher(refs)
+        matcherRef.current = matcher
+
         const [, { mp, landmarker }] = await Promise.all([matcher.ready, createPoseLandmarker()])
         if (cancelled) {
           landmarker.close()
@@ -88,7 +113,7 @@ function AuthPage() {
       isRunningRef.current = false
       cancelAnimationFrame(rafRef.current)
       stopCamera()
-      matcher.dispose()
+      matcherRef.current?.dispose()
       matcherRef.current = null
       landmarkerRef.current?.close()
     }
@@ -104,12 +129,15 @@ function AuthPage() {
 
   // カード確定 → そのライダーのポーズ認証へ遷移
   function enterPose(cardId: string) {
-    const riderId = cardToRiderId(cardId)
+    const routines = routinesRef.current
+    // 登録ライダーはカードid＝riderId。プレースホルダ（果物）は対応表で変換する。
+    const riderId = routines.some((r) => r.riderId === cardId) ? cardId : cardToRiderId(cardId)
     if (!riderId) return // 対応するライダーが無いカード（果物の他種など）は無視
-    const routine = RIDER_ROUTINES.find((r) => r.riderId === riderId)
-    const r: Rider = { id: riderId, name: routine?.riderName ?? riderId }
+    const routine = routines.find((r) => r.riderId === riderId)
+    if (!routine) return
+    const r: Rider = { id: riderId, name: routine.riderName }
     riderRef.current = r
-    runnerRef.current = createRoutineRunner(RIDER_ROUTINES, riderId)
+    runnerRef.current = createRoutineRunner(routines, riderId)
     phaseRef.current = 'pose'
     setRider(r)
     setUiState(runnerRef.current.getState())
@@ -228,7 +256,7 @@ function AuthPage() {
   }
 
   const step = uiState?.steps[0] ?? null
-  const routine = rider ? RIDER_ROUTINES.find((r) => r.riderId === rider.id) : null
+  const routine = rider ? routinesRef.current.find((r) => r.riderId === rider.id) : null
 
   return (
     <div
@@ -244,6 +272,21 @@ function AuthPage() {
       {/* ヘッダー */}
       <div style={{ width: '100%', maxWidth: '800px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
         <h1 style={{ margin: 0, fontSize: '1.5rem' }}>ライダー認証</h1>
+        <Link
+          to="/auth/register"
+          style={{
+            marginLeft: 'auto',
+            padding: '0.4rem 1rem',
+            background: '#a78bfa',
+            color: '#000',
+            borderRadius: '8px',
+            textDecoration: 'none',
+            fontWeight: 'bold',
+            fontSize: '0.9rem',
+          }}
+        >
+          ➕ ライダー登録
+        </Link>
       </div>
 
       {/* フェーズインジケータ */}
