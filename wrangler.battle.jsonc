@@ -1,0 +1,19 @@
+{
+  // バトル用の別 Worker（Durable Object 権威サーバー）。
+  // アプリ本体の wrangler.jsonc（name: gamen-rider）とは別にデプロイする:
+  //   pnpm deploy:battle   →  wrangler deploy -c wrangler.battle.jsonc
+  //   pnpm server          →  wrangler dev    -c wrangler.battle.jsonc（ローカル: ws://localhost:8787/ws）
+  //
+  // クライアントの接続先はビルド時の VITE_WS_URL で指定する（本番）:
+  //   VITE_WS_URL = wss://gamen-rider-battle.<subdomain>.workers.dev/ws
+  // ローカルは既定の ws://<hostname>:8787/ws に落ちる（wrangler dev の既定ポート = 8787）。
+  "name": "gamen-rider-battle",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-05-05",
+  "durable_objects": {
+    "bindings": [{ "name": "BATTLE_ROOM", "class_name": "BattleRoom" }]
+  },
+  // 新規 DO は SQLite ストレージクラスで登録する（Cloudflare 推奨の既定）。
+  // 本ゲームは状態をメモリに持つだけで SQL は使わないが、クラス登録に migration が必要。
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BattleRoom"] }]
+}

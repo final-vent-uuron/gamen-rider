@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as PoseRouteImport } from './routes/pose'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
+import { Route as BattleRouteImport } from './routes/battle'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthIndexRouteImport } from './routes/auth/index'
 import { Route as AuthRegisterRouteImport } from './routes/auth/register'
@@ -29,6 +30,11 @@ const HenshinRoute = HenshinRouteImport.update({
 const DetectRoute = DetectRouteImport.update({
   id: '/detect',
   path: '/detect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BattleRoute = BattleRouteImport.update({
+  id: '/battle',
+  path: '/battle',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -49,6 +55,7 @@ const AuthRegisterRoute = AuthRegisterRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/battle': typeof BattleRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
@@ -57,6 +64,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/battle': typeof BattleRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
@@ -66,6 +74,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/battle': typeof BattleRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
@@ -76,16 +85,18 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/battle'
     | '/detect'
     | '/henshin'
     | '/pose'
     | '/auth/register'
     | '/auth/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/detect' | '/henshin' | '/pose' | '/auth/register' | '/auth'
+  to: '/' | '/battle'| '/detect' | '/henshin' | '/pose' | '/auth/register' | '/auth'
   id:
     | '__root__'
     | '/'
+    | '/battle'
     | '/detect'
     | '/henshin'
     | '/pose'
@@ -95,6 +106,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BattleRoute: typeof BattleRoute
   DetectRoute: typeof DetectRoute
   HenshinRoute: typeof HenshinRoute
   PoseRoute: typeof PoseRoute
@@ -125,6 +137,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DetectRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/battle': {
+      id: '/battle'
+      path: '/battle'
+      fullPath: '/battle'
+      preLoaderRoute: typeof BattleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -151,6 +170,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BattleRoute: BattleRoute,
   DetectRoute: DetectRoute,
   HenshinRoute: HenshinRoute,
   PoseRoute: PoseRoute,

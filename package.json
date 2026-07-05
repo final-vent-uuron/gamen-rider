@@ -10,7 +10,9 @@
 		"yarn": "use pnpm please!"
 	},
 	"scripts": {
-		"dev": "vite dev --port 3000",
+		"dev": "vite dev --port 3000 --host",
+		"server": "wrangler dev -c wrangler.battle.jsonc --port 8787 --ip 0.0.0.0",
+		"deploy:battle": "wrangler deploy -c wrangler.battle.jsonc",
 		"generate-routes": "tsr generate",
 		"build": "vite build",
 		"preview": "vite preview"
@@ -22,15 +24,19 @@
 		"@tanstack/router-plugin": "^1.132.0",
 		"nitro": "npm:nitro-nightly@latest",
 		"react": "^19.2.0",
-		"react-dom": "^19.2.0"
+		"react-dom": "^19.2.0",
+		"three": "^0.185.1"
 	},
 	"devDependencies": {
+		"@cloudflare/workers-types": "^5.20260704.1",
 		"@tanstack/router-cli": "^1.132.0",
 		"@types/node": "^26.1.0",
 		"@types/react": "^19.2.0",
 		"@types/react-dom": "^19.2.0",
+		"@types/three": "^0.185.0",
 		"@vitejs/plugin-react": "^6.0.1",
 		"typescript": "^6.0.2",
-		"vite": "^8.0.0"
+		"vite": "^8.0.0",
+		"wrangler": "^4.107.0"
 	}
 }

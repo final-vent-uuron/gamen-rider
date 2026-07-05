@@ -58,6 +58,20 @@ function Home() {
         >
           変身フロー →
         </Link>
+        <Link
+          to="/battle"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#f87171',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          バトル →
+        </Link>
       </div>
     </div>
   )

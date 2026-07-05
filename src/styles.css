@@ -11,3 +11,14 @@ body,
   color: #fff;
   font-family: system-ui, sans-serif;
 }
+
+/* バトルの HP バー: 低 HP 時の点滅 */
+@keyframes hpLowPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
