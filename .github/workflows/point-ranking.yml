@@ -1,10 +1,8 @@
 name: Point Ranking Notifier
-
 on:
   schedule:
     - cron: '0 9 */3 * *'  # 3日ごと 日本時間18時
   workflow_dispatch:  # 手動実行も可能
-
 jobs:
   post-ranking:
     runs-on: ubuntu-latest
@@ -16,7 +14,6 @@ jobs:
           script: |
             const org = "final-vent-uuron";
             const projectNumber = 1;
-
             // マージ済みPRを取得
             const { data: prs } = await github.rest.pulls.list({
               owner: org,
@@ -24,20 +21,23 @@ jobs:
               state: "closed",
               per_page: 100,
             });
-
             const mergedPRs = prs.filter(pr => pr.merged_at);
-
             // PRに紐づくIssueのポイントを集計
             const userPoints = {};
-
             for (const pr of mergedPRs) {
-              const merger = pr.merged_by?.login;
+              // 一覧APIはmerged_byを返さないため、個別取得し直す
+              const { data: fullPr } = await github.rest.pulls.get({
+                owner: org,
+                repo: "gamen-rider",
+                pull_number: pr.number,
+              });
+
+              const merger = fullPr.merged_by?.login;
               if (!merger) continue;
 
               // PRの本文から "Closes #N" を探す
-              const body = pr.body || "";
+              const body = fullPr.body || "";
               const matches = body.matchAll(/#(\d+)/g);
-
               for (const match of matches) {
                 const issueNumber = parseInt(match[1]);
                 try {
@@ -46,7 +46,6 @@ jobs:
                     repo: "gamen-rider",
                     issue_number: issueNumber,
                   });
-
                   // point: N ラベルからポイントを取得
                   const pointLabel = issue.labels.find(l => l.name.startsWith("point:"));
                   if (pointLabel) {
@@ -58,7 +57,6 @@ jobs:
                 }
               }
             }
-
             // ランキング作成
             const ranking = Object.entries(userPoints)
               .sort((a, b) => b[1] - a[1])
@@ -67,11 +65,9 @@ jobs:
                 return `${medal} **${user}** ${points}pt`;
               })
               .join("\n");
-
             const message = ranking
               ? `📊 **ポイントランキング**\n\n${ranking}`
               : "📊 **ポイントランキング**\n\nまだポイント獲得者がいません！";
-
             // Discord に投稿
             await fetch(process.env.DISCORD_WEBHOOK, {
               method: "POST",
