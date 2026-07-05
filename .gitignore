@@ -4,3 +4,5 @@ dist
 .output
 .tanstack
 .wrangler
+
+src/assets/riders/
