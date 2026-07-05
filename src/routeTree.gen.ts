@@ -13,6 +13,7 @@ import { Route as PoseRouteImport } from './routes/pose'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthIndexRouteImport } from './routes/auth/index'
 
 const PoseRoute = PoseRouteImport.update({
   id: '/pose',
@@ -34,18 +35,25 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthIndexRoute = AuthIndexRouteImport.update({
+  id: '/auth/',
+  path: '/auth/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
+  '/auth/': typeof AuthIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
+  '/auth': typeof AuthIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +61,14 @@ export interface FileRoutesById {
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
+  '/auth/': typeof AuthIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/detect' | '/henshin' | '/pose'
+  fullPaths: '/' | '/detect' | '/henshin' | '/pose' | '/auth/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/detect' | '/henshin' | '/pose'
-  id: '__root__' | '/' | '/detect' | '/henshin' | '/pose'
+  to: '/' | '/detect' | '/henshin' | '/pose' | '/auth'
+  id: '__root__' | '/' | '/detect' | '/henshin' | '/pose' | '/auth/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +76,7 @@ export interface RootRouteChildren {
   DetectRoute: typeof DetectRoute
   HenshinRoute: typeof HenshinRoute
   PoseRoute: typeof PoseRoute
+  AuthIndexRoute: typeof AuthIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +109,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/': {
+      id: '/auth/'
+      path: '/auth'
+      fullPath: '/auth/'
+      preLoaderRoute: typeof AuthIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +124,7 @@ const rootRouteChildren: RootRouteChildren = {
   DetectRoute: DetectRoute,
   HenshinRoute: HenshinRoute,
   PoseRoute: PoseRoute,
+  AuthIndexRoute: AuthIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
