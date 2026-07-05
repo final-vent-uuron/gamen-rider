@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as PoseRouteImport } from './routes/pose'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
+import { Route as BattleRouteImport } from './routes/battle'
 import { Route as IndexRouteImport } from './routes/index'
 
 const PoseRoute = PoseRouteImport.update({
@@ -29,6 +30,11 @@ const DetectRoute = DetectRouteImport.update({
   path: '/detect',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BattleRoute = BattleRouteImport.update({
+  id: '/battle',
+  path: '/battle',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -37,12 +43,14 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/battle': typeof BattleRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/battle': typeof BattleRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
@@ -50,20 +58,22 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/battle': typeof BattleRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/detect' | '/henshin' | '/pose'
+  fullPaths: '/' | '/battle' | '/detect' | '/henshin' | '/pose'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/detect' | '/henshin' | '/pose'
-  id: '__root__' | '/' | '/detect' | '/henshin' | '/pose'
+  to: '/' | '/battle' | '/detect' | '/henshin' | '/pose'
+  id: '__root__' | '/' | '/battle' | '/detect' | '/henshin' | '/pose'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BattleRoute: typeof BattleRoute
   DetectRoute: typeof DetectRoute
   HenshinRoute: typeof HenshinRoute
   PoseRoute: typeof PoseRoute
@@ -92,6 +102,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DetectRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/battle': {
+      id: '/battle'
+      path: '/battle'
+      fullPath: '/battle'
+      preLoaderRoute: typeof BattleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -104,6 +121,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BattleRoute: BattleRoute,
   DetectRoute: DetectRoute,
   HenshinRoute: HenshinRoute,
   PoseRoute: PoseRoute,

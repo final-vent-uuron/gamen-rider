@@ -1,5 +1,7 @@
 {
   "include": ["**/*.ts", "**/*.tsx"],
+  // worker/ は Cloudflare Workers 型（DOM と衝突する）ので別 tsconfig（worker/tsconfig.json）で見る。
+  "exclude": ["worker"],
   "compilerOptions": {
     "target": "ES2022",
     "jsx": "react-jsx",

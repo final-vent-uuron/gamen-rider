@@ -1,4 +1,4 @@
-import { Link, createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
@@ -7,7 +7,7 @@ import bananaUrl from '#/assets/refs/banana.png'
 import grapeUrl from '#/assets/refs/grape.png'
 import agonekoUrl from '#/assets/refs/agoneko.png'
 import { createCardMatcher } from '../card'
-import type { CardMatcher, CardRef } from '../card'
+import type { CardMatch, CardMatcher, CardRef } from '../card'
 import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner } from '../pose'
 import type { MediaPipeModules, RoutineRunner, RunnerState } from '../pose'
 import { cardToRiderId, emitHenshin } from '../henshin'
@@ -42,13 +42,25 @@ function HenshinPage() {
   const riderRef = useRef<Rider | null>(null)
   const doneHandledRef = useRef(false)
   const lastUiRef = useRef(0)
-  const lastCardLabelRef = useRef<string | null>(null)
+  const lastCardIdRef = useRef<string | null>(null)
 
   const [status, setStatus] = useState<Status>('loading')
   const [phase, setPhase] = useState<Phase>('card')
-  const [cardLabel, setCardLabel] = useState<string | null>(null)
+  const [card, setCard] = useState<CardMatch | null>(null)
   const [rider, setRider] = useState<Rider | null>(null)
   const [uiState, setUiState] = useState<RunnerState | null>(null)
+
+  const navigate = useNavigate()
+
+  // 変身成立の演出を少し見せてから、バトル画面へ自動遷移（issue #24）。
+  // Stop / やり直し で phase が変わると setTimeout はクリーンアップで解除される。
+  useEffect(() => {
+    if (phase !== 'done' || !rider || status !== 'running') return
+    const t = setTimeout(() => {
+      navigate({ to: '/battle', search: { rider: rider.id } })
+    }, 1200)
+    return () => clearTimeout(t)
+  }, [phase, rider, status, navigate])
 
   // カードマッチャと PoseLandmarker を並行ロード。両方そろったら ready。
   useEffect(() => {
@@ -125,12 +137,13 @@ function HenshinPage() {
       // カードフェーズ: 等倍プレビュー＋ラベル。検出は matcher 任せ（間引き＋安定化済み）。
       ctx.drawImage(video, 0, 0)
       const match = matcherRef.current?.detect(video, now) ?? null
-      const label = match?.label ?? null
-      if (label !== lastCardLabelRef.current) {
-        lastCardLabelRef.current = label
-        setCardLabel(label)
+      const id = match?.id ?? null
+      if (id !== lastCardIdRef.current) {
+        lastCardIdRef.current = id
+        setCard(match)
       }
-      drawCardOverlay(ctx, canvas, label)
+      drawCardOverlay(ctx, canvas, match?.label ?? null)
+      // 対応ライダーがあるカードだけ次へ進む。無いカードは表示で明示（下の JSX）。
       if (match) enterPose(match.id)
     } else {
       // ポーズフェーズ / done: 骨格つき自撮りミラー表示
@@ -189,11 +202,11 @@ function HenshinPage() {
       riderRef.current = null
       doneHandledRef.current = false
       lastUiRef.current = 0
-      lastCardLabelRef.current = null
+      lastCardIdRef.current = null
       phaseRef.current = 'card'
       setRider(null)
       setUiState(null)
-      setCardLabel(null)
+      setCard(null)
       setPhase('card')
       isRunningRef.current = true
       setStatus('running')
@@ -222,14 +235,28 @@ function HenshinPage() {
     runnerRef.current = null
     riderRef.current = null
     doneHandledRef.current = false
-    lastCardLabelRef.current = null
+    lastCardIdRef.current = null
     phaseRef.current = 'card'
     setRider(null)
     setUiState(null)
-    setCardLabel(null)
+    setCard(null)
     setPhase('card')
   }
 
+  // カード id → そのライダー名（対応が無ければ null）。表示と分岐判定に使う。
+  function riderNameForCard(cardId: string): string | null {
+    const rid = cardToRiderId(cardId)
+    if (!rid) return null
+    return RIDER_ROUTINES.find((r) => r.riderId === rid)?.riderName ?? rid
+  }
+
+  // 対応ライダーが設定済みの「使えるカード」一覧（かざすべきカードのヒント表示用）。
+  const supportedCards = REFERENCES.map((r) => ({
+    label: r.label,
+    rider: riderNameForCard(r.id),
+  })).filter((c) => c.rider)
+
+  const cardRider = card ? riderNameForCard(card.id) : null
   const step = uiState?.steps[0] ?? null
   const routine = rider ? RIDER_ROUTINES.find((r) => r.riderId === rider.id) : null
 
@@ -295,13 +322,29 @@ function HenshinPage() {
         }}
       >
         {phase === 'card' && (
-          <span style={{ fontSize: '1.1rem' }}>
-            {status === 'running'
-              ? cardLabel
-                ? `カード認識中: ${cardLabel}`
-                : 'カードをカメラにかざしてください…'
-              : 'Start を押してカード認証から開始'}
-          </span>
+          <>
+            <span style={{ fontSize: '1.1rem' }}>
+              {status !== 'running' ? (
+                'Start を押してカード認証から開始'
+              ) : !card ? (
+                'カードをカメラにかざしてください…'
+              ) : cardRider ? (
+                <span style={{ color: '#4ade80' }}>
+                  ✅ {card.label} → {cardRider} に変身！
+                </span>
+              ) : (
+                <span style={{ color: '#facc15' }}>
+                  ⚠ 「{card.label}」は未対応のカードです（対応ライダー未設定）
+                </span>
+              )}
+            </span>
+            <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>
+              使えるカード:{' '}
+              {supportedCards.length > 0
+                ? supportedCards.map((c) => `${c.label}（${c.rider}）`).join(' / ')
+                : 'なし'}
+            </span>
+          </>
         )}
 
         {phase === 'pose' && step && (
