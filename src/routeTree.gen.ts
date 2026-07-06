@@ -92,7 +92,14 @@ export interface FileRouteTypes {
     | '/auth/register'
     | '/auth/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/battle'| '/detect' | '/henshin' | '/pose' | '/auth/register' | '/auth'
+  to:
+    | '/'
+    | '/battle'
+    | '/detect'
+    | '/henshin'
+    | '/pose'
+    | '/auth/register'
+    | '/auth'
   id:
     | '__root__'
     | '/'
