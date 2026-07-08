@@ -36,7 +36,7 @@ export interface BattleNet {
 
 // 本番の常設バトルサーバー（Cloudflare の Durable Object Worker）。
 // gamen-rider.com など公開ドメインからはここへ繋ぐ。差し替えたければ VITE_WS_URL で上書き可。
-const PROD_WS_URL = 'wss://gamen-rider-battle.ryokan-dx.workers.dev/ws'
+const PROD_WS_URL = 'wss://gamen-rider-battle.pachi.workers.dev/ws'
 
 // localhost / LAN 内かどうか（ローカル開発・会場デモ用の判定）。
 function isLocalHost(host: string): boolean {

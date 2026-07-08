@@ -8,6 +8,9 @@
   //   VITE_WS_URL = wss://gamen-rider-battle.<subdomain>.workers.dev/ws
   // ローカルは既定の ws://<hostname>:8787/ws に落ちる（wrangler dev の既定ポート = 8787）。
   "name": "gamen-rider-battle",
+  // final-vent-uuron（Uuronprogram@gmail.com）の Cloudflare アカウント。
+  // アプリ本体(gamen-rider.com)と同じアカウントに揃える。
+  "account_id": "b7e33c313027642691f2088285bec4e2",
   "main": "worker/index.ts",
   "compatibility_date": "2025-05-05",
   "durable_objects": {
