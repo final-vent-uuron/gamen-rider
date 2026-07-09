@@ -30,7 +30,18 @@ const CAM = {
 }
 
 // アバターのアクション。GLB のアニメクリップ対応付けのキーにも使う。
-export type AvatarAction = 'idle' | 'walk' | 'punch' | 'kick' | 'hit' | 'down' | 'final' | 'jump'
+export type AvatarAction =
+  | 'idle'
+  | 'walk'
+  | 'punch'
+  | 'kick'
+  | 'hit'
+  | 'down'
+  | 'final'
+  | 'jump'
+  | 'guard'
+  | 'throw'
+  | 'thrown'
 
 // ライダー別 GLB モデルの登録。ここに 1 行足すだけで box プレースホルダから差し替わる。
 //   例) GLB を用意したら（Vite なら import url from '#/assets/models/ryuki.glb?url'）:
@@ -74,6 +85,9 @@ function darken(hex: number, f: number): number {
 function avatarAction(p: PlayerState, moving: boolean): AvatarAction {
   if (p.hp <= 0) return 'down'
   if (p.action === 'hit') return 'hit'
+  if (p.action === 'thrown') return 'thrown'
+  if (p.action === 'guard') return 'guard'
+  if (p.action === 'throw') return 'throw'
   if (p.action === 'punch') return 'punch'
   if (p.action === 'kick') return 'kick'
   if (p.action === 'final') return 'final'
@@ -148,6 +162,58 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
   const lastX = new Map<string, number>()
   const worldX = (x: number) => (x - 0.5) * WORLD_W
 
+  // --- FX（ジュース）: 画面シェイク / ヒットスパーク / ズームパンチ ---
+  const camBase = new THREE.Vector3(0, CAM.y, 12)
+  let shakeMag = 0
+  let zoomKick = 0
+  let lastFxT = 0
+  const sparkTex = makeSparkTexture()
+  const sparks: { sprite: THREE.Sprite; mat: THREE.SpriteMaterial; life: number; ttl: number; base: number }[] = []
+
+  function shake(mag: number) {
+    shakeMag = Math.min(0.9, Math.max(shakeMag, mag))
+  }
+  function punch(amount: number) {
+    zoomKick = Math.min(2.4, zoomKick + amount)
+  }
+  function hitSpark(normX: number, normY: number, color = 0xffe08a, big = false) {
+    const mat = new THREE.SpriteMaterial({
+      map: sparkTex,
+      color,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      fog: false,
+    })
+    const sprite = new THREE.Sprite(mat)
+    sprite.position.set(worldX(normX), normY * JUMP_WORLD + 1.2, 0.6)
+    const base = big ? 3.4 : 2.0
+    sprite.scale.setScalar(base * 0.4)
+    scene.add(sprite)
+    sparks.push({ sprite, mat, life: 0, ttl: big ? 0.26 : 0.18, base })
+  }
+
+  // 短命スパークの時間発展（拡大しながらフェードアウト）＋ シェイク/ズームの減衰。
+  function stepFx(dt: number) {
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i]
+      s.life += dt
+      const k = s.life / s.ttl
+      if (k >= 1) {
+        scene.remove(s.sprite)
+        s.mat.dispose()
+        sparks.splice(i, 1)
+        continue
+      }
+      s.sprite.scale.setScalar(s.base * (0.4 + k * 1.0))
+      s.mat.opacity = 1 - k
+    }
+    shakeMag *= 0.86
+    zoomKick *= 0.85
+    if (shakeMag < 0.0005) shakeMag = 0
+    if (zoomKick < 0.002) zoomKick = 0
+  }
+
   function ensureAvatar(p: PlayerState, index: number): FighterAvatar {
     let av = avatars.get(p.id)
     if (!av) {
@@ -196,14 +262,26 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
       const center = xs.reduce((a, b) => a + b, 0) / xs.length
       const spread = Math.max(...xs) - Math.min(...xs)
       const vHalf = Math.tan((CAM.fov * Math.PI) / 360)
-      // 横が収まる距離をクランプ（幅を狭くしてあるのでズームはわずか）
+      // 横が収まる距離をクランプ（幅を狭くしてあるのでズームはわずか）。zoomKick で命中時に寄る。
       const needX = (spread / 2 + CAM.padX) / (vHalf * camera.aspect)
-      const dist = Math.min(CAM.maxDist, Math.max(CAM.minDist, needX))
+      const dist = Math.min(CAM.maxDist, Math.max(CAM.minDist, needX)) - zoomKick
       camTargetPos.set(center, CAM.y, dist)
-      camera.position.lerp(camTargetPos, CAM.damp)
+      camBase.lerp(camTargetPos, CAM.damp)
       camLook.lerp(tmpVec.set(center, CAM.lookY, 0), CAM.damp)
-      camera.lookAt(camLook)
     }
+
+    // FX の時間発展（スパーク・シェイク・ズーム減衰）
+    const dtFx = lastFxT ? Math.min(t - lastFxT, 0.05) : 0
+    lastFxT = t
+    stepFx(dtFx)
+
+    // シェイクは camBase にオフセットを足して描画（次フレームの pan で自己補正）
+    camera.position.copy(camBase)
+    if (shakeMag > 0) {
+      camera.position.x += (Math.random() * 2 - 1) * shakeMag
+      camera.position.y += (Math.random() * 2 - 1) * shakeMag * 0.7
+    }
+    camera.lookAt(camLook)
 
     renderer.render(scene, camera)
   }
@@ -218,10 +296,19 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
 
   return {
     render,
+    shake,
+    hitSpark,
+    punch,
     dispose() {
       ro.disconnect()
       avatars.forEach((av) => av.dispose())
       avatars.clear()
+      for (const s of sparks) {
+        scene.remove(s.sprite)
+        s.mat.dispose()
+      }
+      sparks.length = 0
+      sparkTex.dispose()
       floor.geometry.dispose()
       ;(floor.material as THREE.Material).dispose()
       grid.geometry.dispose()
@@ -234,6 +321,10 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
 
 export interface ArenaRenderer {
   render(state: BattleState, final?: boolean): void
+  // FX（ジュース）: バトル画面が命中検出時に叩く。
+  shake(mag: number): void // 画面シェイク（強さを足し込む）
+  hitSpark(normX: number, normY: number, color?: number, big?: boolean): void // 命中位置に火花
+  punch(amount: number): void // ズームパンチ（一瞬寄る）
   dispose(): void
 }
 
@@ -295,7 +386,7 @@ function createBoxAvatar(color: number): FighterAvatar {
 
   root.add(torso, head, legFront, legBack, armFront, armBack)
 
-  const pose = { armF: 0.12, armB: 0.12, legF: 0, legB: 0, tilt: 0, glow: 0 }
+  const pose = { armF: 0.12, armB: 0.12, legF: 0, legB: 0, tilt: 0, glow: 0, lunge: 0, extraY: 0 }
 
   return {
     root,
@@ -306,29 +397,66 @@ function createBoxAvatar(color: number): FighterAvatar {
       let legF = 0
       let legB = 0
       let tilt = 0
+      let lunge = 0 // facing 方向への踏み込み量（ワールド x）
+      let extraY = 0 // 軽い浮き（キック時など）
       let glow = 0
       let glowColor = color
       const bob = Math.abs(Math.sin(tSec * 2.4)) * 0.016
 
       if (p.hp <= 0 || p.action === 'down') {
-        tilt = 1.45 // 倒れる
+        tilt = 1.5 // 倒れる
+        legF = 0.25
+        legB = -0.25
+      } else if (p.action === 'thrown') {
+        tilt = 1.2 // 投げられて崩れ落ちる
+        lunge = -0.1
+        glow = 0.8
+        glowColor = 0xff5555
       } else if (p.action === 'hit') {
-        tilt = 0.24 // のけぞり
+        tilt = 0.32 // のけぞる
+        armF = -0.25
+        armB = -0.25
+        lunge = -0.08 // 押される
         glow = 0.9
         glowColor = 0xff3333
       } else if (p.action === 'punch') {
-        armF = 1.5 // 前腕を突き出す
-        glow = 0.45
+        armF = 1.55 // 前腕を鋭く突き出す
+        armB = -0.5 // 反対の腕は引く（キレを出す）
+        legF = 0.15
+        tilt = -0.18 // 踏み込む
+        lunge = 0.2
+        glow = 0.5
       } else if (p.action === 'kick') {
-        legF = 1.25 // 前脚を上げる
-        armB = 0.5
-        glow = 0.45
+        legF = 1.6 // 前脚を蹴り上げる
+        legB = -0.2
+        armF = -0.55 // 腕を振ってバランス
+        armB = 0.6
+        tilt = 0.2 // 上体を反らす
+        lunge = 0.14
+        extraY = 0.07 // 軸脚で軽く伸び上がる
+        glow = 0.5
       } else if (p.action === 'final') {
-        armF = 1.6
-        armB = 1.6
-        tilt = -0.12
+        armF = 1.7
+        armB = 1.7
+        tilt = -0.14
+        lunge = 0.14
         glow = 1
         glowColor = 0xffffff
+      } else if (p.action === 'throw') {
+        armF = 1.25 // 両腕を前に伸ばして掴む
+        armB = 1.15
+        tilt = -0.1
+        lunge = 0.22 // 大きく踏み込む
+        glow = 0.5
+        glowColor = 0xfbbf24
+      } else if (p.action === 'guard') {
+        armF = 0.9 // 腕を前に構える
+        armB = 0.72
+        legF = 0.14 // 軽く腰を落とす
+        legB = -0.14
+        tilt = -0.1
+        glow = 0.55
+        glowColor = 0x38bdf8 // 青いガード光
       } else if (airborne) {
         // ジャンプ: 膝を抱えて腕を上げる
         legF = 0.6
@@ -345,12 +473,22 @@ function createBoxAvatar(color: number): FighterAvatar {
         tilt = 0.04
       }
 
-      const k = 0.3
+      // 攻撃・被弾はキビキビ、待機/歩行は滑らかに。
+      const combat =
+        p.action === 'punch' ||
+        p.action === 'kick' ||
+        p.action === 'throw' ||
+        p.action === 'final' ||
+        p.action === 'hit' ||
+        p.action === 'thrown'
+      const k = combat ? 0.5 : 0.28
       pose.armF = lerp(pose.armF, armF, k)
       pose.armB = lerp(pose.armB, armB, k)
       pose.legF = lerp(pose.legF, legF, k)
       pose.legB = lerp(pose.legB, legB, k)
       pose.tilt = lerp(pose.tilt, tilt, k)
+      pose.lunge = lerp(pose.lunge, lunge, k)
+      pose.extraY = lerp(pose.extraY, extraY, k)
       pose.glow = lerp(pose.glow, glow, 0.35)
 
       armFront.rotation.z = pose.armF
@@ -358,7 +496,10 @@ function createBoxAvatar(color: number): FighterAvatar {
       legFront.rotation.z = pose.legF
       legBack.rotation.z = pose.legB
       root.rotation.z = pose.tilt
-      root.position.y = p.y * JUMP_WORLD + (airborne ? 0 : bob)
+      // render 側が毎フレーム root.position.x = worldX(p.x) を設定した直後に呼ばれるので、
+      // ここで踏み込み(lunge)を facing 方向へ足す（次フレームで上書きされるため蓄積しない）。
+      root.position.x += pose.lunge * p.facing
+      root.position.y = p.y * JUMP_WORLD + (airborne ? 0 : bob) + pose.extraY
       bodyMat.emissive.setHex(glowColor)
       bodyMat.emissiveIntensity = pose.glow
     },
@@ -636,6 +777,33 @@ function makeGroundGlow(): THREE.Mesh {
   m.rotation.x = -Math.PI / 2
   m.position.y = 0.02
   return m
+}
+
+// ヒットスパーク用テクスチャ（白＋十字フレア。色は SpriteMaterial.color で着色）。
+function makeSparkTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas')
+  c.width = 64
+  c.height = 64
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+  g.addColorStop(0, 'rgba(255,255,255,1)')
+  g.addColorStop(0.3, 'rgba(255,255,255,0.7)')
+  g.addColorStop(0.7, 'rgba(255,255,255,0.18)')
+  g.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, 64, 64)
+  // 十字のフレア（ヒットっぽさ）
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)'
+  ctx.lineWidth = 2.5
+  ctx.beginPath()
+  ctx.moveTo(32, 3)
+  ctx.lineTo(32, 61)
+  ctx.moveTo(3, 32)
+  ctx.lineTo(61, 32)
+  ctx.stroke()
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
 }
 
 function disposeObject(obj: THREE.Object3D) {

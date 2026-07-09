@@ -16,13 +16,14 @@ import {
   addPlayer,
   applyAttack,
   applyJump,
+  applyThrow,
   createBattle,
   removePlayer,
   stepBattle,
 } from '../src/battle/state.ts'
 
 const TICK_MS = 1000 / 60 // シミュレーション更新（60Hz）
-const BROADCAST_MS = 1000 / 30 // 状態配信（30Hz）
+const BROADCAST_MS = 1000 / 60 // 状態配信（60Hz）。量子化遅延を減らして体感を軽く（ペイロードは小さい）
 
 interface Conn {
   id: string
@@ -35,12 +36,15 @@ type ClientMsg =
   | { t: 'move'; dir?: unknown }
   | { t: 'jump' }
   | { t: 'attack'; kind?: unknown }
+  | { t: 'guard'; on?: unknown }
+  | { t: 'throw' }
   | { t: 'reset' }
 
 export class BattleRoom extends DurableObject {
   private sockets = new Map<WebSocket, Conn>()
   private battle = createBattle([])
   private moveIntent: Record<string, -1 | 0 | 1> = {}
+  private guardIntent: Record<string, boolean> = {}
   private last = 0
   private simTimer: number | null = null
   private broadcastTimer: number | null = null
@@ -87,6 +91,7 @@ export class BattleRoom extends DurableObject {
           riderName: conn.riderName,
         })
         this.moveIntent[conn.id] = 0
+        this.guardIntent[conn.id] = false
         break
       }
       case 'move': {
@@ -95,12 +100,18 @@ export class BattleRoom extends DurableObject {
         break
       }
       case 'jump':
-        this.battle = applyJump(this.battle, conn.id)
+        this.battle = applyJump(this.battle, conn.id, Date.now())
         break
       case 'attack':
         if (msg.kind === 'punch' || msg.kind === 'kick' || msg.kind === 'final') {
           this.battle = applyAttack(this.battle, conn.id, msg.kind, Date.now())
         }
+        break
+      case 'guard':
+        this.guardIntent[conn.id] = msg.on === true
+        break
+      case 'throw':
+        this.battle = applyThrow(this.battle, conn.id, Date.now())
         break
       case 'reset': {
         const inits = [...this.sockets.values()]
@@ -108,7 +119,11 @@ export class BattleRoom extends DurableObject {
           .map((c) => ({ id: c.id, riderId: c.riderId!, riderName: c.riderName! }))
         this.battle = createBattle(inits)
         this.moveIntent = {}
-        for (const c of inits) this.moveIntent[c.id] = 0
+        this.guardIntent = {}
+        for (const c of inits) {
+          this.moveIntent[c.id] = 0
+          this.guardIntent[c.id] = false
+        }
         break
       }
     }
@@ -119,6 +134,7 @@ export class BattleRoom extends DurableObject {
     if (!conn) return
     this.battle = removePlayer(this.battle, conn.id)
     delete this.moveIntent[conn.id]
+    delete this.guardIntent[conn.id]
     this.sockets.delete(ws)
     try {
       ws.close()
@@ -136,7 +152,7 @@ export class BattleRoom extends DurableObject {
       const now = Date.now()
       const dt = now - this.last
       this.last = now
-      this.battle = stepBattle(this.battle, dt, now, this.moveIntent)
+      this.battle = stepBattle(this.battle, dt, now, this.moveIntent, this.guardIntent)
     }, TICK_MS) as unknown as number
     this.broadcastTimer = setInterval(() => this.broadcast(), BROADCAST_MS) as unknown as number
   }

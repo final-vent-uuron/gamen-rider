@@ -1,7 +1,8 @@
 // 入力の抽象化レイヤ。
-// CLAUDE.md 方針: 加速度センサーのハード/接続方式は未確定。まず move / punch / kick を
-// イベントとして受け取る共通インターフェース（InputSource）を用意し、入力ソースを差し替え可能にする。
-//   - 現状      : キーボード（issue #24 のダミー入力）
+// CLAUDE.md 方針: 加速度センサーのハード/接続方式は未確定。まず move / punch / kick /
+// guard / throw / final をイベントとして受け取る共通インターフェース（InputSource）を用意し、
+// 入力ソースを差し替え可能にする。
+//   - 現状      : キーボード（ダミー入力）
 //   - 将来      : 腕・足の加速度センサー、または WebSocket 経由の相手プレイヤー入力
 // どのソースでも InputSource を実装すれば、バトル画面側は一切変更不要。
 
@@ -10,6 +11,8 @@ export type BattleInput =
   | { kind: 'jump' }
   | { kind: 'punch' }
   | { kind: 'kick' }
+  | { kind: 'guard'; on: boolean } // ガード（押しっぱ状態を送る）
+  | { kind: 'throw' }
   | { kind: 'final-vent' }
 
 export type InputHandler = (input: BattleInput) => void
@@ -27,6 +30,8 @@ export interface KeyBindings {
   jump: string[]
   punch: string[]
   kick: string[]
+  guard: string[]
+  throw: string[]
   finalVent: string[]
 }
 
@@ -36,17 +41,21 @@ export const DEFAULT_KEY_BINDINGS: KeyBindings = {
   jump: ['ArrowUp', 'w', 'W', ' '],
   punch: ['j', 'J'],
   kick: ['k', 'K'],
+  guard: ['Shift', 's', 'S', 'ArrowDown'], // ホールドでガード
+  throw: ['u', 'U'],
   finalVent: ['l', 'L', 'f', 'F'],
 }
 
 // キーボードをバトル入力に変換するダミーソース。
 // 左右は押下状態から現在の移動方向を算出（両押し / 離しで停止）。
+// ガードは「押しっぱ状態」を on/off で送る（複数キーのどれかが押されていれば on）。
 export function createKeyboardSource(
   onInput: InputHandler,
   bindings: KeyBindings = DEFAULT_KEY_BINDINGS,
 ): InputSource {
   let leftDown = false
   let rightDown = false
+  const guardKeys = new Set<string>() // 現在押されているガードキー
 
   const dir = (): -1 | 0 | 1 => (leftDown === rightDown ? 0 : leftDown ? -1 : 1)
 
@@ -64,6 +73,12 @@ export function createKeyboardSource(
       onInput({ kind: 'punch' })
     } else if (bindings.kick.includes(e.key)) {
       onInput({ kind: 'kick' })
+    } else if (bindings.throw.includes(e.key)) {
+      onInput({ kind: 'throw' })
+    } else if (bindings.guard.includes(e.key)) {
+      const was = guardKeys.size > 0
+      guardKeys.add(e.key)
+      if (!was) onInput({ kind: 'guard', on: true })
     } else if (bindings.finalVent.includes(e.key)) {
       onInput({ kind: 'final-vent' })
     } else {
@@ -79,6 +94,9 @@ export function createKeyboardSource(
     } else if (bindings.right.includes(e.key)) {
       rightDown = false
       onInput({ kind: 'move', dir: dir() })
+    } else if (bindings.guard.includes(e.key)) {
+      guardKeys.delete(e.key)
+      if (guardKeys.size === 0) onInput({ kind: 'guard', on: false })
     } else {
       return
     }
