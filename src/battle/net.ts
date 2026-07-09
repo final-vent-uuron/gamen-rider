@@ -30,6 +30,8 @@ export interface BattleNet {
   sendMove(dir: -1 | 0 | 1): void
   sendJump(): void
   sendAttack(kind: AttackKind): void
+  sendGuard(on: boolean): void
+  sendThrow(): void
   sendReset(): void
   close(): void
 }
@@ -110,6 +112,8 @@ export function connectBattle(opts: ConnectBattleOptions): BattleNet {
     sendMove: (dir) => send({ t: 'move', dir }),
     sendJump: () => send({ t: 'jump' }),
     sendAttack: (kind) => send({ t: 'attack', kind }),
+    sendGuard: (on) => send({ t: 'guard', on }),
+    sendThrow: () => send({ t: 'throw' }),
     sendReset: () => send({ t: 'reset' }),
     close: () => {
       closedByUser = true

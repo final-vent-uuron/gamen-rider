@@ -2,9 +2,28 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { RIDER_ROUTINES } from '../pose'
-import { battleCardsFor, connectBattle, createKeyboardSource } from '../battle'
-import type { BattleCard, BattleNet, BattleState, NetStatus, PlayerState } from '../battle'
+import {
+  ARENA,
+  applyAttack,
+  applyJump,
+  applyThrow,
+  battleCardsFor,
+  connectBattle,
+  createKeyboardSource,
+  createSfx,
+  stepBattle,
+} from '../battle'
+import type { BattleCard, BattleNet, BattleState, NetStatus, PlayerState, Sfx } from '../battle'
 import type { ArenaRenderer } from '../battle/arena3d'
+
+// 被弾ダメージの浮き数字。命中検出で追加し、一定時間で消す。
+interface DamagePopup {
+  key: number
+  x: number // ステージ内の正規化 x（0..1）で位置を決める
+  amount: number
+  big: boolean
+  blocked: boolean
+}
 
 // rider をクエリで受け取り、無ければ先頭ルーチンを既定にする（/battle 単体でも動作確認できる）。
 // 変身フロー（/henshin）からは navigate({ to:'/battle', search:{ rider } }) で遷移してくる想定。
@@ -21,6 +40,23 @@ const PLAYER_COLORS = ['#a78bfa', '#f87171', '#34d399', '#fbbf24', '#38bdf8']
 // サーバーから最初の状態が届くまでの初期値（空のロスター）。
 const EMPTY_BATTLE: BattleState = { players: [], winnerId: null }
 
+// 予測の見た目: 自分の技/ガードはサーバーが追いつく前でも即表示。被弾中はサーバー優先。
+function predAction(serverP: PlayerState, predP: PlayerState): PlayerState['action'] {
+  if (serverP.action === 'hit' || serverP.action === 'thrown' || serverP.action === 'down') {
+    return serverP.action
+  }
+  if (
+    predP.action === 'punch' ||
+    predP.action === 'kick' ||
+    predP.action === 'throw' ||
+    predP.action === 'final' ||
+    predP.action === 'guard'
+  ) {
+    return predP.action
+  }
+  return serverP.action
+}
+
 function BattlePage() {
   const { rider } = Route.useSearch()
 
@@ -35,6 +71,9 @@ function BattlePage() {
   const [battle, setBattle] = useState<BattleState>(EMPTY_BATTLE)
   const [finalActive, setFinalActive] = useState(false)
   const [status, setStatus] = useState<NetStatus>('connecting')
+  const [popups, setPopups] = useState<DamagePopup[]>([]) // 被弾ダメージ数字
+  const [combo, setCombo] = useState<number | null>(null) // 進行中の最大コンボ数
+  const [koFlash, setKoFlash] = useState(false) // KO の一瞬フラッシュ
 
   const battleRef = useRef(battle)
   battleRef.current = battle
@@ -45,6 +84,17 @@ function BattlePage() {
   const rendererRef = useRef<ArenaRenderer | null>(null)
   const finalActiveRef = useRef(false) // rAF ループから読む finalActive のミラー
   const netRef = useRef<BattleNet | null>(null)
+  const sfxRef = useRef<Sfx | null>(null) // 効果音（WebAudio 合成）
+  const comboTimerRef = useRef(0)
+  const popupKeyRef = useRef(0)
+
+  // --- クライアント予測（自分のキャラだけ即応させてラグ感を消す）---
+  // サーバー権威は維持しつつ、自分の移動/技を state.ts の同じ純粋関数でローカルにも回し、
+  // 受信のたびに位置を軟着（補正）する。predRef は「自分1人だけ」の BattleState。
+  const predRef = useRef<BattleState | null>(null)
+  const moveDirRef = useRef<-1 | 0 | 1>(0) // 自分の移動入力
+  const guardRef = useRef(false) // 自分のガード入力
+  const lastPredTRef = useRef(0)
 
   function flashFinal() {
     setFinalActive(true)
@@ -56,9 +106,114 @@ function BattlePage() {
     }, 1300)
   }
 
+  // 効果音（WebAudio 合成）を用意。実際の発音は最初のユーザー操作(resume)後。
+  useEffect(() => {
+    sfxRef.current = createSfx()
+  }, [])
+
   // WebSocket 接続。シミュレーションは権威サーバー側で回っているので、
   // ここは「自分の入力を送る」「受け取った状態を描く」だけ（→ 4人/2PC で共有）。
+  // 受信の差分から命中/ブロック/投げ/KO/コンボ/ゲージ満タンを検出し、演出を焚く。
   useEffect(() => {
+    // 前フレーム → 今フレームの差分で「起きたこと」を演出に変換する。
+    const processEvents = (prev: BattleState, next: BattleState, youId: string) => {
+      const sfx = sfxRef.current
+      const r = rendererRef.current
+      let maxCombo = 0
+      const fresh: DamagePopup[] = []
+      const prevFinal = new Set(prev.players.filter((p) => p.action === 'final').map((p) => p.id))
+      let newFinal = false
+
+      for (const np of next.players) {
+        if (np.comboCount > maxCombo) maxCombo = np.comboCount
+        if (np.action === 'final' && !prevFinal.has(np.id)) newFinal = true
+        const pp = prev.players.find((p) => p.id === np.id)
+        if (!pp) continue
+        const dmg = pp.hp - np.hp
+        const thrown = np.action === 'thrown' && pp.action !== 'thrown'
+        const ko = pp.hp > 0 && np.hp <= 0
+        if (dmg > 0) {
+          const blocked = np.action === 'guard' && dmg <= 2
+          if (blocked) {
+            sfx?.block()
+            r?.hitSpark(np.x, np.y, 0x7fdfff, false)
+            r?.shake(0.06)
+          } else {
+            const big = dmg >= 9 || thrown || ko
+            if (!ko) {
+              if (thrown) sfx?.grab()
+              else sfx?.hit(Math.min(1, dmg / 20))
+            }
+            r?.hitSpark(np.x, np.y, thrown ? 0xffb020 : 0xffe08a, big)
+            r?.shake(Math.min(0.7, 0.08 + dmg * 0.02))
+            if (big) r?.punch(0.9)
+          }
+          fresh.push({
+            key: popupKeyRef.current++,
+            x: np.x,
+            amount: dmg,
+            big: dmg >= 9 || thrown,
+            blocked,
+          })
+        }
+        if (ko) {
+          sfx?.ko()
+          r?.shake(0.85)
+          r?.punch(1.6)
+          setKoFlash(true)
+          window.setTimeout(() => setKoFlash(false), 260)
+        }
+        if (np.id === youId && pp.meter < ARENA.meterMax && np.meter >= ARENA.meterMax) {
+          sfx?.meterFull()
+        }
+      }
+
+      if (newFinal) flashFinal()
+      if (fresh.length) {
+        setPopups((ps) => [...ps, ...fresh])
+        for (const pu of fresh) {
+          window.setTimeout(() => setPopups((ps) => ps.filter((x) => x.key !== pu.key)), 850)
+        }
+      }
+      if (maxCombo >= 2) {
+        setCombo(maxCombo)
+        window.clearTimeout(comboTimerRef.current)
+        comboTimerRef.current = window.setTimeout(() => setCombo(null), 950)
+      }
+    }
+
+    // サーバー受信で自分の予測状態を補正する（権威はサーバー、位置は軟着）。
+    const reconcilePrediction = (next: BattleState, youId: string) => {
+      const serverSelf = next.players.find((p) => p.id === youId)
+      if (!serverSelf) {
+        predRef.current = null
+        return
+      }
+      const now = Date.now()
+      const pred = predRef.current?.players[0]
+      if (!pred || pred.id !== serverSelf.id) {
+        predRef.current = { players: [{ ...serverSelf }], winnerId: null }
+        return
+      }
+      const merged: PlayerState = { ...serverSelf } // 権威フィールド(hp/meter/timer等)はサーバー採用
+      const constrained =
+        serverSelf.action === 'hit' ||
+        serverSelf.action === 'thrown' ||
+        serverSelf.action === 'down' ||
+        now < serverSelf.stunUntil ||
+        now < serverSelf.freezeUntil
+      const err = Math.abs(serverSelf.x - pred.x) + Math.abs(serverSelf.y - pred.y)
+      if (!constrained && err < 0.08) {
+        // 自由移動中は予測位置を維持して軽く寄せる（入力が即反映されて見える）
+        merged.x = pred.x + (serverSelf.x - pred.x) * 0.25
+        merged.y = pred.y
+        merged.vx = pred.vx
+        merged.vy = pred.vy
+        merged.facing = pred.facing
+      }
+      predRef.current = { players: [merged], winnerId: null }
+    }
+
     const net = connectBattle({
       riderId: routine.riderId,
       riderName: routine.riderName,
@@ -69,11 +224,8 @@ function BattlePage() {
         // isSelf は端末ごとに違う（youId と一致する人が自分）。ここで付け直す。
         const players = state.players.map((p) => ({ ...p, isSelf: p.id === youId }))
         const next: BattleState = { ...state, players }
-        // 誰か（自分/相手）が新たにファイナルベントへ入った瞬間に演出を焚く。
-        const wasFinal = new Set(
-          prev.players.filter((p) => p.action === 'final').map((p) => p.id),
-        )
-        if (players.some((p) => p.action === 'final' && !wasFinal.has(p.id))) flashFinal()
+        processEvents(prev, next, youId)
+        reconcilePrediction(next, youId)
         battleRef.current = next
         setBattle(next)
       },
@@ -81,22 +233,46 @@ function BattlePage() {
     netRef.current = net
 
     // キーボード（＝センサーのダミー入力）→ サーバーへ送信。
+    // 攻撃には即時フィードバックの風切り音を鳴らす（往復遅延を体感で吸収）。
+    // ローカル予測に自分の操作を即反映するヘルパ（predRef は自分1人だけの状態）。
+    const applyPred = (fn: (s: BattleState) => BattleState) => {
+      if (predRef.current && youIdRef.current) predRef.current = fn(predRef.current)
+    }
     const source = createKeyboardSource((input) => {
+      sfxRef.current?.resume()
+      const now = Date.now()
+      const selfId = youIdRef.current
       switch (input.kind) {
         case 'move':
+          moveDirRef.current = input.dir
           net.sendMove(input.dir)
           break
         case 'jump':
           net.sendJump()
+          applyPred((s) => applyJump(s, selfId, now))
           break
         case 'punch':
           net.sendAttack('punch')
+          applyPred((s) => applyAttack(s, selfId, 'punch', now))
+          sfxRef.current?.whiff()
           break
         case 'kick':
           net.sendAttack('kick')
+          applyPred((s) => applyAttack(s, selfId, 'kick', now))
+          sfxRef.current?.whiff()
+          break
+        case 'guard':
+          guardRef.current = input.on
+          net.sendGuard(input.on)
+          break
+        case 'throw':
+          net.sendThrow()
+          applyPred((s) => applyThrow(s, selfId, now))
+          sfxRef.current?.whiff()
           break
         case 'final-vent':
           net.sendAttack('final')
+          applyPred((s) => applyAttack(s, selfId, 'final', now))
           break
       }
     })
@@ -107,13 +283,53 @@ function BattlePage() {
       net.close()
       netRef.current = null
       window.clearTimeout(finalTimerRef.current)
+      window.clearTimeout(comboTimerRef.current)
     }
   }, [routine])
 
-  // 描画ループ: 受信済みの最新状態をそのまま three.js に流すだけ（更新はサーバー側）。
+  // 描画ループ: サーバー状態を土台に、自分だけローカル予測で先行させて描く（ラグ感を消す）。
   useEffect(() => {
     const loop = () => {
-      rendererRef.current?.render(battleRef.current, finalActiveRef.current)
+      const server = battleRef.current
+      let renderState = server
+      const selfId = youIdRef.current
+      const pred = predRef.current
+      if (pred && selfId && !server.winnerId && server.players.some((p) => p.id === selfId)) {
+        // 自分を同じ純粋関数(stepBattle)で毎フレーム前進させ、位置/技を即反映。
+        const now = Date.now()
+        const dt = lastPredTRef.current ? now - lastPredTRef.current : 0
+        lastPredTRef.current = now
+        const advanced = stepBattle(
+          pred,
+          dt,
+          now,
+          { [selfId]: moveDirRef.current },
+          { [selfId]: guardRef.current },
+        )
+        predRef.current = advanced
+        const ps = advanced.players[0]
+        if (ps) {
+          renderState = {
+            ...server,
+            players: server.players.map((p) =>
+              p.id === selfId
+                ? {
+                    ...p,
+                    x: ps.x,
+                    y: ps.y,
+                    vx: ps.vx,
+                    vy: ps.vy,
+                    facing: ps.facing,
+                    action: predAction(p, ps),
+                  }
+                : p,
+            ),
+          }
+        }
+      } else {
+        lastPredTRef.current = 0
+      }
+      rendererRef.current?.render(renderState, finalActiveRef.current)
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
@@ -141,12 +357,19 @@ function BattlePage() {
   function handleReset() {
     netRef.current?.sendReset()
     setFinalActive(false)
+    setPopups([])
+    setCombo(null)
+    setKoFlash(false)
   }
 
   // カードクリックをダミー入力として扱う（マウスでも技を出せる）。
   function handleCard(card: BattleCard) {
+    sfxRef.current?.resume()
     if (card.kind === 'final') netRef.current?.sendAttack('final')
-    else if (card.kind === 'attack') netRef.current?.sendAttack('punch')
+    else if (card.kind === 'attack') {
+      netRef.current?.sendAttack('punch')
+      sfxRef.current?.whiff()
+    }
   }
 
   const self = battle.players.find((p) => p.id === youIdRef.current) ?? null
@@ -184,9 +407,8 @@ function BattlePage() {
       {status === 'open' && battle.players.length < 2 && !winner && <WaitingHint />}
       {status !== 'open' && <DisconnectedHint status={status} />}
 
-      {/* ステージ（three.js の 3D シーン。canvas はこの div に挿入される） */}
+      {/* ステージ（three.js の 3D シーン ＋ 演出オーバーレイ） */}
       <div
-        ref={arenaHostRef}
         style={{
           position: 'relative',
           flex: 1,
@@ -195,11 +417,32 @@ function BattlePage() {
           overflow: 'hidden',
           background: '#0b1220',
         }}
-      />
+      >
+        {/* three canvas はこの div にだけ挿入する（React 子要素と混ぜない） */}
+        <div ref={arenaHostRef} style={{ position: 'absolute', inset: 0 }} />
+        {/* ダメージ数字・コンボ表示（描画に干渉しない透明レイヤ） */}
+        <StageOverlay popups={popups} combo={combo} />
+        {/* KO の一瞬フラッシュ */}
+        {koFlash && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'radial-gradient(circle, rgba(255,255,255,0.85), rgba(255,255,255,0))',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+      </div>
 
       {/* 下段: カードトレイ ＋ 操作ヘルプ */}
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <CardTray cards={cards} disabled={!!winner || (self?.hp ?? 0) <= 0} onCard={handleCard} />
+        <CardTray
+          cards={cards}
+          disabled={!!winner || (self?.hp ?? 0) <= 0}
+          finalReady={(self?.meter ?? 0) >= ARENA.meterMax}
+          onCard={handleCard}
+        />
         <ControlsHelp />
       </div>
 
@@ -427,20 +670,107 @@ function HpBar({ player, color, index }: { player: PlayerState; color: string; i
           </span>
         )}
       </div>
+
+      {/* 逆転ゲージ（満タンで Final Vent 解禁） */}
+      <MeterBar meter={player.meter} color={color} />
     </div>
   )
 }
 
+// 逆転ゲージのバー。満タンで発光・脈動する。
+function MeterBar({ meter, color }: { meter: number; color: string }) {
+  const ratio = Math.max(0, Math.min(1, meter / ARENA.meterMax))
+  const full = ratio >= 1
+  return (
+    <div
+      style={{
+        marginTop: '3px',
+        height: '6px',
+        background: '#111827',
+        borderRadius: '3px',
+        overflow: 'hidden',
+        border: '1px solid #1f2937',
+      }}
+    >
+      <div
+        style={{
+          height: '100%',
+          width: `${ratio * 100}%`,
+          background: full
+            ? 'linear-gradient(90deg, #a855f7, #38bdf8)'
+            : `linear-gradient(90deg, ${color}, #a855f7)`,
+          boxShadow: full ? '0 0 8px #a855f7' : 'none',
+          animation: full ? 'meterReady 0.7s ease-in-out infinite' : undefined,
+          transition: 'width 0.2s ease',
+        }}
+      />
+    </div>
+  )
+}
+
+// ---- ステージ演出オーバーレイ（コンボ / ダメージ数字） -------------------
+
+function StageOverlay({ popups, combo }: { popups: DamagePopup[]; combo: number | null }) {
+  return (
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+      {/* コンボカウンタ（中央上） */}
+      {combo != null && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '13%',
+            transform: 'translateX(-50%)',
+            animation: 'comboPop 0.25s ease-out',
+            textShadow: '0 2px 8px #000',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span
+            style={{ fontSize: '2.6rem', fontWeight: 900, color: '#ffd21e', fontStyle: 'italic' }}
+          >
+            {combo}
+          </span>
+          <span style={{ fontSize: '1rem', fontWeight: 900, color: '#fff', marginLeft: '5px' }}>
+            HITS
+          </span>
+        </div>
+      )}
+      {/* 被弾ダメージ数字（被弾者の位置に浮かせる） */}
+      {popups.map((p) => (
+        <span
+          key={p.key}
+          style={{
+            position: 'absolute',
+            left: `${p.x * 100}%`,
+            top: '38%',
+            animation: 'dmgRise 0.85s ease-out forwards',
+            fontWeight: 900,
+            fontStyle: 'italic',
+            fontSize: p.big ? '2rem' : '1.4rem',
+            color: p.blocked ? '#7fdfff' : p.big ? '#ff5a3c' : '#ffe08a',
+            textShadow: '0 2px 6px #000',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {p.blocked ? 'GUARD' : p.amount}
+        </span>
+      ))}
+    </div>
+  )
+}
 
 // ---- カードトレイ --------------------------------------------------------
 
 function CardTray({
   cards,
   disabled,
+  finalReady,
   onCard,
 }: {
   cards: BattleCard[]
   disabled: boolean
+  finalReady: boolean // Final はゲージ満タンでのみ押せる
   onCard: (card: BattleCard) => void
 }) {
   return (
@@ -449,11 +779,13 @@ function CardTray({
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         {cards.map((c) => {
           const isFinal = c.kind === 'final'
+          const cardDisabled = disabled || (isFinal && !finalReady)
+          const ready = isFinal && finalReady && !disabled
           return (
             <button
               key={c.id}
               type="button"
-              disabled={disabled}
+              disabled={cardDisabled}
               onClick={() => onCard(c)}
               style={{
                 width: '78px',
@@ -462,22 +794,25 @@ function CardTray({
                 border: `2px solid ${c.color}`,
                 background: `linear-gradient(160deg, ${c.color}22, #0f172a)`,
                 color: '#fff',
-                cursor: disabled ? 'not-allowed' : 'pointer',
-                opacity: disabled ? 0.4 : 1,
+                cursor: cardDisabled ? 'not-allowed' : 'pointer',
+                opacity: cardDisabled ? 0.4 : 1,
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between',
                 padding: '0.4rem',
                 fontSize: '0.7rem',
                 textAlign: 'left',
-                animation: isFinal && !disabled ? 'none' : undefined,
-                boxShadow: isFinal ? `0 0 12px ${c.color}66` : 'none',
+                animation: ready ? 'meterReady 0.7s ease-in-out infinite' : undefined,
+                boxShadow: ready ? `0 0 16px ${c.color}` : isFinal ? `0 0 12px ${c.color}66` : 'none',
               }}
             >
               <span style={{ color: c.color, fontWeight: 'bold', fontSize: '0.6rem' }}>
                 {c.kind.toUpperCase()}
               </span>
               <span style={{ fontWeight: 'bold', lineHeight: 1.2 }}>{c.label}</span>
+              {isFinal && !finalReady && (
+                <span style={{ color: '#9ca3af', fontSize: '0.55rem' }}>ゲージ必要</span>
+              )}
             </button>
           )
         })}
@@ -492,9 +827,11 @@ function ControlsHelp() {
   const rows: [string, string][] = [
     ['← → / A D', '移動'],
     ['W / ↑ / Space', 'ジャンプ'],
-    ['J', 'パンチ'],
-    ['K', 'キック'],
-    ['L / F', 'ファイナルベント'],
+    ['J', 'パンチ(軽・コンボ始動)'],
+    ['K', 'キック(重・打ち上げ)'],
+    ['Shift / S / ↓', 'ガード(押しっぱ)'],
+    ['U', '投げ(ガード崩し)'],
+    ['L / F', 'ファイナル(ゲージ満タン)'],
   ]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
