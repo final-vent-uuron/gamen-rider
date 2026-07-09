@@ -827,8 +827,8 @@ function ControlsHelp() {
   const rows: [string, string][] = [
     ['← → / A D', '移動'],
     ['W / ↑ / Space', 'ジャンプ'],
-    ['J', 'パンチ(軽・コンボ始動)'],
-    ['K', 'キック(重・打ち上げ)'],
+    ['J', 'パンチ(軽・発生早)'],
+    ['K', 'キック(重・主力)'],
     ['Shift / S / ↓', 'ガード(押しっぱ)'],
     ['U', '投げ(ガード崩し)'],
     ['L / F', 'ファイナル(ゲージ満タン)'],
@@ -854,6 +854,9 @@ function ControlsHelp() {
           </span>
         ))}
       </div>
+      <span style={{ fontSize: '0.75rem', color: '#fbbf24' }}>
+        コンボ: 当てた技を<strong>ヒット中にキャンセル</strong>して次へ → 例) パンチ→キック→ファイナル
+      </span>
     </div>
   )
 }
