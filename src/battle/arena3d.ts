@@ -214,6 +214,9 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
     if (zoomKick < 0.002) zoomKick = 0
   }
 
+  // 波動弾のスプライト（エネルギー弾）。projectile.id ごとに 1 枚を出し入れする。
+  const projSprites = new Map<string, THREE.Sprite>()
+
   function ensureAvatar(p: PlayerState, index: number): FighterAvatar {
     let av = avatars.get(p.id)
     if (!av) {
@@ -248,6 +251,38 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
       lastX.set(p.id, wx)
       av.update(p, t, moving)
     })
+
+    // 波動弾（エネルギー弾）の描画: 存在する弾にスプライトを割り当て、消えたら破棄。
+    const projectiles = state.projectiles ?? []
+    const seenProj = new Set<string>()
+    for (const pr of projectiles) {
+      seenProj.add(pr.id)
+      let sp = projSprites.get(pr.id)
+      if (!sp) {
+        const ownerIdx = state.players.findIndex((p) => p.id === pr.owner)
+        const color = PLAYER_COLORS[(ownerIdx < 0 ? 0 : ownerIdx) % PLAYER_COLORS.length]
+        const mat = new THREE.SpriteMaterial({
+          map: sparkTex,
+          color,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          transparent: true,
+          fog: false,
+        })
+        sp = new THREE.Sprite(mat)
+        scene.add(sp)
+        projSprites.set(pr.id, sp)
+      }
+      sp.position.set(worldX(pr.x), pr.y * JUMP_WORLD + 0.7, 0.4)
+      sp.scale.setScalar(1.5 + Math.sin(t * 22) * 0.18) // 脈動
+    }
+    for (const [id, sp] of projSprites) {
+      if (!seenProj.has(id)) {
+        scene.remove(sp)
+        ;(sp.material as THREE.SpriteMaterial).dispose()
+        projSprites.delete(id)
+      }
+    }
 
     // ファイナルベント中は場を紫に寄せ、紫ライトを焚く
     ;(scene.fog as THREE.Fog).color.lerp(new THREE.Color(final ? 0x2a1052 : 0x0b1220), 0.1)
@@ -308,6 +343,11 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
         s.mat.dispose()
       }
       sparks.length = 0
+      for (const sp of projSprites.values()) {
+        scene.remove(sp)
+        ;(sp.material as THREE.SpriteMaterial).dispose()
+      }
+      projSprites.clear()
       sparkTex.dispose()
       floor.geometry.dispose()
       ;(floor.material as THREE.Material).dispose()

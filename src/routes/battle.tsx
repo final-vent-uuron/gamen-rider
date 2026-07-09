@@ -38,7 +38,7 @@ export const Route = createFileRoute('/battle')({
 const PLAYER_COLORS = ['#a78bfa', '#f87171', '#34d399', '#fbbf24', '#38bdf8']
 
 // サーバーから最初の状態が届くまでの初期値（空のロスター）。
-const EMPTY_BATTLE: BattleState = { players: [], winnerId: null }
+const EMPTY_BATTLE: BattleState = { players: [], projectiles: [], winnerId: null }
 
 // 予測の見た目: 自分の技/ガードはサーバーが追いつく前でも即表示。被弾中はサーバー優先。
 function predAction(serverP: PlayerState, predP: PlayerState): PlayerState['action'] {
@@ -168,6 +168,15 @@ function BattlePage() {
         }
       }
 
+      // 新しく飛んだ波動弾に発射音＋火花。
+      const prevProj = new Set(prev.projectiles.map((pr) => pr.id))
+      for (const pr of next.projectiles) {
+        if (!prevProj.has(pr.id)) {
+          sfx?.shoot()
+          r?.hitSpark(pr.x, pr.y, 0x9be7ff, false)
+        }
+      }
+
       if (newFinal) flashFinal()
       if (fresh.length) {
         setPopups((ps) => [...ps, ...fresh])
@@ -192,7 +201,7 @@ function BattlePage() {
       const now = Date.now()
       const pred = predRef.current?.players[0]
       if (!pred || pred.id !== serverSelf.id) {
-        predRef.current = { players: [{ ...serverSelf }], winnerId: null }
+        predRef.current = { players: [{ ...serverSelf }], projectiles: [], winnerId: null }
         return
       }
       const merged: PlayerState = { ...serverSelf } // 権威フィールド(hp/meter/timer等)はサーバー採用
@@ -211,7 +220,7 @@ function BattlePage() {
         merged.vy = pred.vy
         merged.facing = pred.facing
       }
-      predRef.current = { players: [merged], winnerId: null }
+      predRef.current = { players: [merged], projectiles: predRef.current?.projectiles ?? [], winnerId: null }
     }
 
     const net = connectBattle({
@@ -268,6 +277,11 @@ function BattlePage() {
         case 'throw':
           net.sendThrow()
           applyPred((s) => applyThrow(s, selfId, now))
+          sfxRef.current?.whiff()
+          break
+        case 'shot':
+          net.sendAttack('shot')
+          applyPred((s) => applyAttack(s, selfId, 'shot', now))
           sfxRef.current?.whiff()
           break
         case 'final-vent':
@@ -827,10 +841,11 @@ function ControlsHelp() {
   const rows: [string, string][] = [
     ['← → / A D', '移動'],
     ['W / ↑ / Space', 'ジャンプ'],
-    ['J', 'パンチ(軽・コンボ始動)'],
-    ['K', 'キック(重・打ち上げ)'],
+    ['J', 'パンチ(軽・発生早)'],
+    ['K', 'キック(重・主力)'],
     ['Shift / S / ↓', 'ガード(押しっぱ)'],
     ['U', '投げ(ガード崩し)'],
+    ['I', '波動弾(飛び道具・1発ずつ)'],
     ['L / F', 'ファイナル(ゲージ満タン)'],
   ]
   return (
@@ -854,6 +869,9 @@ function ControlsHelp() {
           </span>
         ))}
       </div>
+      <span style={{ fontSize: '0.75rem', color: '#fbbf24' }}>
+        コンボ: 当てた技を<strong>ヒット中にキャンセル</strong>して次へ → 例) パンチ→キック→ファイナル
+      </span>
     </div>
   )
 }

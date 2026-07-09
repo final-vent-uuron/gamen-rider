@@ -13,6 +13,7 @@ export type BattleInput =
   | { kind: 'kick' }
   | { kind: 'guard'; on: boolean } // ガード（押しっぱ状態を送る）
   | { kind: 'throw' }
+  | { kind: 'shot' } // 波動弾
   | { kind: 'final-vent' }
 
 export type InputHandler = (input: BattleInput) => void
@@ -32,6 +33,7 @@ export interface KeyBindings {
   kick: string[]
   guard: string[]
   throw: string[]
+  shot: string[]
   finalVent: string[]
 }
 
@@ -43,6 +45,7 @@ export const DEFAULT_KEY_BINDINGS: KeyBindings = {
   kick: ['k', 'K'],
   guard: ['Shift', 's', 'S', 'ArrowDown'], // ホールドでガード
   throw: ['u', 'U'],
+  shot: ['i', 'I'], // 波動弾
   finalVent: ['l', 'L', 'f', 'F'],
 }
 
@@ -75,6 +78,8 @@ export function createKeyboardSource(
       onInput({ kind: 'kick' })
     } else if (bindings.throw.includes(e.key)) {
       onInput({ kind: 'throw' })
+    } else if (bindings.shot.includes(e.key)) {
+      onInput({ kind: 'shot' })
     } else if (bindings.guard.includes(e.key)) {
       const was = guardKeys.size > 0
       guardKeys.add(e.key)
