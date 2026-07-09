@@ -23,8 +23,18 @@ export type PlayerAction =
   | 'guard' // ガード構え中
   | 'throw' // 投げ動作中
   | 'thrown' // 投げられてダウン（生存）
-export type AttackKind = 'punch' | 'kick' | 'final'
-export type MoveKind = 'punch' | 'kick' | 'throw' | 'final'
+export type AttackKind = 'punch' | 'kick' | 'final' | 'shot'
+export type MoveKind = 'punch' | 'kick' | 'throw' | 'final' | 'shot'
+
+// 飛び道具（波動弾）。キャラとは別に状態へ持ち、サーバーで飛翔・当たり判定する。
+export interface Projectile {
+  id: string
+  owner: string // 撃った人の id
+  x: number // 正規化 x
+  y: number // 高さ（胸の高さ付近。ジャンプで避けられる）
+  dir: 1 | -1 // 進行方向
+  bornAt: number // 生成時刻（寿命判定用）
+}
 
 export interface PlayerState {
   id: string
@@ -58,6 +68,7 @@ export interface PlayerState {
 
 export interface BattleState {
   players: PlayerState[]
+  projectiles: Projectile[] // 飛翔中の波動弾
   winnerId: string | null
 }
 
@@ -144,7 +155,7 @@ export const MOVES: Record<MoveKind, MoveDef> = {
     blockstun: 200,
     hitstop: 65,
     cancelWindow: 300,
-    cancelInto: ['kick', 'final'],
+    cancelInto: ['kick', 'shot', 'final'],
     blockable: true,
     isThrow: false,
   },
@@ -161,7 +172,7 @@ export const MOVES: Record<MoveKind, MoveDef> = {
     blockstun: 240,
     hitstop: 95,
     cancelWindow: 270,
-    cancelInto: ['final'],
+    cancelInto: ['shot', 'final'],
     blockable: true,
     isThrow: false,
   },
@@ -200,7 +211,37 @@ export const MOVES: Record<MoveKind, MoveDef> = {
     blockable: false,
     isThrow: false,
   },
+  // 波動弾。発生後に前方へ弾を撃つ（当たり判定は弾側＝下の PROJECTILE）。
+  shot: {
+    startup: 140,
+    active: 30, // このタイミングで弾を生成
+    recovery: 360,
+    damage: 0,
+    reach: 0,
+    knockback: 0,
+    launch: 0,
+    hitstun: 0,
+    blockstun: 0,
+    hitstop: 0,
+    cancelWindow: 0,
+    cancelInto: [],
+    blockable: false,
+    isThrow: false,
+  },
 }
+
+// 波動弾（飛翔体）のパラメータ。当たり判定・ダメージは弾側が持つ。
+export const PROJECTILE = {
+  speed: 0.62, // 1 秒あたりの正規化 x 移動量
+  y: 0.2, // 発射高さ（胸〜腹。ジャンプで避けられる）
+  radius: 0.028, // 当たり半径（正規化 x）
+  lifetimeMs: 2600, // 寿命
+  damage: 7,
+  knockback: 0.045,
+  hitstun: 300,
+  blockstun: 190,
+  hitstop: 70,
+} as const
 
 export interface PlayerInit {
   id: string
@@ -255,6 +296,7 @@ export function createBattle(inits: PlayerInit[]): BattleState {
   const n = inits.length
   return {
     winnerId: null,
+    projectiles: [],
     players: inits.map((p, i) =>
       freshPlayer(
         p,
@@ -274,7 +316,11 @@ export function addPlayer(state: BattleState, init: PlayerInit): BattleState {
 
 export function removePlayer(state: BattleState, id: string): BattleState {
   if (!state.players.some((p) => p.id === id)) return state
-  return checkWinner({ ...state, players: state.players.filter((p) => p.id !== id) })
+  return checkWinner({
+    ...state,
+    players: state.players.filter((p) => p.id !== id),
+    projectiles: state.projectiles.filter((pr) => pr.owner !== id), // 撃った本人の弾も消す
+  })
 }
 
 function spawnX(players: PlayerState[]): number {
@@ -368,8 +414,9 @@ export function stepBattle(
   })
 
   const resolved = resolveBodies(moved)
-  const afterHits = resolveActiveHits(resolved, now) // ← 持続フレームの当たり判定
-  return checkWinner({ ...state, players: afterHits })
+  const afterHits = resolveActiveHits(resolved, now) // 近接技の持続フレーム当たり判定
+  const proj = stepProjectiles(afterHits, state.projectiles ?? [], now, dt) // 波動弾の生成・飛翔・衝突
+  return checkWinner({ ...state, players: proj.players, projectiles: proj.projectiles })
 }
 
 function resolveBodies(players: PlayerState[]): PlayerState[] {
@@ -394,12 +441,13 @@ function resolveBodies(players: PlayerState[]): PlayerState[] {
   return players.map((p, i) => (xs[i] === p.x ? p : { ...p, x: xs[i] }))
 }
 
-// 「持続フレーム中で未ヒットの技」を順に当たり判定する（多段は moveHasHit で防止）。
+// 「持続フレーム中で未ヒットの近接技」を順に当たり判定する（多段は moveHasHit で防止）。
+// shot（波動弾）は近接判定を持たず、stepProjectiles 側で弾を出すのでここでは除外。
 function resolveActiveHits(players: PlayerState[], now: number): PlayerState[] {
   let result = players
   for (let i = 0; i < players.length; i++) {
     const a = result[i]
-    if (!a.move || a.hp <= 0 || a.moveHasHit) continue
+    if (!a.move || a.move === 'shot' || a.hp <= 0 || a.moveHasHit) continue
     if (now < a.moveActiveFrom || now > a.moveActiveTo) continue // 持続フレーム外
     result = applyMoveHit(result, a.id, a.move, now)
   }
@@ -420,6 +468,8 @@ function startMove(state: BattleState, id: string, kind: MoveKind, now: number):
 
   // Final はゲージ満タン必須。
   if (kind === 'final' && attacker.meter < ARENA.meterFinalCost) return state
+  // 波動弾は自分の弾が画面に無いときだけ（連射抑制＝ちゃんとした牽制技）。
+  if (kind === 'shot' && (state.projectiles ?? []).some((pr) => pr.owner === id)) return state
 
   const free = canActNow(attacker, now)
   if (!free) {
@@ -530,51 +580,10 @@ function applyMoveHit(
       }
     }
 
-    // ガード判定（正面・ブロック可能な技のみ）。
-    const attackerInFront = Math.sign(attacker.x - p.x) === p.facing
-    const blocked = f.blockable && p.guarding && attackerInFront
-    if (blocked) {
-      const hp = Math.max(0, p.hp - ARENA.chipDamage)
-      const x = clamp(p.x + attacker.facing * ARENA.guardPushback, ARENA.minX, ARENA.maxX)
-      return {
-        ...p,
-        hp,
-        x,
-        action: 'guard' as const,
-        move: null,
-        stunUntil: now + f.blockstun,
-        actionUntil: now + f.blockstun,
-        freezeUntil: now + Math.min(f.hitstop, 60),
-        meter: clamp(p.meter + ARENA.meterOnBlock, 0, ARENA.meterMax),
-      }
-    }
-
-    // 通常ヒット（カウンター補正・コンボ補正込み）。
-    const counter = p.move !== null && now <= p.moveActiveTo // 相手の発生/持続中に潰した
-    const dmg = Math.round(
-      f.damage * comboScale(p.comboCount) * (counter ? ARENA.counterDamageMul : 1),
-    )
-    const hp = Math.max(0, p.hp - dmg)
-    const x = clamp(p.x + attacker.facing * f.knockback, ARENA.minX, ARENA.maxX)
-    const vy = f.launch > 0 && p.y <= 0.001 ? f.launch : p.vy
-    const stun = now + Math.round(f.hitstun * (counter ? ARENA.counterStunMul : 1))
-    dealtMeter += ARENA.meterOnDeal
-    return {
-      ...p,
-      hp,
-      x,
-      vy,
-      guarding: false,
-      action: hp <= 0 ? ('down' as const) : ('hit' as const),
-      move: null,
-      actionUntil: stun,
-      stunUntil: stun,
-      freezeUntil: now + f.hitstop,
-      comboCount: p.comboCount + 1,
-      comboBy: attackerId,
-      comboUntil: now + ARENA.comboResetMs,
-      meter: clamp(p.meter + ARENA.meterOnTake, 0, ARENA.meterMax),
-    }
+    // 打撃: ガード/通常ヒット/カウンターを共通ヘルパで解決（弾からも再利用）。
+    const r = strikeTarget(p, attackerId, attacker.facing, f, now)
+    dealtMeter += r.attackerMeter
+    return r.p
   })
 
   // 攻撃者側を確定: ヒット確定 → ヒットストップ・キャンセル窓・ゲージ・（投げは硬直短縮）。
@@ -592,6 +601,153 @@ function applyMoveHit(
   })
 
   return withAttacker
+}
+
+// 打撃 1 発を対象へ適用する共通処理（近接技・波動弾で共有）。
+// fromDir = 攻撃の進行方向（＝相手を押す向き）。ガードは相手が発生源(-fromDir)を向いていれば成立。
+type StrikeDef = {
+  damage: number
+  knockback: number
+  launch: number
+  hitstun: number
+  blockstun: number
+  hitstop: number
+  blockable: boolean
+}
+function strikeTarget(
+  p: PlayerState,
+  attackerId: string,
+  fromDir: 1 | -1,
+  def: StrikeDef,
+  now: number,
+): { p: PlayerState; attackerMeter: number } {
+  const blocked = def.blockable && p.guarding && p.facing === -fromDir
+  if (blocked) {
+    const hp = Math.max(0, p.hp - ARENA.chipDamage)
+    const x = clamp(p.x + fromDir * ARENA.guardPushback, ARENA.minX, ARENA.maxX)
+    return {
+      p: {
+        ...p,
+        hp,
+        x,
+        action: 'guard',
+        move: null,
+        stunUntil: now + def.blockstun,
+        actionUntil: now + def.blockstun,
+        freezeUntil: now + Math.min(def.hitstop, 60),
+        meter: clamp(p.meter + ARENA.meterOnBlock, 0, ARENA.meterMax),
+      },
+      attackerMeter: 0,
+    }
+  }
+  // カウンター: 相手の発生/持続中（技を振っている最中）に潰した。
+  const counter = p.move !== null && now <= p.moveActiveTo
+  const dmg = Math.round(def.damage * comboScale(p.comboCount) * (counter ? ARENA.counterDamageMul : 1))
+  const hp = Math.max(0, p.hp - dmg)
+  const x = clamp(p.x + fromDir * def.knockback, ARENA.minX, ARENA.maxX)
+  const vy = def.launch > 0 && p.y <= 0.001 ? def.launch : p.vy
+  const stun = now + Math.round(def.hitstun * (counter ? ARENA.counterStunMul : 1))
+  return {
+    p: {
+      ...p,
+      hp,
+      x,
+      vy,
+      guarding: false,
+      action: hp <= 0 ? 'down' : 'hit',
+      move: null,
+      actionUntil: stun,
+      stunUntil: stun,
+      freezeUntil: now + def.hitstop,
+      comboCount: p.comboCount + 1,
+      comboBy: attackerId,
+      comboUntil: now + ARENA.comboResetMs,
+      meter: clamp(p.meter + ARENA.meterOnTake, 0, ARENA.meterMax),
+    },
+    attackerMeter: ARENA.meterOnDeal,
+  }
+}
+
+// 波動弾の生成（shot の持続開始で1発）・飛翔・相殺・プレイヤー衝突を毎 tick で解決。
+const PROJ_STRIKE: StrikeDef = {
+  damage: PROJECTILE.damage,
+  knockback: PROJECTILE.knockback,
+  launch: 0,
+  hitstun: PROJECTILE.hitstun,
+  blockstun: PROJECTILE.blockstun,
+  hitstop: PROJECTILE.hitstop,
+  blockable: true,
+}
+function stepProjectiles(
+  players: PlayerState[],
+  projectiles: Projectile[],
+  now: number,
+  dt: number,
+): { players: PlayerState[]; projectiles: Projectile[] } {
+  // 1) 生成: shot が持続に入って未生成なら前方へ弾を出す（moveHasHit を「生成済み」に流用）。
+  const spawned: Projectile[] = []
+  let outPlayers = players.map((p) => {
+    if (p.move === 'shot' && !p.moveHasHit && now >= p.moveActiveFrom && p.hp > 0) {
+      spawned.push({
+        id: `${p.id}_${Math.round(now)}_${spawned.length}`,
+        owner: p.id,
+        x: clamp(p.x + p.facing * (ARENA.bodyHalf + 0.012), ARENA.minX, ARENA.maxX),
+        y: PROJECTILE.y,
+        dir: p.facing,
+        bornAt: now,
+      })
+      return { ...p, moveHasHit: true }
+    }
+    return p
+  })
+
+  // 2) 飛翔＋寿命/場外で消滅。
+  const live = [...projectiles, ...spawned]
+    .map((pr) => ({ ...pr, x: pr.x + pr.dir * PROJECTILE.speed * dt }))
+    .filter(
+      (pr) =>
+        pr.x > ARENA.minX - 0.06 &&
+        pr.x < ARENA.maxX + 0.06 &&
+        now - pr.bornAt < PROJECTILE.lifetimeMs,
+    )
+
+  // 3) 弾同士の相殺（別 owner が重なったら両方消す）。
+  const dead = new Set<number>()
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      if (dead.has(i) || dead.has(j)) continue
+      if (live[i].owner !== live[j].owner && Math.abs(live[i].x - live[j].x) < PROJECTILE.radius * 2) {
+        dead.add(i)
+        dead.add(j)
+      }
+    }
+  }
+
+  // 4) プレイヤー衝突（当たったら弾は消え、撃った人にゲージ）。
+  const meterAdd: Record<string, number> = {}
+  const remaining: Projectile[] = []
+  for (let i = 0; i < live.length; i++) {
+    if (dead.has(i)) continue
+    const pr = live[i]
+    let consumed = false
+    outPlayers = outPlayers.map((p) => {
+      if (consumed || p.id === pr.owner || p.hp <= 0) return p
+      const vHit = p.y <= pr.y && pr.y < p.y + ARENA.bodyHeight // ジャンプで避けられる
+      if (!vHit || Math.abs(p.x - pr.x) > ARENA.bodyHalf + PROJECTILE.radius) return p
+      consumed = true
+      const r = strikeTarget(p, pr.owner, pr.dir, PROJ_STRIKE, now)
+      meterAdd[pr.owner] = (meterAdd[pr.owner] ?? 0) + r.attackerMeter
+      return r.p
+    })
+    if (!consumed) remaining.push(pr)
+  }
+  if (Object.keys(meterAdd).length > 0) {
+    outPlayers = outPlayers.map((p) =>
+      meterAdd[p.id] ? { ...p, meter: clamp(p.meter + meterAdd[p.id], 0, ARENA.meterMax) } : p,
+    )
+  }
+
+  return { players: outPlayers, projectiles: remaining }
 }
 
 // ジャンプ。接地中かつ行動可能（非硬直・非ガード）のみ有効。純粋関数。

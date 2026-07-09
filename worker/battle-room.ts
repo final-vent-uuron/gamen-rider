@@ -103,7 +103,12 @@ export class BattleRoom extends DurableObject {
         this.battle = applyJump(this.battle, conn.id, Date.now())
         break
       case 'attack':
-        if (msg.kind === 'punch' || msg.kind === 'kick' || msg.kind === 'final') {
+        if (
+          msg.kind === 'punch' ||
+          msg.kind === 'kick' ||
+          msg.kind === 'final' ||
+          msg.kind === 'shot'
+        ) {
           this.battle = applyAttack(this.battle, conn.id, msg.kind, Date.now())
         }
         break

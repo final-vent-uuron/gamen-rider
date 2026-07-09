@@ -8,6 +8,7 @@ export interface Sfx {
   hit(power: number): void // power 0..1（大きいほど重い音）
   block(): void
   grab(): void // 投げ
+  shoot(): void // 波動弾
   ko(): void
   meterFull(): void
   whiff(): void
@@ -18,6 +19,7 @@ const NOOP: Sfx = {
   hit() {},
   block() {},
   grab() {},
+  shoot() {},
   ko() {},
   meterFull() {},
   whiff() {},
@@ -124,6 +126,14 @@ export function createSfx(): Sfx {
       safe(() => {
         tone(320, 0.18, 'sawtooth', 0.3, 110)
         noise(0.08, 0.3, 500, 0.7)
+      })
+    },
+    shoot() {
+      // 波動弾の発射＝エネルギーが放たれる上昇→減衰音＋軽いノイズ
+      safe(() => {
+        tone(320, 0.22, 'sawtooth', 0.32, 900)
+        tone(660, 0.16, 'sine', 0.22, 1200)
+        noise(0.1, 0.22, 1600, 0.8)
       })
     },
     ko() {
