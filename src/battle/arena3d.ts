@@ -42,6 +42,7 @@ export type AvatarAction =
   | 'guard'
   | 'throw'
   | 'thrown'
+  | 'abare'
 
 // ライダー別 GLB モデルの登録。ここに 1 行足すだけで box プレースホルダから差し替わる。
 //   例) GLB を用意したら（Vite なら import url from '#/assets/models/ryuki.glb?url'）:
@@ -88,6 +89,7 @@ function avatarAction(p: PlayerState, moving: boolean): AvatarAction {
   if (p.action === 'thrown') return 'thrown'
   if (p.action === 'guard') return 'guard'
   if (p.action === 'throw') return 'throw'
+  if (p.action === 'abare') return 'abare'
   if (p.action === 'punch') return 'punch'
   if (p.action === 'kick') return 'kick'
   if (p.action === 'final') return 'final'
@@ -497,6 +499,15 @@ function createBoxAvatar(color: number): FighterAvatar {
         tilt = -0.1
         glow = 0.55
         glowColor = 0x38bdf8 // 青いガード光
+      } else if (p.action === 'abare') {
+        armF = -1.0 // 両腕を大きく振り開いて弾き飛ばす
+        armB = -1.0
+        legF = 0.3
+        legB = -0.3
+        tilt = -0.05
+        extraY = 0.05
+        glow = 1
+        glowColor = 0xc084fc // 紫のバースト光
       } else if (airborne) {
         // ジャンプ: 膝を抱えて腕を上げる
         legF = 0.6
@@ -519,6 +530,7 @@ function createBoxAvatar(color: number): FighterAvatar {
         p.action === 'kick' ||
         p.action === 'throw' ||
         p.action === 'final' ||
+        p.action === 'abare' ||
         p.action === 'hit' ||
         p.action === 'thrown'
       const k = combat ? 0.5 : 0.28

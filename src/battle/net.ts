@@ -32,6 +32,7 @@ export interface BattleNet {
   sendAttack(kind: AttackKind): void
   sendGuard(on: boolean): void
   sendThrow(): void
+  sendAbare(): void
   sendReset(): void
   close(): void
 }
@@ -114,6 +115,7 @@ export function connectBattle(opts: ConnectBattleOptions): BattleNet {
     sendAttack: (kind) => send({ t: 'attack', kind }),
     sendGuard: (on) => send({ t: 'guard', on }),
     sendThrow: () => send({ t: 'throw' }),
+    sendAbare: () => send({ t: 'abare' }),
     sendReset: () => send({ t: 'reset' }),
     close: () => {
       closedByUser = true

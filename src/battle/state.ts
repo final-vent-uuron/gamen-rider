@@ -23,6 +23,7 @@ export type PlayerAction =
   | 'guard' // ガード構え中
   | 'throw' // 投げ動作中
   | 'thrown' // 投げられてダウン（生存）
+  | 'abare' // あばれ（ゲージ1本の割り込み。無敵で両隣を突き放す）
 export type AttackKind = 'punch' | 'kick' | 'final' | 'shot'
 export type MoveKind = 'punch' | 'kick' | 'throw' | 'final' | 'shot'
 
@@ -54,6 +55,7 @@ export interface PlayerState {
   guarding: boolean
   stunUntil: number // 被弾/ブロック硬直の終了時刻。この間は行動不可
   freezeUntil: number // ヒットストップ終了時刻。この間は位置・時間が完全停止
+  invulnUntil: number // 無敵の終了時刻（あばれ中はこの間ダメージを受けない）
   comboCount: number // いま受けている連続ヒット数（0 = 非コンボ）
   comboBy: string | null // 誰にコンボされているか（攻撃者 id）
   comboUntil: number // この時刻を過ぎたら comboCount をリセット
@@ -113,12 +115,24 @@ export const ARENA = {
   counterDamageMul: 1.25,
   counterStunMul: 1.45,
 
-  // 逆転ゲージ
+  // 逆転ゲージ（5 ゲージ制）。1 ゲージ = meterPerStock。満タン(5本)で Final、1本で あばれ。
   meterMax: 100,
+  meterPerStock: 20, // 100 / 5 本
   meterOnDeal: 7,
   meterOnTake: 11,
   meterOnBlock: 3,
-  meterFinalCost: 100,
+  meterFinalCost: 100, // Final は 5 ゲージ（満タン）
+
+  // あばれ（バースト）: ゲージ1本で発動する切り返し。無敵で割り込み、両隣を突き放す。
+  // 「2人に挟まれて延々殴られる（ハメ）」から抜けるための緊急脱出ボタン。
+  abareCost: 20, // = 1 ゲージ（meterPerStock と同じ）
+  abareRange: 0.17, // 左右それぞれの有効距離（表面間）
+  abareKnockback: 0.12, // 突き放す強さ（間合いを作る）
+  abareDamage: 6, // 軽いダメージ（主目的は脱出）
+  abareStun: 300, // 突き放した相手の硬直（すぐ殴り返せない）
+  abareInvuln: 520, // 発動者の無敵時間
+  abareRecovery: 380, // 発動者の後隙
+  abareHitstop: 80,
 } as const
 
 // 技のフレームデータ（ミリ秒）。startup=発生, active=持続, recovery=硬直。
@@ -280,6 +294,7 @@ function freshPlayer(init: PlayerInit, x: number, facing: 1 | -1): PlayerState {
     guarding: false,
     stunUntil: 0,
     freezeUntil: 0,
+    invulnUntil: 0,
     comboCount: 0,
     comboBy: null,
     comboUntil: 0,
@@ -520,6 +535,65 @@ export function applyThrow(state: BattleState, attackerId: string, now: number):
   return startMove(state, attackerId, 'throw', now)
 }
 
+// 逆転ゲージの本数（0..5）。UI 表示・解禁判定に使う。
+export function meterStocks(meter: number): number {
+  return Math.floor(meter / ARENA.meterPerStock)
+}
+
+// あばれ（バースト）: ゲージ1本を消費し、無敵で割り込んで両隣を突き放す緊急脱出。
+// 被弾・コンボ・硬直・ヒットストップの最中でも発動できる（＝ハメ回避）のが唯一の特徴。純粋関数。
+export function applyAbare(state: BattleState, playerId: string, now: number): BattleState {
+  if (state.winnerId) return state
+  const self = state.players.find((p) => p.id === playerId)
+  if (!self || self.hp <= 0) return state
+  if (self.meter < ARENA.abareCost) return state
+  if (now < self.invulnUntil) return state // 無敵中の連発は禁止（1本ずつ）
+
+  const invulnUntil = now + ARENA.abareInvuln
+  const players = state.players.map((p) => {
+    // 発動者: ゲージを1本消費し、被弾/コンボ/硬直を振り切って無敵＋後隙へ移行する。
+    if (p.id === playerId) {
+      return {
+        ...p,
+        meter: clamp(p.meter - ARENA.abareCost, 0, ARENA.meterMax),
+        action: 'abare' as const,
+        move: null,
+        moveHasHit: false,
+        cancelUntil: 0,
+        guarding: false,
+        stunUntil: 0,
+        freezeUntil: 0,
+        actionUntil: now + ARENA.abareRecovery,
+        invulnUntil,
+        comboCount: 0,
+        comboBy: null,
+      }
+    }
+    // 周囲の生存者（無敵でない）を左右へ突き放し、軽ダメージ＋硬直を与えて間合いを作る。
+    if (p.hp <= 0 || now < p.invulnUntil || !vertOverlap(self, p)) return p
+    const dx = p.x - self.x
+    if (Math.abs(dx) - 2 * ARENA.bodyHalf > ARENA.abareRange) return p
+    const dir: 1 | -1 = dx >= 0 ? 1 : -1
+    const hp = Math.max(0, p.hp - ARENA.abareDamage)
+    return {
+      ...p,
+      hp,
+      x: clamp(p.x + dir * ARENA.abareKnockback, ARENA.minX, ARENA.maxX),
+      guarding: false,
+      action: hp <= 0 ? ('down' as const) : ('hit' as const),
+      move: null,
+      moveHasHit: false,
+      stunUntil: now + ARENA.abareStun,
+      actionUntil: now + ARENA.abareStun,
+      freezeUntil: now + ARENA.abareHitstop,
+      comboCount: 0,
+      comboBy: null,
+      meter: clamp(p.meter + ARENA.meterOnTake, 0, ARENA.meterMax),
+    }
+  })
+  return checkWinner({ ...state, players })
+}
+
 // 持続フレームに入った技の命中を適用する。1 技 1 ヒット（final は範囲全員）。
 function applyMoveHit(
   players: PlayerState[],
@@ -537,6 +611,7 @@ function applyMoveHit(
   let best = Infinity
   for (const p of players) {
     if (p.id === attackerId || p.hp <= 0) continue
+    if (now < p.invulnUntil) continue // 無敵（あばれ）中は素通り
     if (f.isThrow && p.y > 0.001) continue // 空中の相手は掴めない
     if (!vertOverlap(attacker, p)) continue
     const dx = (p.x - attacker.x) * attacker.facing
@@ -604,7 +679,7 @@ function applyMoveHit(
 }
 
 // 打撃 1 発を対象へ適用する共通処理（近接技・波動弾で共有）。
-// fromDir = 攻撃の進行方向（＝相手を押す向き）。ガードは相手が発生源(-fromDir)を向いていれば成立。
+// fromDir = 攻撃の進行方向（＝相手を押す向き）。ガードは前後どちらを向いていても成立（背後ガード可）。
 type StrikeDef = {
   damage: number
   knockback: number
@@ -621,7 +696,7 @@ function strikeTarget(
   def: StrikeDef,
   now: number,
 ): { p: PlayerState; attackerMeter: number } {
-  const blocked = def.blockable && p.guarding && p.facing === -fromDir
+  const blocked = def.blockable && p.guarding // 前後どちらを向いていてもガード成立
   if (blocked) {
     const hp = Math.max(0, p.hp - ARENA.chipDamage)
     const x = clamp(p.x + fromDir * ARENA.guardPushback, ARENA.minX, ARENA.maxX)
@@ -731,7 +806,7 @@ function stepProjectiles(
     const pr = live[i]
     let consumed = false
     outPlayers = outPlayers.map((p) => {
-      if (consumed || p.id === pr.owner || p.hp <= 0) return p
+      if (consumed || p.id === pr.owner || p.hp <= 0 || now < p.invulnUntil) return p
       const vHit = p.y <= pr.y && pr.y < p.y + ARENA.bodyHeight // ジャンプで避けられる
       if (!vHit || Math.abs(p.x - pr.x) > ARENA.bodyHalf + PROJECTILE.radius) return p
       consumed = true
