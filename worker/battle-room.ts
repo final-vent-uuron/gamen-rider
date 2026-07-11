@@ -14,6 +14,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import {
   addPlayer,
+  applyAbare,
   applyAttack,
   applyJump,
   applyThrow,
@@ -38,6 +39,7 @@ type ClientMsg =
   | { t: 'attack'; kind?: unknown }
   | { t: 'guard'; on?: unknown }
   | { t: 'throw' }
+  | { t: 'abare' }
   | { t: 'reset' }
 
 export class BattleRoom extends DurableObject {
@@ -117,6 +119,9 @@ export class BattleRoom extends DurableObject {
         break
       case 'throw':
         this.battle = applyThrow(this.battle, conn.id, Date.now())
+        break
+      case 'abare':
+        this.battle = applyAbare(this.battle, conn.id, Date.now())
         break
       case 'reset': {
         const inits = [...this.sockets.values()]

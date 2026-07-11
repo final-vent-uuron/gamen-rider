@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { RIDER_ROUTINES } from '../pose'
 import {
   ARENA,
+  applyAbare,
   applyAttack,
   applyJump,
   applyThrow,
@@ -11,6 +12,7 @@ import {
   connectBattle,
   createKeyboardSource,
   createSfx,
+  meterStocks,
   stepBattle,
 } from '../battle'
 import type { BattleCard, BattleNet, BattleState, NetStatus, PlayerState, Sfx } from '../battle'
@@ -50,6 +52,7 @@ function predAction(serverP: PlayerState, predP: PlayerState): PlayerState['acti
     predP.action === 'kick' ||
     predP.action === 'throw' ||
     predP.action === 'final' ||
+    predP.action === 'abare' ||
     predP.action === 'guard'
   ) {
     return predP.action
@@ -122,11 +125,19 @@ function BattlePage() {
       let maxCombo = 0
       const fresh: DamagePopup[] = []
       const prevFinal = new Set(prev.players.filter((p) => p.action === 'final').map((p) => p.id))
+      const prevAbare = new Set(prev.players.filter((p) => p.action === 'abare').map((p) => p.id))
       let newFinal = false
 
       for (const np of next.players) {
         if (np.comboCount > maxCombo) maxCombo = np.comboCount
         if (np.action === 'final' && !prevFinal.has(np.id)) newFinal = true
+        // あばれ発動: 誰かが割り込んだ瞬間、紫の衝撃波＋シェイクで「弾けた」ことを見せる。
+        if (np.action === 'abare' && !prevAbare.has(np.id)) {
+          sfx?.burst()
+          r?.hitSpark(np.x, np.y, 0xc084fc, true)
+          r?.shake(0.45)
+          r?.punch(1.0)
+        }
         const pp = prev.players.find((p) => p.id === np.id)
         if (!pp) continue
         const dmg = pp.hp - np.hp
@@ -283,6 +294,10 @@ function BattlePage() {
           net.sendAttack('shot')
           applyPred((s) => applyAttack(s, selfId, 'shot', now))
           sfxRef.current?.whiff()
+          break
+        case 'abare':
+          net.sendAbare()
+          applyPred((s) => applyAbare(s, selfId, now))
           break
         case 'final-vent':
           net.sendAttack('final')
@@ -691,33 +706,49 @@ function HpBar({ player, color, index }: { player: PlayerState; color: string; i
   )
 }
 
-// 逆転ゲージのバー。満タンで発光・脈動する。
+// 逆転ゲージ（5 ゲージ制）。1 本たまれば「暴れ(割り込み)」、5 本満タンで「ファイナル」。
+// たまった本数は発光したセルで示し、満タンで全体が脈動する。
 function MeterBar({ meter, color }: { meter: number; color: string }) {
-  const ratio = Math.max(0, Math.min(1, meter / ARENA.meterMax))
-  const full = ratio >= 1
+  const STOCKS = ARENA.meterMax / ARENA.meterPerStock
+  const stocks = meterStocks(meter)
+  const full = meter >= ARENA.meterMax
   return (
-    <div
-      style={{
-        marginTop: '3px',
-        height: '6px',
-        background: '#111827',
-        borderRadius: '3px',
-        overflow: 'hidden',
-        border: '1px solid #1f2937',
-      }}
-    >
-      <div
-        style={{
-          height: '100%',
-          width: `${ratio * 100}%`,
-          background: full
-            ? 'linear-gradient(90deg, #a855f7, #38bdf8)'
-            : `linear-gradient(90deg, ${color}, #a855f7)`,
-          boxShadow: full ? '0 0 8px #a855f7' : 'none',
-          animation: full ? 'meterReady 0.7s ease-in-out infinite' : undefined,
-          transition: 'width 0.2s ease',
-        }}
-      />
+    <div style={{ marginTop: '3px', display: 'flex', gap: '3px' }}>
+      {Array.from({ length: STOCKS }).map((_, i) => {
+        const lo = i * ARENA.meterPerStock
+        const filled = i < stocks
+        const partial = filled ? 1 : Math.max(0, Math.min(1, (meter - lo) / ARENA.meterPerStock))
+        return (
+          <div
+            key={i}
+            style={{
+              position: 'relative',
+              flex: 1,
+              height: '7px',
+              background: '#111827',
+              borderRadius: '2px',
+              overflow: 'hidden',
+              border: `1px solid ${filled ? `${color}88` : '#1f2937'}`,
+            }}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: `${partial * 100}%`,
+                background: full
+                  ? 'linear-gradient(90deg, #a855f7, #38bdf8)'
+                  : filled
+                    ? `linear-gradient(90deg, ${color}, #a855f7)`
+                    : color,
+                boxShadow: filled ? `0 0 5px ${color}` : 'none',
+                animation: full ? 'meterReady 0.7s ease-in-out infinite' : undefined,
+                transition: 'width 0.2s ease',
+              }}
+            />
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -825,7 +856,7 @@ function CardTray({
               </span>
               <span style={{ fontWeight: 'bold', lineHeight: 1.2 }}>{c.label}</span>
               {isFinal && !finalReady && (
-                <span style={{ color: '#9ca3af', fontSize: '0.55rem' }}>ゲージ必要</span>
+                <span style={{ color: '#9ca3af', fontSize: '0.55rem' }}>5ゲージ必要</span>
               )}
             </button>
           )
@@ -843,10 +874,11 @@ function ControlsHelp() {
     ['W / ↑ / Space', 'ジャンプ'],
     ['J', 'パンチ(軽・発生早)'],
     ['K', 'キック(重・主力)'],
-    ['Shift / S / ↓', 'ガード(押しっぱ)'],
+    ['Shift / S / ↓', 'ガード(押しっぱ・前後OK)'],
     ['U', '投げ(ガード崩し)'],
     ['I', '波動弾(飛び道具・1発ずつ)'],
-    ['L / F', 'ファイナル(ゲージ満タン)'],
+    ['E', '暴れ(1ゲージ・割り込み脱出)'],
+    ['L / F', 'ファイナル(5ゲージ)'],
   ]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
@@ -871,6 +903,9 @@ function ControlsHelp() {
       </div>
       <span style={{ fontSize: '0.75rem', color: '#fbbf24' }}>
         コンボ: 当てた技を<strong>ヒット中にキャンセル</strong>して次へ → 例) パンチ→キック→ファイナル
+      </span>
+      <span style={{ fontSize: '0.75rem', color: '#7fdfff' }}>
+        ピンチ: <strong>E で暴れ</strong>（ゲージ1本）→ 無敵で割り込み、両隣を突き放してハメを脱出
       </span>
     </div>
   )

@@ -9,6 +9,7 @@ export interface Sfx {
   block(): void
   grab(): void // 投げ
   shoot(): void // 波動弾
+  burst(): void // あばれ（割り込みバースト）
   ko(): void
   meterFull(): void
   whiff(): void
@@ -20,6 +21,7 @@ const NOOP: Sfx = {
   block() {},
   grab() {},
   shoot() {},
+  burst() {},
   ko() {},
   meterFull() {},
   whiff() {},
@@ -134,6 +136,14 @@ export function createSfx(): Sfx {
         tone(320, 0.22, 'sawtooth', 0.32, 900)
         tone(660, 0.16, 'sine', 0.22, 1200)
         noise(0.1, 0.22, 1600, 0.8)
+      })
+    },
+    burst() {
+      // あばれ＝弾ける衝撃波。上昇スイープ＋広いノイズで「割り込んで押し返す」手応え。
+      safe(() => {
+        tone(180, 0.3, 'sawtooth', 0.42, 1000)
+        tone(90, 0.22, 'square', 0.3, 300)
+        noise(0.26, 0.5, 1200, 0.6)
       })
     },
     ko() {
