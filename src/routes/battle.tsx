@@ -1,4 +1,4 @@
-import { Link, createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { RIDER_ROUTINES } from '../pose'
@@ -62,6 +62,7 @@ function predAction(serverP: PlayerState, predP: PlayerState): PlayerState['acti
 
 function BattlePage() {
   const { rider } = Route.useSearch()
+  const navigate = useNavigate()
 
   // 自分のライダーを解決。未指定 / 未対応なら先頭ルーチンで代用。
   const routine = useMemo(
@@ -90,6 +91,7 @@ function BattlePage() {
   const sfxRef = useRef<Sfx | null>(null) // 効果音（WebAudio 合成）
   const comboTimerRef = useRef(0)
   const popupKeyRef = useRef(0)
+  const koOrderRef = useRef<string[]>([]) // 撃墜された順（順位付け用。先頭＝最初に落ちた＝下位）
 
   // --- クライアント予測（自分のキャラだけ即応させてラグ感を消す）---
   // サーバー権威は維持しつつ、自分の移動/技を state.ts の同じ純粋関数でローカルにも回し、
@@ -168,6 +170,7 @@ function BattlePage() {
           })
         }
         if (ko) {
+          if (!koOrderRef.current.includes(np.id)) koOrderRef.current.push(np.id) // 撃墜順を記録
           sfx?.ko()
           r?.shake(0.85)
           r?.punch(1.6)
@@ -382,14 +385,39 @@ function BattlePage() {
     }
   }, [])
 
-  // 「もう一度」: サーバーへリセットを依頼（全員の画面がリセットされる）。
-  function handleReset() {
-    netRef.current?.sendReset()
-    setFinalActive(false)
-    setPopups([])
-    setCombo(null)
-    setKoFlash(false)
-  }
+  // 決着 → 勝者ページ（/result）へ遷移（スマブラのリザルト画面）。
+  // 「GAME SET」の余韻を一瞬見せてから、全順位をクエリに載せて遷移する。
+  // 順位: 勝者(生存)＝1位、以降は「撃墜が新しい順」（最後に落ちた＝2位）。
+  // winnerId は一度立つと（この端末では）そのままなので、この effect は1回だけ走る。
+  // 遷移で battle 画面は unmount し WebSocket も閉じる → 再戦は /result から /battle への再参加で行う。
+  useEffect(() => {
+    if (!battle.winnerId) return
+    const t = window.setTimeout(() => {
+      const st = battleRef.current
+      const order: string[] = []
+      if (st.winnerId) order.push(st.winnerId)
+      const ko = koOrderRef.current
+      for (let k = ko.length - 1; k >= 0; k--) if (!order.includes(ko[k])) order.push(ko[k])
+      for (const p of st.players) if (!order.includes(p.id)) order.push(p.id) // 取りこぼし救済
+      const players = order.flatMap((id) => {
+        const idx = st.players.findIndex((p) => p.id === id)
+        if (idx < 0) return []
+        const p = st.players[idx]
+        return [
+          {
+            name: p.riderName,
+            riderId: p.riderId, // 勝者ページの 3D 立ち絵で使う（GLB 差し替え点）
+            mine: !!p.isSelf,
+            color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
+            p: idx + 1, // プレイヤー番号（1P/2P… のペナント表示）
+          },
+        ]
+      })
+      if (players.length === 0) return
+      navigate({ to: '/result', search: { players, rider: routine.riderId } })
+    }, 1600)
+    return () => window.clearTimeout(t)
+  }, [battle.winnerId, navigate, routine.riderId])
 
   // カードクリックをダミー入力として扱う（マウスでも技を出せる）。
   function handleCard(card: BattleCard) {
@@ -481,8 +509,8 @@ function BattlePage() {
       {/* ファイナルベント演出 */}
       {finalActive && <FinalVentBanner />}
 
-      {/* 決着オーバーレイ */}
-      {winner && <WinnerOverlay winner={winner} onReset={handleReset} />}
+      {/* 決着スプラッシュ（この直後に /result へ遷移する） */}
+      {winner && <GameSetBanner mine={!!winner.isSelf} />}
     </div>
   )
 }
@@ -1027,40 +1055,39 @@ function FinalVentBanner() {
   )
 }
 
-function WinnerOverlay({ winner, onReset }: { winner: PlayerState; onReset: () => void }) {
+// 決着の一瞬に出す「GAME SET」スプラッシュ。この直後に /result（勝者ページ）へ遷移する。
+function GameSetBanner({ mine }: { mine: boolean }) {
   return (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.7)',
+        background: 'rgba(0,0,0,0.72)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: '1.5rem',
+        gap: '0.6rem',
         zIndex: 60,
+        pointerEvents: 'none',
       }}
     >
-      <span style={{ fontSize: '2.5rem', fontWeight: 900, color: '#4ade80' }}>
-        WINNER: {winner.isSelf ? 'あなた' : winner.riderName}
-      </span>
-      <button
-        type="button"
-        onClick={onReset}
+      <span
         style={{
-          padding: '0.7rem 2.5rem',
-          fontSize: '1.1rem',
-          background: '#a78bfa',
-          color: '#000',
-          border: 'none',
-          borderRadius: '8px',
-          cursor: 'pointer',
-          fontWeight: 'bold',
+          fontSize: 'clamp(2.5rem, 10vw, 5rem)',
+          fontWeight: 900,
+          fontStyle: 'italic',
+          letterSpacing: '0.1em',
+          color: '#fff',
+          textShadow: '0 0 24px rgba(167,139,250,0.9), 0 2px 6px #000',
+          animation: 'gameSet 1.6s ease-out both',
         }}
       >
-        🔄 もう一度
-      </button>
+        GAME SET
+      </span>
+      <span style={{ fontSize: '1.1rem', fontWeight: 700, color: mine ? '#4ade80' : '#cbd5e1' }}>
+        {mine ? 'あなたの勝利！' : '勝者が決定'}
+      </span>
     </div>
   )
 }
