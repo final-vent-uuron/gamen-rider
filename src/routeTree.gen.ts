@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ResultRouteImport } from './routes/result'
 import { Route as PoseRouteImport } from './routes/pose'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
@@ -17,6 +18,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthIndexRouteImport } from './routes/auth/index'
 import { Route as AuthRegisterRouteImport } from './routes/auth/register'
 
+const ResultRoute = ResultRouteImport.update({
+  id: '/result',
+  path: '/result',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PoseRoute = PoseRouteImport.update({
   id: '/pose',
   path: '/pose',
@@ -59,6 +65,7 @@ export interface FileRoutesByFullPath {
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
+  '/result': typeof ResultRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth/': typeof AuthIndexRoute
 }
@@ -68,6 +75,7 @@ export interface FileRoutesByTo {
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
+  '/result': typeof ResultRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth': typeof AuthIndexRoute
 }
@@ -78,6 +86,7 @@ export interface FileRoutesById {
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
+  '/result': typeof ResultRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth/': typeof AuthIndexRoute
 }
@@ -89,6 +98,7 @@ export interface FileRouteTypes {
     | '/detect'
     | '/henshin'
     | '/pose'
+    | '/result'
     | '/auth/register'
     | '/auth/'
   fileRoutesByTo: FileRoutesByTo
@@ -98,6 +108,7 @@ export interface FileRouteTypes {
     | '/detect'
     | '/henshin'
     | '/pose'
+    | '/result'
     | '/auth/register'
     | '/auth'
   id:
@@ -107,6 +118,7 @@ export interface FileRouteTypes {
     | '/detect'
     | '/henshin'
     | '/pose'
+    | '/result'
     | '/auth/register'
     | '/auth/'
   fileRoutesById: FileRoutesById
@@ -117,12 +129,20 @@ export interface RootRouteChildren {
   DetectRoute: typeof DetectRoute
   HenshinRoute: typeof HenshinRoute
   PoseRoute: typeof PoseRoute
+  ResultRoute: typeof ResultRoute
   AuthRegisterRoute: typeof AuthRegisterRoute
   AuthIndexRoute: typeof AuthIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/result': {
+      id: '/result'
+      path: '/result'
+      fullPath: '/result'
+      preLoaderRoute: typeof ResultRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/pose': {
       id: '/pose'
       path: '/pose'
@@ -181,6 +201,7 @@ const rootRouteChildren: RootRouteChildren = {
   DetectRoute: DetectRoute,
   HenshinRoute: HenshinRoute,
   PoseRoute: PoseRoute,
+  ResultRoute: ResultRoute,
   AuthRegisterRoute: AuthRegisterRoute,
   AuthIndexRoute: AuthIndexRoute,
 }
