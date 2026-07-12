@@ -112,8 +112,14 @@ function BattlePage() {
   }
 
   // 効果音（WebAudio 合成）を用意。実際の発音は最初のユーザー操作(resume)後。
+  // 画面を離れるときは AudioContext を必ず閉じる（閉じないと対戦のたびに増えて重くなる）。
   useEffect(() => {
-    sfxRef.current = createSfx()
+    const sfx = createSfx()
+    sfxRef.current = sfx
+    return () => {
+      sfx.close()
+      sfxRef.current = null
+    }
   }, [])
 
   // WebSocket 接続。シミュレーションは権威サーバー側で回っているので、

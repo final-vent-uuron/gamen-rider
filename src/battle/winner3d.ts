@@ -144,6 +144,8 @@ export function createWinnerPresenter(
       floor.geometry.dispose()
       ;(floor.material as THREE.Material).dispose()
       renderer.dispose()
+      // dispose() だけでは WebGL コンテキストが残るので明示破棄（勝者画面を何度も開くと積み上がるため）。
+      renderer.forceContextLoss()
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement)
       }
