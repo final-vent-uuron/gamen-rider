@@ -13,6 +13,7 @@ export interface Sfx {
   ko(): void
   meterFull(): void
   whiff(): void
+  close(): void // AudioContext を閉じて解放する（画面を離れるとき必ず呼ぶ）
 }
 
 const NOOP: Sfx = {
@@ -25,6 +26,7 @@ const NOOP: Sfx = {
   ko() {},
   meterFull() {},
   whiff() {},
+  close() {},
 }
 
 export function createSfx(): Sfx {
@@ -164,6 +166,16 @@ export function createSfx(): Sfx {
     whiff() {
       // 空振りの風切り
       safe(() => noise(0.12, 0.18, 900, 0.6))
+    },
+    close() {
+      // AudioContext を閉じて OS/ブラウザのオーディオリソースを解放する。
+      // これを呼ばないと画面遷移のたびに AudioContext が増え続ける（ブラウザ上限で音が止まる）。
+      safe(() => {
+        if (ctx) {
+          void ctx.close()
+          ctx = null
+        }
+      })
     },
   }
 }

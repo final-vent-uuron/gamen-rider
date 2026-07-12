@@ -356,6 +356,9 @@ export function createArenaRenderer(container: HTMLElement): ArenaRenderer {
       grid.geometry.dispose()
       disposeObject(backdrop)
       renderer.dispose()
+      // dispose() は GPU リソースを解放するが WebGL コンテキスト自体は残るため、明示的に破棄する。
+      // これをしないと対戦を繰り返すたびにコンテキストが積み上がり、ブラウザ上限を超えて重くなる。
+      renderer.forceContextLoss()
       if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement)
     },
   }

@@ -87,13 +87,20 @@ export class BattleRoom extends DurableObject {
       case 'join': {
         conn.riderId = String(msg.riderId ?? 'unknown')
         conn.riderName = String(msg.riderName ?? 'Rider')
-        this.battle = addPlayer(this.battle, {
-          id: conn.id,
-          riderId: conn.riderId,
-          riderName: conn.riderName,
-        })
-        this.moveIntent[conn.id] = 0
-        this.guardIntent[conn.id] = false
+        // 再戦（案A）: 前の試合が決着済みの部屋に入ってきたら、まず部屋をまっさらに
+        // 作り直す。前ラウンドの KO 状態が残ったまま join すると「生存1人」で即勝者判定に
+        // 跳ね返るため、reset と同じく現在つながっている全員でフルHPから組み直す。
+        if (this.battle.winnerId) {
+          this.resetRoom()
+        } else {
+          this.battle = addPlayer(this.battle, {
+            id: conn.id,
+            riderId: conn.riderId,
+            riderName: conn.riderName,
+          })
+          this.moveIntent[conn.id] = 0
+          this.guardIntent[conn.id] = false
+        }
         break
       }
       case 'move': {
@@ -123,19 +130,23 @@ export class BattleRoom extends DurableObject {
       case 'abare':
         this.battle = applyAbare(this.battle, conn.id, Date.now())
         break
-      case 'reset': {
-        const inits = [...this.sockets.values()]
-          .filter((c) => c.riderId)
-          .map((c) => ({ id: c.id, riderId: c.riderId!, riderName: c.riderName! }))
-        this.battle = createBattle(inits)
-        this.moveIntent = {}
-        this.guardIntent = {}
-        for (const c of inits) {
-          this.moveIntent[c.id] = 0
-          this.guardIntent[c.id] = false
-        }
+      case 'reset':
+        this.resetRoom()
         break
-      }
+    }
+  }
+
+  // 現在つながっている全員でバトルをフルHPから作り直す（再戦 / 明示リセット共通）。
+  private resetRoom() {
+    const inits = [...this.sockets.values()]
+      .filter((c) => c.riderId)
+      .map((c) => ({ id: c.id, riderId: c.riderId!, riderName: c.riderName! }))
+    this.battle = createBattle(inits)
+    this.moveIntent = {}
+    this.guardIntent = {}
+    for (const c of inits) {
+      this.moveIntent[c.id] = 0
+      this.guardIntent[c.id] = false
     }
   }
 

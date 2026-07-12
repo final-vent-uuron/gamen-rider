@@ -1,4 +1,4 @@
-import { Link, createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
@@ -53,6 +53,18 @@ function AuthPage() {
   const [cardLabel, setCardLabel] = useState<string | null>(null)
   const [rider, setRider] = useState<Rider | null>(null)
   const [uiState, setUiState] = useState<RunnerState | null>(null)
+
+  const navigate = useNavigate()
+
+  // 認証成功の演出を少し見せてから、そのライダーでバトル画面へ自動遷移（本番フロー）。
+  // /henshin と同じ受け渡し（search.rider）で /battle に入る。
+  useEffect(() => {
+    if (phase !== 'done' || !rider) return
+    const t = setTimeout(() => {
+      navigate({ to: '/battle', search: { rider: rider.id } })
+    }, 1400)
+    return () => clearTimeout(t)
+  }, [phase, rider, navigate])
 
   // ロード完了後すぐカメラを起動してカード認証から開始する（Start ボタンなし）
   useEffect(() => {
@@ -248,8 +260,8 @@ function AuthPage() {
         <p style={{ margin: 0, fontSize: '1.5rem', color: '#fff' }}>
           変身: <strong style={{ color: '#a78bfa' }}>{rider?.name}</strong>
         </p>
-        <p style={{ margin: 0, color: '#6b7280', fontSize: '0.85rem' }}>
-          onHenshin 発火済み。バトル側はこれを購読して接続する。
+        <p style={{ margin: 0, color: '#9ca3af', fontSize: '1rem' }}>
+          まもなくバトルへ移行します…
         </p>
       </div>
     )
