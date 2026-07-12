@@ -237,9 +237,10 @@ function RegisterPage() {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        padding: '1.5rem',
+        boxSizing: 'border-box',
+        padding: '1rem',
         minHeight: '100vh',
-        gap: '1rem',
+        gap: '0.75rem',
       }}
     >
       {/* ヘッダー */}
@@ -247,7 +248,7 @@ function RegisterPage() {
         <Link to="/auth" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '0.9rem' }}>
           ← 認証へ戻る
         </Link>
-        <h1 style={{ margin: 0, fontSize: '1.5rem' }}>ライダー登録</h1>
+        <h1 style={{ margin: 0, fontSize: '1.3rem' }}>ライダー登録</h1>
       </div>
 
       {/* フェーズインジケータ */}
@@ -271,15 +272,16 @@ function RegisterPage() {
         ))}
       </div>
 
-      {/* カメラ映像は常時マウントしておき、フェーズに応じて表示を切り替える */}
+      {/* カメラ映像は常時マウントしておき、フェーズに応じて表示を切り替える。
+          高さをビューポート基準（最大50vh）で決め、幅は 4/3 から導く＝縦にはみ出さない。 */}
       <video
         ref={videoRef}
         playsInline
         muted
         style={{
           display: phase === 'image' && imageSource === 'camera' && !imageDataUrl ? 'block' : 'none',
-          width: '100%',
-          maxWidth: '800px',
+          height: 'min(50vh, 480px)',
+          maxWidth: '100%',
           aspectRatio: '4/3',
           objectFit: 'contain',
           background: '#1f2937',
@@ -290,8 +292,8 @@ function RegisterPage() {
         ref={canvasRef}
         style={{
           display: phase === 'pose' ? 'block' : 'none',
-          width: '100%',
-          maxWidth: '800px',
+          height: 'min(50vh, 480px)',
+          maxWidth: '100%',
           aspectRatio: '4/3',
           objectFit: 'contain',
           background: '#1f2937',
