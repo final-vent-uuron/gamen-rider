@@ -952,6 +952,14 @@ export function createAvatar(riderId: string, color: number): FighterAvatar {
 	return model ? createGltfAvatar(model, color) : createBoxAvatar(color);
 }
 
+// アバターを1体作る（ライダー別 GLB があれば GLB、無ければ box プレースホルダ）。
+// バトルのアリーナ（createArenaRenderer）と勝者画面（winner3d）で同じ見た目・同じ
+// 差し替え点を共有するためのヘルパ。RIDER_MODELS に登録すれば両方が自動で 3D 化する。
+export function createAvatar(riderId: string, color: number): FighterAvatar {
+	const model = RIDER_MODELS[riderId];
+	return model ? createGltfAvatar(model, color) : createBoxAvatar(color);
+}
+
 // ---- 背景の作り込み ------------------------------------------------------
 
 function rand(a: number, b: number): number {
