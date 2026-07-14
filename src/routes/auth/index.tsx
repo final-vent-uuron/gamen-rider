@@ -56,6 +56,13 @@ function AuthPage() {
 
   const navigate = useNavigate()
 
+  // バトルで使う GLB（R2 配信・20MB 級）を認証中に裏で先読みしておく。
+  // arena3d 側の gltfCache に載るので、/battle 到達時にはロード/パース済みで即表示される。
+  // dynamic import なので three.js のチャンクもここで温まる。
+  useEffect(() => {
+    import('../../battle/arena3d').then((m) => m.preloadRiderModels())
+  }, [])
+
   // 認証成功の演出を少し見せてから、そのライダーでバトル画面へ自動遷移（本番フロー）。
   // /henshin と同じ受け渡し（search.rider）で /battle に入る。
   useEffect(() => {
