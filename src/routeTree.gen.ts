@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SelectRouteImport } from './routes/select'
 import { Route as ResultRouteImport } from './routes/result'
 import { Route as PoseRouteImport } from './routes/pose'
 import { Route as ModelCheckRouteImport } from './routes/model-check'
@@ -20,6 +21,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthIndexRouteImport } from './routes/auth/index'
 import { Route as AuthRegisterRouteImport } from './routes/auth/register'
 
+const SelectRoute = SelectRouteImport.update({
+  id: '/select',
+  path: '/select',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ResultRoute = ResultRouteImport.update({
   id: '/result',
   path: '/result',
@@ -80,6 +86,7 @@ export interface FileRoutesByFullPath {
   '/model-check': typeof ModelCheckRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
+  '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth/': typeof AuthIndexRoute
 }
@@ -92,6 +99,7 @@ export interface FileRoutesByTo {
   '/model-check': typeof ModelCheckRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
+  '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth': typeof AuthIndexRoute
 }
@@ -105,6 +113,7 @@ export interface FileRoutesById {
   '/model-check': typeof ModelCheckRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
+  '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth/': typeof AuthIndexRoute
 }
@@ -119,6 +128,7 @@ export interface FileRouteTypes {
     | '/model-check'
     | '/pose'
     | '/result'
+    | '/select'
     | '/auth/register'
     | '/auth/'
   fileRoutesByTo: FileRoutesByTo
@@ -131,6 +141,7 @@ export interface FileRouteTypes {
     | '/model-check'
     | '/pose'
     | '/result'
+    | '/select'
     | '/auth/register'
     | '/auth'
   id:
@@ -143,6 +154,7 @@ export interface FileRouteTypes {
     | '/model-check'
     | '/pose'
     | '/result'
+    | '/select'
     | '/auth/register'
     | '/auth/'
   fileRoutesById: FileRoutesById
@@ -156,12 +168,20 @@ export interface RootRouteChildren {
   ModelCheckRoute: typeof ModelCheckRoute
   PoseRoute: typeof PoseRoute
   ResultRoute: typeof ResultRoute
+  SelectRoute: typeof SelectRoute
   AuthRegisterRoute: typeof AuthRegisterRoute
   AuthIndexRoute: typeof AuthIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/select': {
+      id: '/select'
+      path: '/select'
+      fullPath: '/select'
+      preLoaderRoute: typeof SelectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/result': {
       id: '/result'
       path: '/result'
@@ -244,6 +264,7 @@ const rootRouteChildren: RootRouteChildren = {
   ModelCheckRoute: ModelCheckRoute,
   PoseRoute: PoseRoute,
   ResultRoute: ResultRoute,
+  SelectRoute: SelectRoute,
   AuthRegisterRoute: AuthRegisterRoute,
   AuthIndexRoute: AuthIndexRoute,
 }

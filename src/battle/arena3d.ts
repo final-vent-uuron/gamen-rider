@@ -11,6 +11,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { modelUrl } from "../model-assets";
 import type { BattleState, PlayerState } from "./state";
 
 // プレイヤー表示色（battle.tsx の PLAYER_COLORS と対応）。
@@ -64,32 +65,93 @@ export interface RiderModel {
 	// ルートモーション（腰の平行移動ドリフト）を除去してその場アニメ化するクリップ名。
 	// In Place でエクスポートされていない走り/歩きに使う（移動はゲーム側が行うため）。
 	stripRootMotion?: string[];
+	// 腰(Hips)の平行移動アニメを先頭キーの位置で固定するクリップ名。
+	// 移動・ジャンプなどの位置はゲーム側が root を動かして表現するため、クリップ側にも
+	// 腰の移動が入っていると二重に動いて見える（走りの揺すり・ジャンプの二段上昇など）。
+	// 固定しても手足・体幹の回転アニメはそのまま残る。倒れる death のように腰の移動が
+	// 本質的なクリップには使わないこと。
+	freezeHipsTranslation?: string[];
+	// 腰(Hips)の「傾き」を idle クリップの開始姿勢に揃えるクリップ名。
+	// 取り込み元が違うアニメは腰の基準回転ごと傾きが焼き込まれていることがある
+	// （このモデルの run がそれ。走ると横に傾いて見える）。
+	// 縦軸まわりの回転（キャラの向き）とクリップ内の相対的な動きは保たれる。
+	// 平均の傾きしか直さないため、周期的な傾き（揺れ）は残る。それも消したい場合は
+	// flattenLateralTilt を使う。
+	alignHipsToIdle?: string[];
+	// 胸（腰＋背骨の合成）の「左右の傾き」を毎キー除去するクリップ名。
+	// 前後の傾き（走りの前傾等）・体の向き・ひねりは保たれ、横倒れだけが消える。
+	// 横倒れが本質のクリップ（kick・death 等）には使わないこと。
+	flattenLateralTilt?: string[];
 }
 
-// 全ライダー共通の検証用モデル（/model-check で検証済み）。
-// いまは /battle-test だけが createArenaRenderer の fallbackModel として渡して使う。
-// 実バトルへ本採用するときは battle.tsx 側で同じように渡すか、RIDER_MODELS に個別登録する。
-// - walk: run クリップを使用。前進のルートモーションが焼き込まれているため
-//   stripRootMotion でその場走りに変換している。
-// - hit / final / guard / throw は未収録 → idle フォールバック（hit は簡易後傾で補助）。
+// 全ライダー共通の既定モデル（/model-check・/battle-test で検証済み）。
+// 実バトル(/battle)・検証(/battle-test)・勝者画面(createAvatar) が共通の fallback として使う。
+// ライダー別に見た目を分けたくなったら RIDER_MODELS へ riderId ごとに登録する（そちらが優先）。
+// - walk: run クリップを使用。前進のルートモーション焼き込みあり → stripRootMotion で
+//   その場走り化。run / punch / guard には左右の傾きが焼き込まれている（実測。焼き込み先は
+//   hips だったり背骨だったりクリップ次第）ため flattenLateralTilt で毎キー除去。
+// - kick: 前進のルートモーション焼き込みあり（±1.2 ワールド相当）→ strip しないと
+//   見た目だけ前へ滑って当たり判定とズレる。
+// - hit / thrown: reaction クリップを共用。
+// - final / throw / abare は未収録 → idle フォールバック。
 export const DEFAULT_RIDER_MODEL: RiderModel = {
-	url: "/model/gamen-rider-arduino-add-animation-fix.glb",
+	url: modelUrl("gamen-rider-python-animation.glb"),
 	height: 0.5, // box アバター(約1.9)より一回り小さめ。画面に対して大きすぎたため
 	rotateY: Math.PI / 2, // Mixamo リグは +z 正面 → このゲームの正面 +x へ
 	clips: {
 		idle: "idle",
 		walk: "run",
 		down: "death",
-		jump: "junp",
+		jump: "jump",
 		punch: "punch",
 		kick: "kick",
+		guard: "guard",
+		hit: "reaction",
+		thrown: "reaction",
 	},
-	stripRootMotion: ["run"],
+	stripRootMotion: ["kick"],
+	// 走り・ジャンプ・ガードは位置をゲーム側が管理する（クリップ側の腰移動は二重になる）。
+	// run はこれでルートモーション除去も兼ねる。
+	freezeHipsTranslation: ["run", "jump", "guard"],
+	flattenLateralTilt: ["run", "punch", "guard"],
 };
 
 export const RIDER_MODELS: Record<string, RiderModel> = {
 	// ライダー別に差し替えたくなったら riderId をキーにここへ登録する。
 	// 未登録のライダーは fallbackModel（あれば）→ box プレースホルダの順で描画される。
+	// キーは /select の言語ライダー id（arduino / swift / python / flutter / cpp）。
+	// swift / cpp は GLB 未用意のため未登録 → 共通モデル(python)にフォールバック。
+	python: DEFAULT_RIDER_MODEL,
+	arduino: {
+		url: modelUrl("gamen-rider-arduino-add-animation-fix.glb"),
+		height: 0.5,
+		rotateY: Math.PI / 2,
+		// guard / reaction は未収録 → guard・hit・thrown は idle フォールバック。
+		// jump クリップの綴りは GLB 側が "junp"。
+		clips: {
+			idle: "idle",
+			walk: "run",
+			down: "death",
+			jump: "junp",
+			punch: "punch",
+			kick: "kick",
+		},
+		// python モデルと同じ Mixamo 系パイプラインのためルートモーション補正も同構成。
+		// run / punch に左右の傾きの焼き込みあり（実測。punch は胸で約9〜16°）→ 毎キー除去。
+		stripRootMotion: ["kick"],
+		freezeHipsTranslation: ["run", "junp"],
+		flattenLateralTilt: ["run", "punch"],
+	},
+	flutter: {
+		url: modelUrl("flutter.glb"),
+		height: 0.5,
+		rotateY: Math.PI / 2,
+		// idle / death 系のみ収録 → 攻撃・移動などその他アクションは idle フォールバック。
+		clips: {
+			idle: "idle_rider",
+			down: "death_rider",
+		},
+	},
 };
 
 // box でも GLB でも renderer からは同じに見えるアバター。
@@ -144,6 +206,140 @@ function stripRootDrift(clip: THREE.AnimationClip) {
 	}
 }
 
+// 腰(Hips)の平行移動アニメを先頭キーで固定する（freezeHipsTranslation 用）。
+// 体全体の位置はゲーム側（root）が動かすので、クリップ側の腰移動は二重の動きになる。
+// クリップはキャッシュ経由で全アバター共有のため、二重適用を WeakSet で防ぐ。
+const hipsFrozen = new WeakSet<THREE.AnimationClip>();
+export function freezeHipsPosition(clip: THREE.AnimationClip) {
+	if (hipsFrozen.has(clip)) return;
+	hipsFrozen.add(clip);
+	for (const track of clip.tracks) {
+		if (!track.name.endsWith(".position") || !/hips/i.test(track.name))
+			continue;
+		const v = track.values;
+		for (let i = 3; i < v.length; i += 3) {
+			v[i] = v[0];
+			v[i + 1] = v[1];
+			v[i + 2] = v[2];
+		}
+	}
+}
+
+// 腰(Hips)回転の基準ズレ補正: クリップ中の腰の「平均的な傾き」が参照クリップ（idle）の
+// 平均と揃うよう、回転トラック全キーへ同じ補正クォータニオンを前掛けする。
+// - 補正は「上方向の平均 → idle の上方向の平均」への最短弧回転だけ。姿勢を丸ごと揃えると
+//   縦軸まわりの回転（＝キャラの向き）まで回ってしまい、走る向きが狂う。
+// - 先頭キーではなく全キーの平均で合わせる。走りは周期的に体が揺れるので、先頭 1 キーを
+//   水平にしてもサイクル平均では斜めに傾いたままになる。
+// - 一括回転なので、クリップ内の相対的な動き（バウンド・ひねり・体の揺れ）はそのまま残る。
+// クリップはキャッシュ経由で全アバター共有のため、二重適用を WeakSet で防ぐ。
+const hipsAligned = new WeakSet<THREE.AnimationClip>();
+// 縦軸（ワールド上方向）。Mixamo は Armature が +90°X 回転しているため、
+// hips トラックが乗る Armature ローカル空間では -Z が上にあたる。
+const HIPS_UP = new THREE.Vector3(0, 0, -1);
+function findHipsQuaternionTrack(c: THREE.AnimationClip) {
+	return c.tracks.find(
+		(t) => t.name.endsWith(".quaternion") && /hips/i.test(t.name),
+	);
+}
+export function alignHipsRotation(
+	clip: THREE.AnimationClip,
+	ref: THREE.AnimationClip,
+) {
+	if (hipsAligned.has(clip)) return;
+	hipsAligned.add(clip);
+	const src = findHipsQuaternionTrack(clip);
+	const refTrack = findHipsQuaternionTrack(ref);
+	if (!src || !refTrack) return;
+	// idle 先頭が直立している前提で、hips ボーン空間の「上」を逆算する。
+	const qRef0 = new THREE.Quaternion().fromArray(refTrack.values, 0);
+	const upBone = HIPS_UP.clone().applyQuaternion(qRef0.clone().invert());
+	// トラック全キーでの「上方向」の平均（＝そのクリップの平均的な立ち姿勢）。
+	const meanUp = (values: ArrayLike<number>) => {
+		const m = new THREE.Vector3();
+		const q = new THREE.Quaternion();
+		for (let i = 0; i < values.length; i += 4) {
+			m.add(upBone.clone().applyQuaternion(q.fromArray(values, i)));
+		}
+		return m.normalize();
+	};
+	// クリップの平均上方向 → idle の平均上方向 への最短弧回転。
+	// 回転軸は両者に直交する（≒水平）ので、キャラの向き（heading）はほぼ保たれる。
+	const fix = new THREE.Quaternion().setFromUnitVectors(
+		meanUp(src.values),
+		meanUp(refTrack.values),
+	);
+	const q = new THREE.Quaternion();
+	for (let i = 0; i < src.values.length; i += 4) {
+		q.fromArray(src.values, i).premultiply(fix);
+		q.toArray(src.values, i);
+	}
+}
+
+// 胸の左右傾き除去: 腰〜背骨の合成でできる「胸の姿勢」から左右の傾き（正面軸まわりの
+// ロール）だけを毎キー測り、打ち消す回転を hips トラックへ前掛けする。
+// 傾きの焼き込み先はクリップごとに違う:
+//   - run: hips が左右に振れるが背骨が打ち消すので胸は揺れのみ（hips 単体を直すと
+//     打ち消し役の背骨だけが残り、逆に胸が傾く）
+//   - guard: hips は idle と同じなのに背骨側に約9°の横傾き（python モデル・実測）
+//   - arduino の punch: 胸で約9〜16°の横傾き（実測）
+// そのため hips 単体ではなく胸の合成姿勢で誤差を測るのが要点。
+// - 除去するのは左右の傾きだけ。前後の傾き（走りの前傾・パンチの踏み込み）、体の向き、
+//   ひねりはそのまま残る。
+// - 横倒れが本質のクリップ（kick・death 等）には使わないこと。
+// クリップはキャッシュ経由で全アバター共有のため、二重適用を WeakSet で防ぐ。
+const lateralFlattened = new WeakSet<THREE.AnimationClip>();
+// Armature ローカルでの正面（HIPS_UP と同じ座標前提。ワールドの +Z にあたる）。
+const HIPS_FORWARD = new THREE.Vector3(0, 1, 0);
+export function flattenLateralRotation(
+	clip: THREE.AnimationClip,
+	ref: THREE.AnimationClip,
+) {
+	if (lateralFlattened.has(clip)) return;
+	lateralFlattened.add(clip);
+	const hips = findHipsQuaternionTrack(clip);
+	const refHips = findHipsQuaternionTrack(ref);
+	if (!hips || !refHips) return;
+	// 背骨チェーンの回転トラック（Spine → Spine1 → Spine2。名前順が親子順に一致）。
+	// 任意時刻を補間器で評価して合成する。トラックが無いクリップでは hips のみで測る。
+	const composeSpine = (c: THREE.AnimationClip) => {
+		const interps = c.tracks
+			.filter((t) => /spine\d*\.quaternion$/i.test(t.name))
+			.sort((a, b) => a.name.localeCompare(b.name))
+			.map((t) => t.InterpolantFactoryMethodLinear());
+		const q = new THREE.Quaternion();
+		return (t: number, out: THREE.Quaternion) => {
+			out.identity();
+			for (const ip of interps) {
+				const v = ip.evaluate(t) as Float32Array;
+				out.multiply(q.set(v[0], v[1], v[2], v[3]));
+			}
+			return out;
+		};
+	};
+	const spineOfClip = composeSpine(clip);
+	const spineOfRef = composeSpine(ref);
+	// idle 先頭の胸の合成姿勢（＝直立の基準）から、胸ボーン空間での「上」を逆算する。
+	const chest = new THREE.Quaternion();
+	const spin = new THREE.Quaternion();
+	chest.fromArray(refHips.values, 0).multiply(spineOfRef(refHips.times[0], spin));
+	const upBone = HIPS_UP.clone().applyQuaternion(chest.clone().invert());
+
+	const qh = new THREE.Quaternion();
+	const up = new THREE.Vector3();
+	const fix = new THREE.Quaternion();
+	for (let k = 0; k < hips.times.length; k++) {
+		qh.fromArray(hips.values, k * 4);
+		chest.copy(qh).multiply(spineOfClip(hips.times[k], spin));
+		up.copy(upBone).applyQuaternion(chest); // このキーでの胸の上方向
+		// 正面軸まわりの左右傾き角。直立（up = HIPS_UP）なら 0。
+		const theta = Math.atan2(-up.x, -up.z);
+		fix.setFromAxisAngle(HIPS_FORWARD, -theta);
+		qh.premultiply(fix);
+		qh.toArray(hips.values, k * 4);
+	}
+}
+
 // Canvas 2D コンテキスト取得（テクスチャ生成用。取得失敗は環境異常なので即例外）。
 function ctx2d(c: HTMLCanvasElement): CanvasRenderingContext2D {
 	const ctx = c.getContext("2d");
@@ -175,11 +371,13 @@ function avatarAction(p: PlayerState, moving: boolean): AvatarAction {
 }
 
 // 一回再生クリップの目標再生時間（秒）。見た目重視の手調整値。
-// ゲーム側の技時間（パンチ全体 0.26s 等）は格ゲーとして速すぎ、クリップをそこへ
-// 圧縮すると一瞬のピクつきにしか見えない。そこでアニメはこの尺で「振り切らせ」、
-// ゲーム状態が先に idle へ戻ってもクリップ完走までは維持する（update 側の保留ロジック）。
+// 技（punch/kick/throw/final）は state.ts の MOVES 合計時間をこの尺に合わせてあり、
+// 「アニメを振っている間＝行動ロック」が一致する。尺を変えるときは MOVES 側も揃えること。
+// ヒットでキャンセルされた場合はゲーム状態が先に切り替わるが、クリップは次の技へ
+// クロスフェードするので破綻しない（update 側の保留ロジックは短い hit/jump 用に残す）。
 const ONESHOT_DURATION: Partial<Record<AvatarAction, number>> = {
-	// クリップ本来の尺（punch 1.07s / kick 1.63s / junp 1.93s）に近い、やや締めた程度。
+	// クリップ本来の尺（punch 2.03s / kick 1.53s / jump 0.27s / reaction 1.47s）との差は
+	// setDuration の再生速度調整で吸収する（短ければ振り切り、長ければ早回し）。
 	punch: 0.8,
 	kick: 1.1,
 	throw: 0.9,
@@ -193,7 +391,7 @@ const ONESHOT_DURATION: Partial<Record<AvatarAction, number>> = {
 // レンダラ生成オプション。
 export interface ArenaOptions {
 	// RIDER_MODELS 未登録ライダーに使う共通 GLB。省略時は box プレースホルダ。
-	// 実バトルは box のまま、検証ページ(/battle-test)だけ GLB を試す、という切り替えに使う。
+	// 実バトル(/battle)・検証(/battle-test)とも DEFAULT_RIDER_MODEL を渡している。
 	fallbackModel?: RiderModel;
 }
 
@@ -401,7 +599,7 @@ export function createArenaRenderer(
 			av.update(p, t, moving);
 
 			// ガードシールド: ガード中はフェードインして正面に維持、解除でフェードアウト。
-			// GLB は guard クリップ未収録（idle 代用）なので、構え中であることをこれで可視化する。
+			// guard クリップ（構え）に加えて出す。ブロック成立が一目で分かる演出として残す。
 			const guarding = p.action === "guard" && p.hp > 0;
 			let g = guardFx.get(p.id);
 			if (guarding && !g) {
@@ -773,8 +971,9 @@ function createBoxAvatar(color: number): FighterAvatar {
 }
 
 // ---- GLB モデルのアバター ------------------------------------------------
-// ロード完了までは box プレースホルダを表示。完了後にモデル＋AnimationMixer へ差し替え、
-// アクションに対応するクリップへクロスフェードする。
+// ロード完了までは何も表示しない（旧 box プレースホルダは見た目が混ざるため廃止）。
+// 完了後にモデル＋AnimationMixer を追加し、アクションに対応するクリップへクロスフェードする。
+// 動き（走り・技・傾き等）はすべて GLB のクリップに任せ、手続き的なモーションは足さない。
 
 // 一回再生（完走後に最終フレームで停止）するアクション。down(death) は倒れたまま維持。
 const ONE_SHOT = new Set<AvatarAction>([
@@ -788,10 +987,8 @@ const ONE_SHOT = new Set<AvatarAction>([
 	"jump",
 ]);
 
-function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
+function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 	const root = new THREE.Group();
-	const placeholder = createBoxAvatar(color); // ロード中の仮表示
-	root.add(placeholder.root);
 
 	let mixer: THREE.AnimationMixer | null = null;
 	const clipActions = new Map<AvatarAction, THREE.AnimationAction>();
@@ -801,7 +998,6 @@ function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
 	let lastT = 0;
 	let loaded = false;
 	let disposed = false;
-	let lean = 0; // クリップ未収録の被弾系を可視化する簡易後傾
 
 	const isLow = (a: AvatarAction) => a === "idle" || a === "walk";
 
@@ -866,12 +1062,33 @@ function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
 			if (model.rotateY) inner.rotation.y = model.rotateY;
 			inner.position.y = model.yOffset ?? 0;
 
-			root.remove(placeholder.root);
-			placeholder.dispose();
 			root.add(inner);
 
 			mixer = new THREE.AnimationMixer(obj);
 			const byName = new Map(gltf.animations.map((c) => [c.name, c]));
+			const idleClip = model.clips?.idle
+				? byName.get(model.clips.idle)
+				: undefined;
+			// バインドポーズ対策: このモデル群のバインドポーズはうつ伏せ（地面向き）。
+			// mixer はクロスフェード中にアクションのウェイト合計が 1 を割ると、不足分を
+			// 「最初にバインドした時点のポーズ」で埋めるため、そのままだと出現直後や
+			// idle↔走り の切り替わり（fadeIn 0.15s / fadeOut 0.12s の非対称区間）で
+			// 一瞬うつ伏せ方向へ倒れて見える。先にボーンへ idle の先頭キーを書き込み、
+			// 不足分の補完先を直立姿勢にしておく。
+			// ※ 上の自動フィット計測より後に行うこと（スケール調整はバインドポーズ計測
+			//    に対して合わせ込み済みのため、順序を変えると見た目の大きさが変わる）。
+			if (idleClip) {
+				for (const track of idleClip.tracks) {
+					// トラック名は "ノード名.quaternion" 等（GLTFLoader がノード名を揃えている）
+					const dot = track.name.lastIndexOf(".");
+					const target = obj.getObjectByName(track.name.slice(0, dot));
+					if (!target) continue;
+					const prop = track.name.slice(dot + 1);
+					if (prop === "quaternion") target.quaternion.fromArray(track.values, 0);
+					else if (prop === "position") target.position.fromArray(track.values, 0);
+					else if (prop === "scale") target.scale.fromArray(track.values, 0);
+				}
+			}
 			if (model.clips) {
 				for (const [act, name] of Object.entries(model.clips) as [
 					AvatarAction,
@@ -880,6 +1097,20 @@ function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
 					const clip = byName.get(name);
 					if (!clip) continue;
 					if (model.stripRootMotion?.includes(name)) stripRootDrift(clip);
+					if (model.freezeHipsTranslation?.includes(name))
+						freezeHipsPosition(clip);
+					if (
+						idleClip &&
+						clip !== idleClip &&
+						model.alignHipsToIdle?.includes(name)
+					)
+						alignHipsRotation(clip, idleClip);
+					if (
+						idleClip &&
+						clip !== idleClip &&
+						model.flattenLateralTilt?.includes(name)
+					)
+						flattenLateralRotation(clip, idleClip);
 					const action = mixer.clipAction(clip);
 					if (ONE_SHOT.has(act)) {
 						action.setLoop(THREE.LoopOnce, 1);
@@ -897,7 +1128,7 @@ function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
 			loaded = true;
 		},
 		(err) => {
-			// 失敗時は box プレースホルダのまま続行（デモを止めない）
+			// 失敗時は非表示のまま続行（HP バー等は出るのでデモは止まらない）
 			console.warn("[arena3d] GLB load failed:", model.url, err);
 		},
 	);
@@ -905,10 +1136,7 @@ function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
 	return {
 		root,
 		update(p, tSec, moving) {
-			if (!loaded || !mixer) {
-				placeholder.update(p, tSec, moving);
-				return;
-			}
+			if (!loaded || !mixer) return; // ロード完了まで非表示（プレースホルダなし）
 			root.position.y = p.y * JUMP_WORLD;
 			const act = avatarAction(p, moving);
 			if (act !== lastAct) {
@@ -923,19 +1151,12 @@ function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
 					current.isRunning();
 				if (!(isLow(act) && holding)) switchTo(act);
 			}
-			// クリップ未収録の被弾系（hit / thrown）は軽い後傾でリアクションを可視化する
-			const needLean =
-				(p.action === "hit" && !clipActions.has("hit")) ||
-				(p.action === "thrown" && !clipActions.has("thrown"));
-			lean = lerp(lean, needLean ? 0.3 : 0, 0.25);
-			root.rotation.z = lean;
 			const dt = lastT ? Math.min(tSec - lastT, 0.05) : 0;
 			lastT = tSec;
 			mixer.update(dt);
 		},
 		dispose() {
 			disposed = true;
-			placeholder.dispose();
 			mixer?.stopAllAction();
 			// モデルの geometry/material は gltfCache の原本と共有しているので dispose しない
 			// （他のアバター・以降のロードが壊れる）。シーンからの切り離しだけ行う。
@@ -944,20 +1165,12 @@ function createGltfAvatar(model: RiderModel, color: number): FighterAvatar {
 	};
 }
 
-// アバターを1体作る（ライダー別 GLB があれば GLB、無ければ box プレースホルダ）。
+// アバターを1体作る（ライダー別 GLB → 共通 GLB(DEFAULT_RIDER_MODEL) の順で解決）。
 // バトルのアリーナ（createArenaRenderer）と勝者画面（winner3d）で同じ見た目・同じ
-// 差し替え点を共有するためのヘルパ。RIDER_MODELS に登録すれば両方が自動で 3D 化する。
+// 差し替え点を共有するためのヘルパ。RIDER_MODELS に登録すれば両方が自動で差し替わる。
 export function createAvatar(riderId: string, color: number): FighterAvatar {
-	const model = RIDER_MODELS[riderId];
-	return model ? createGltfAvatar(model, color) : createBoxAvatar(color);
-}
-
-// アバターを1体作る（ライダー別 GLB があれば GLB、無ければ box プレースホルダ）。
-// バトルのアリーナ（createArenaRenderer）と勝者画面（winner3d）で同じ見た目・同じ
-// 差し替え点を共有するためのヘルパ。RIDER_MODELS に登録すれば両方が自動で 3D 化する。
-export function createAvatar(riderId: string, color: number): FighterAvatar {
-	const model = RIDER_MODELS[riderId];
-	return model ? createGltfAvatar(model, color) : createBoxAvatar(color);
+	const model = RIDER_MODELS[riderId] ?? DEFAULT_RIDER_MODEL;
+	return createGltfAvatar(model, color);
 }
 
 // ---- 背景の作り込み ------------------------------------------------------

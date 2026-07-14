@@ -80,10 +80,13 @@ function Home() {
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
           {(
             [
+              { to: '/select', label: 'キャラ選択（デモ）' },
               { to: '/pose', label: 'Pose 検知' },
               { to: '/detect', label: '画像検知' },
               { to: '/henshin', label: '変身フロー(旧)' },
               { to: '/battle', label: 'バトル単体' },
+              { to: '/battle-test', label: 'バトル検証' },
+              { to: '/model-check', label: 'モデル検証' },
               { to: '/auth/register', label: 'ライダー登録' },
             ] as const
           ).map((l) => (
@@ -104,92 +107,6 @@ function Home() {
             </Link>
           ))}
         </div>
-      <h1 style={{ fontSize: '2.5rem', margin: 0 }}>Final Vent</h1>
-      <div style={{ display: 'flex', gap: '1rem' }}>
-        <Link
-          to="/pose"
-          style={{
-            padding: '0.75rem 2rem',
-            background: '#4ade80',
-            color: '#000',
-            textDecoration: 'none',
-            borderRadius: '8px',
-            fontSize: '1.1rem',
-            fontWeight: 'bold',
-          }}
-        >
-          Pose Detection →
-        </Link>
-        <Link
-          to="/detect"
-          style={{
-            padding: '0.75rem 2rem',
-            background: '#60a5fa',
-            color: '#000',
-            textDecoration: 'none',
-            borderRadius: '8px',
-            fontSize: '1.1rem',
-            fontWeight: 'bold',
-          }}
-        >
-          画像検知 →
-        </Link>
-        <Link
-          to="/henshin"
-          style={{
-            padding: '0.75rem 2rem',
-            background: '#a78bfa',
-            color: '#000',
-            textDecoration: 'none',
-            borderRadius: '8px',
-            fontSize: '1.1rem',
-            fontWeight: 'bold',
-          }}
-        >
-          変身フロー →
-        </Link>
-        <Link
-          to="/battle"
-          style={{
-            padding: '0.75rem 2rem',
-            background: '#f87171',
-            color: '#000',
-            textDecoration: 'none',
-            borderRadius: '8px',
-            fontSize: '1.1rem',
-            fontWeight: 'bold',
-          }}
-        >
-          バトル →
-        </Link>
-        <Link
-          to="/battle-test"
-          style={{
-            padding: '0.75rem 2rem',
-            background: '#fb923c',
-            color: '#000',
-            textDecoration: 'none',
-            borderRadius: '8px',
-            fontSize: '1.1rem',
-            fontWeight: 'bold',
-          }}
-        >
-          バトル検証 →
-        </Link>
-        <Link
-          to="/model-check"
-          style={{
-            padding: '0.75rem 2rem',
-            background: '#fbbf24',
-            color: '#000',
-            textDecoration: 'none',
-            borderRadius: '8px',
-            fontSize: '1.1rem',
-            fontWeight: 'bold',
-          }}
-        >
-          モデル検証 →
-        </Link>
       </div>
     </div>
   )

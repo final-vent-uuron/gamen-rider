@@ -29,10 +29,12 @@ interface DamagePopup {
 }
 
 // rider をクエリで受け取り、無ければ先頭ルーチンを既定にする（/battle 単体でも動作確認できる）。
-// 変身フロー（/henshin）からは navigate({ to:'/battle', search:{ rider } }) で遷移してくる想定。
+// 認証フロー（/auth）からは navigate({ to:'/battle', search:{ rider } }) で遷移してくる想定。
+// name はデモ用キャラ選択（/select）が渡す表示名（RIDER_ROUTINES に無い登録ライダー用）。
 export const Route = createFileRoute('/battle')({
-  validateSearch: (search: Record<string, unknown>): { rider?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { rider?: string; name?: string } => ({
     rider: typeof search.rider === 'string' ? search.rider : undefined,
+    name: typeof search.name === 'string' ? search.name : undefined,
   }),
   component: BattlePage,
 })
@@ -62,14 +64,18 @@ function predAction(serverP: PlayerState, predP: PlayerState): PlayerState['acti
 }
 
 function BattlePage() {
-  const { rider } = Route.useSearch()
+  const { rider, name } = Route.useSearch()
   const navigate = useNavigate()
 
-  // 自分のライダーを解決。未指定 / 未対応なら先頭ルーチンで代用。
-  const routine = useMemo(
-    () => RIDER_ROUTINES.find((r) => r.riderId === rider) ?? RIDER_ROUTINES[0],
-    [rider],
-  )
+  // 自分のライダーを解決。RIDER_ROUTINES に無い id（登録ライダー・デモ選択）は id を
+  // そのまま使い、表示名はクエリの name → 既定ルーチン名 の順で代用する。
+  const routine = useMemo(() => {
+    const known = RIDER_ROUTINES.find((r) => r.riderId === rider)
+    return {
+      riderId: rider ?? RIDER_ROUTINES[0].riderId,
+      riderName: name ?? known?.riderName ?? RIDER_ROUTINES[0].riderName,
+    }
+  }, [rider, name])
 
   const cards = battleCardsFor(routine.riderId)
 
@@ -400,12 +406,14 @@ function BattlePage() {
   }, [])
 
   // three.js レンダラの初期化。SSR を避けるため three は動的 import（クライアント専用）。
+  // アバターは共通 GLB（DEFAULT_RIDER_MODEL）を fallback に使う（/battle-test で検証済みの構成）。
+  // RIDER_MODELS に riderId 別のモデルを登録すればそちらが優先され、GLB ロード中/失敗時は box。
   useEffect(() => {
     let disposed = false
     let renderer: ArenaRenderer | null = null
-    import('../battle/arena3d').then(({ createArenaRenderer }) => {
+    import('../battle/arena3d').then(({ createArenaRenderer, DEFAULT_RIDER_MODEL }) => {
       if (disposed || !arenaHostRef.current) return
-      renderer = createArenaRenderer(arenaHostRef.current)
+      renderer = createArenaRenderer(arenaHostRef.current, { fallbackModel: DEFAULT_RIDER_MODEL })
       rendererRef.current = renderer
       renderer.render(battleRef.current, finalActiveRef.current)
     })
@@ -445,10 +453,10 @@ function BattlePage() {
         ]
       })
       if (players.length === 0) return
-      navigate({ to: '/result', search: { players, rider: routine.riderId } })
+      navigate({ to: '/result', search: { players, rider: routine.riderId, name: routine.riderName } })
     }, 1600)
     return () => window.clearTimeout(t)
-  }, [battle.winnerId, navigate, routine.riderId])
+  }, [battle.winnerId, navigate, routine.riderId, routine.riderName])
 
   // カードクリックをダミー入力として扱う（マウスでも技を出せる）。
   function handleCard(card: BattleCard) {

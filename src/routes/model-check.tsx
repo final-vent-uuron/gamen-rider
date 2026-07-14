@@ -1,13 +1,17 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
-// GLB モデルの表示検証ページ。public/model/flutter.glb が three.js で
+import { modelUrl } from "../model-assets";
+
+// GLB モデルの表示検証ページ。GLB が three.js で
 // 正しく表示・アニメーション再生できるかを単体で確認する。
 // GLB 内のクリップ名を列挙してボタンで切り替えられるので、ここで確認した
 // idle / death のクリップ名をそのまま arena3d.ts の RIDER_MODELS.clips に登録できる。
 
-// public/model/ 内の検証対象。?model=xxx.glb で切り替えられる（先頭が既定）。
+// 検証対象の GLB（配信元は model-assets.ts。既定は R2、無ければ public/model）。
+// ?model=xxx.glb で切り替えられる（先頭が既定）。
 const MODEL_FILES = [
+	"gamen-rider-python-animation.glb",
 	"gamen-rider-arduino-add-animation-fix.glb",
 	"test.glb",
 	"flutter.glb",
@@ -34,7 +38,7 @@ function isOneShotName(name: string): boolean {
 function ModelCheckPage() {
 	const { model } = Route.useSearch();
 	const modelFile = model ?? MODEL_FILES[0];
-	const modelUrl = `/model/${modelFile}`;
+	const modelSrc = modelUrl(modelFile);
 
 	const hostRef = useRef<HTMLDivElement>(null);
 	const viewerRef = useRef<ViewerHandle | null>(null);
@@ -110,7 +114,7 @@ function ModelCheckPage() {
 			let current: InstanceType<typeof THREE.AnimationAction> | null = null;
 
 			new GLTFLoader().load(
-				modelUrl,
+				modelSrc,
 				(gltf) => {
 					if (disposed) return;
 					const obj = gltf.scene;
@@ -221,7 +225,7 @@ function ModelCheckPage() {
 			viewerRef.current?.dispose();
 			viewerRef.current = null;
 		};
-	}, [modelUrl]);
+	}, [modelSrc]);
 
 	return (
 		<div

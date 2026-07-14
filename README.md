@@ -60,6 +60,25 @@ pnpm server   # バトルサーバー (wrangler dev, port 8787)
 pnpm deploy:battle   # バトルサーバー（Durable Object）をデプロイ
 ```
 
+### 3Dモデル(GLB)の管理
+
+GLB は 20MB 超のバイナリが多いため git にはコミットせず（`public/model/` は gitignore 済み）、
+**Cloudflare R2 の公開バケット `gamen-rider-models`** で管理する。
+
+```bash
+npx wrangler login   # 未ログインなら（初回のみ）
+
+pnpm models:setup    # 初回のみ: バケット作成 + r2.dev 公開 + CORS 設定
+pnpm models:upload   # public/model の使用中 GLB をアップロード（モデル更新時も同じ）
+pnpm models:url      # 公開 URL（https://pub-….r2.dev）の確認
+```
+
+- 配信元 URL は `src/model-assets.ts` が一元管理。setup 後に表示される公開 URL を
+  `R2_PUBLIC_BASE_URL` へ貼ると、全員そのまま R2 から読むようになる。
+- 手元の `public/model/` から読みたいとき（オフライン検証など）は
+  `.env` に `VITE_MODEL_BASE_URL=/model` を書けば戻せる。
+- モデルを追加するときは `scripts/r2-models.sh` の `FILES` に足して upload する。
+
 ### 主な画面（ルート）
 
 | パス | 内容 |

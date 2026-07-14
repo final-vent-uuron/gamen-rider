@@ -14,9 +14,9 @@ import {
 import type { BattleInput, BattleState, BleSensorSource, BleStatus } from '../battle'
 import type { ArenaRenderer } from '../battle/arena3d'
 
-// GLB アバターのバトル移植検証ページ（オフライン・サーバー不要）。
-// 実バトル(/battle)は box プレースホルダのまま、ここだけ createArenaRenderer の
-// fallbackModel に検証用 GLB を渡し、移動/ジャンプ/技/death がバトル描画で成立するか確かめる。
+// GLB アバターのバトル検証ページ（オフライン・サーバー不要）。
+// 実バトル(/battle)と同じ createArenaRenderer + DEFAULT_RIDER_MODEL 構成を、サーバーなしで
+// 単体で回せる場所。モデルやモーションを調整したらまずここで確認してから /battle で対戦する。
 // シミュレーションは state.ts の純粋関数（stepBattle 等）をローカルで回すだけ（WebSocket なし）。
 
 export const Route = createFileRoute('/battle-test')({ component: BattleTestPage })
@@ -255,7 +255,7 @@ function BattleTestPage() {
         )}
       </div>
 
-      {/* ステージ（/battle と同じ arena3d レンダラ。アバターだけ GLB） */}
+      {/* ステージ（/battle と同じ arena3d レンダラ・同じ GLB アバター） */}
       <div
         style={{
           position: 'relative',
