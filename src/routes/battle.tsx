@@ -2,6 +2,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { RIDER_ROUTINES } from '../pose'
+import { drawPoseSkeleton } from '../pose/skeleton'
 import {
   ARENA,
   applyAbare,
@@ -44,6 +45,13 @@ const PLAYER_COLORS = ['#a78bfa', '#f87171', '#34d399', '#fbbf24', '#38bdf8']
 
 // サーバーから最初の状態が届くまでの初期値（空のロスター）。
 const EMPTY_BATTLE: BattleState = { players: [], projectiles: [], winnerId: null }
+
+// 他プレイヤー描画の補間遅延(ms)。本番（インターネット越しの Durable Object）は 60Hz の
+// 配信が均等な間隔で届かない（ジッタでまとまって届く）ため、受信値をそのまま描くと
+// 他プレイヤーの動きがカクつく。この時間だけ過去を描画時刻とし、その前後の受信
+// スナップショット間で位置を補間して滑らかにする。ローカル開発では相手がこの分だけ
+// 遅れて見えるだけで、体感はほぼ変わらない。
+const INTERP_DELAY_MS = 120
 
 // 予測の見た目: 自分の技/ガードはサーバーが追いつく前でも即表示。被弾中はサーバー優先。
 function predAction(serverP: PlayerState, predP: PlayerState): PlayerState['action'] {
@@ -99,6 +107,7 @@ function BattlePage() {
   const netRef = useRef<BattleNet | null>(null)
   const sfxRef = useRef<Sfx | null>(null) // 効果音（WebAudio 合成）
   const ventVideoRef = useRef<HTMLVideoElement>(null) // 右下カメラの <video>（ポーズ解析と共有）
+  const ventCanvasRef = useRef<HTMLCanvasElement>(null) // 右下カメラの骨格オーバーレイ
   const comboTimerRef = useRef(0)
   const popupKeyRef = useRef(0)
   const koOrderRef = useRef<string[]>([]) // 撃墜された順（順位付け用。先頭＝最初に落ちた＝下位）
@@ -110,6 +119,8 @@ function BattlePage() {
   const moveDirRef = useRef<-1 | 0 | 1>(0) // 自分の移動入力
   const guardRef = useRef(false) // 自分のガード入力
   const lastPredTRef = useRef(0)
+  // 受信スナップショットの履歴（他プレイヤーの補間用。INTERP_DELAY_MS 参照）
+  const snapsRef = useRef<{ t: number; state: BattleState }[]>([])
 
   function flashFinal() {
     setFinalActive(true)
@@ -242,7 +253,10 @@ function BattlePage() {
         now < serverSelf.stunUntil ||
         now < serverSelf.freezeUntil
       const err = Math.abs(serverSelf.x - pred.x) + Math.abs(serverSelf.y - pred.y)
-      if (!constrained && err < 0.08) {
+      // しきい値はネット越しの遅延を想定して広め（0.3）。ジャンプ中はサーバー側の y が
+      // RTT 分古く誤差が大きく出るため、狭くすると本番で毎受信スナップしてガタつく。
+      // 押し出し・投げ等の大ワープ（>0.3）だけサーバー位置へ即スナップさせる。
+      if (!constrained && err < 0.3) {
         // 自由移動中は予測位置を維持して軽く寄せる（入力が即反映されて見える）
         merged.x = pred.x + (serverSelf.x - pred.x) * 0.25
         merged.y = pred.y
@@ -266,6 +280,12 @@ function BattlePage() {
         processEvents(prev, next, youId)
         reconcilePrediction(next, youId)
         battleRef.current = next
+        // 補間用の履歴に積む（描画に必要な直近 ~0.5 秒だけ残す）
+        const snapNow = performance.now()
+        snapsRef.current.push({ t: snapNow, state: next })
+        while (snapsRef.current.length > 2 && snapsRef.current[0].t < snapNow - 500) {
+          snapsRef.current.shift()
+        }
         // サーバー配信は 60Hz だが、React の再レンダー（HP バー・ゲージ・カード等の UI）まで
         // 60Hz で回すと three.js の描画ループとメインスレッドを取り合ってガタつく。
         // 3D 描画は rAF ループが battleRef を直接読むので毎フレーム反映される。
@@ -355,6 +375,8 @@ function BattlePage() {
         setGuardPart('cam', on)
         setCamGuard(on)
       },
+      // 骨格オーバーレイ（MediaPipe の棒人間）。React を通さず canvas へ直接描く（~10Hz）。
+      (lm, guarding) => drawPoseSkeleton(ventCanvasRef.current, lm, guarding ? '#7fdfff' : '#22d3ee'),
     )
     camSource.start()
 
@@ -372,8 +394,32 @@ function BattlePage() {
   useEffect(() => {
     const loop = () => {
       const server = battleRef.current
-      let renderState = server
       const selfId = youIdRef.current
+
+      // --- 他プレイヤーの補間（INTERP_DELAY_MS 分の過去を、受信履歴の間で lerp）---
+      // 自分は下の予測で描くので対象外。履歴が rt を挟めない（受信直後・停滞中）は最新のまま。
+      let players = server.players
+      const snaps = snapsRef.current
+      if (snaps.length >= 2) {
+        const rt = performance.now() - INTERP_DELAY_MS
+        let hi = snaps.length - 1
+        while (hi > 0 && snaps[hi - 1].t > rt) hi--
+        if (hi > 0 && snaps[hi].t > rt) {
+          const s0 = snaps[hi - 1]
+          const s1 = snaps[hi]
+          const f = Math.max(0, Math.min(1, (rt - s0.t) / Math.max(1, s1.t - s0.t)))
+          players = players.map((p) => {
+            if (p.id === selfId) return p
+            const p0 = s0.state.players.find((q) => q.id === p.id)
+            const p1 = s1.state.players.find((q) => q.id === p.id)
+            if (!p0 || !p1) return p
+            // 連続量(x,y)だけ補間。action/hp/facing 等の離散量は補間時刻側(s1)を使う
+            return { ...p1, x: p0.x + (p1.x - p0.x) * f, y: p0.y + (p1.y - p0.y) * f }
+          })
+        }
+      }
+
+      let renderState = players === server.players ? server : { ...server, players }
       const pred = predRef.current
       if (pred && selfId && !server.winnerId && server.players.some((p) => p.id === selfId)) {
         // 自分を同じ純粋関数(stepBattle)で毎フレーム前進させ、位置/技を即反映。
@@ -391,8 +437,8 @@ function BattlePage() {
         const ps = advanced.players[0]
         if (ps) {
           renderState = {
-            ...server,
-            players: server.players.map((p) =>
+            ...renderState,
+            players: renderState.players.map((p) =>
               p.id === selfId
                 ? {
                     ...p,
@@ -555,7 +601,12 @@ function BattlePage() {
       </div>
 
       {/* 右下カメラ（ファイナルベント＋カメラガード用。CLAUDE.md: 常時表示） */}
-      <FinalVentCam highlight={finalActive} guarding={camGuard} videoRef={ventVideoRef} />
+      <FinalVentCam
+        highlight={finalActive}
+        guarding={camGuard}
+        videoRef={ventVideoRef}
+        canvasRef={ventCanvasRef}
+      />
 
       {/* ファイナルベント演出 */}
       {finalActive && <FinalVentBanner />}
@@ -998,10 +1049,12 @@ function FinalVentCam({
   highlight,
   guarding,
   videoRef,
+  canvasRef,
 }: {
   highlight: boolean
   guarding: boolean
   videoRef: React.RefObject<HTMLVideoElement | null>
+  canvasRef: React.RefObject<HTMLCanvasElement | null>
 }) {
   const [state, setState] = useState<'idle' | 'on' | 'error'>('idle')
 
@@ -1062,6 +1115,21 @@ function FinalVentCam({
         playsInline
         muted
         style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+      />
+      {/* 骨格オーバーレイ（MediaPipe の棒人間）。映像と同じミラー変換で座標が揃う。
+          内部解像度は 4:3 固定（要求解像度 640x480 と同比。プレビューが小さいので 240 で十分） */}
+      <canvas
+        ref={canvasRef}
+        width={240}
+        height={180}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          transform: 'scaleX(-1)',
+          pointerEvents: 'none',
+        }}
       />
       <span
         style={{

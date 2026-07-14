@@ -3,7 +3,7 @@
 // から切り離してここで実行する。メイン側からフレーム(ImageBitmap)を受け取り、
 // 「ボクシングの構えか」の真偽値だけを返す。デバウンスはメイン側（cameraGuard.ts）が行う。
 
-import type { PoseLandmarker } from '@mediapipe/tasks-vision'
+import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 import { createPoseLandmarker } from '../pose/landmarker'
 import { isBoxingGuard } from '../pose/poses'
 
@@ -15,7 +15,8 @@ export interface FrameMsg {
 
 export type WorkerMsg =
   | { t: 'ready' } // モデルロード完了。メイン側はこれを待ってからフレームを送る
-  | { t: 'result'; posed: boolean }
+  // landmarks はプレビューの骨格オーバーレイ用（正規化座標の素の配列。未検出は null）
+  | { t: 'result'; posed: boolean; landmarks: NormalizedLandmark[] | null }
   | { t: 'error' } // モデル取得失敗（オフライン等）。カメラガード無効のまま継続
 
 let landmarker: PoseLandmarker | null = null
@@ -38,11 +39,18 @@ self.onmessage = (ev: MessageEvent<FrameMsg>) => {
   }
   try {
     const result = landmarker.detectForVideo(bitmap, ts)
-    const lm = result.landmarks?.[0]
-    postMessage({ t: 'result', posed: !!lm && isBoxingGuard(lm) } satisfies WorkerMsg)
+    const lm = result.landmarks?.[0] ?? null
+    postMessage({
+      t: 'result',
+      posed: !!lm && isBoxingGuard(lm),
+      // 構造化クローンできる素のオブジェクト配列に落とす（クラスインスタンス対策）
+      landmarks: lm
+        ? lm.map(({ x, y, z, visibility }) => ({ x, y, z, visibility }))
+        : null,
+    } satisfies WorkerMsg)
   } catch {
     // 単発の検出失敗はスキップ扱い（busy 解除のため result は返す）
-    postMessage({ t: 'result', posed: false } satisfies WorkerMsg)
+    postMessage({ t: 'result', posed: false, landmarks: null } satisfies WorkerMsg)
   } finally {
     bitmap.close()
   }
