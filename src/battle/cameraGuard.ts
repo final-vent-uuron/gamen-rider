@@ -6,6 +6,7 @@
 // 推論は Web Worker（cameraGuard.worker.ts）で実行する。メインスレッド側の仕事は
 // 「一定間隔で ImageBitmap を切り出して転送する」だけなので、three.js の 60fps 描画を塞がない。
 
+import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
 import type { FrameMsg, WorkerMsg } from './cameraGuard.worker'
 import type { InputSource } from './input'
 
@@ -17,6 +18,9 @@ const OFF_FRAMES = 3 // 連続何回見失ったら guard off（ちらつき防�
 export function createCameraGuardSource(
   getVideo: () => HTMLVideoElement | null,
   onGuard: (on: boolean) => void,
+  // 検出結果ごとに呼ぶ（未検出は null）。プレビューの骨格オーバーレイ用。
+  // 第2引数はデバウンス後の現在のガード状態（線の色分けに使う）。
+  onLandmarks?: (lm: NormalizedLandmark[] | null, guarding: boolean) => void,
 ): InputSource {
   let running = false
   let rafId = 0
@@ -95,6 +99,7 @@ export function createCameraGuardSource(
         } else if (msg.t === 'result') {
           busy = false
           onResult(msg.posed)
+          onLandmarks?.(msg.landmarks, guarding)
         }
         // 'error'（モデル取得失敗＝オフライン等）はカメラガード無効のまま静かに継続
       }
@@ -108,6 +113,7 @@ export function createCameraGuardSource(
       running = false
       cancelAnimationFrame(rafId)
       setGuard(false) // ガードしっぱなしで抜けない
+      onLandmarks?.(null, false) // オーバーレイも消す
       worker?.terminate()
       worker = null
       workerReady = false
