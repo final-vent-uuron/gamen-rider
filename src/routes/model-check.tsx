@@ -11,9 +11,9 @@ import { modelUrl } from "../model-assets";
 // 検証対象の GLB（配信元は model-assets.ts。既定は R2、無ければ public/model）。
 // ?model=xxx.glb で切り替えられる（先頭が既定）。
 const MODEL_FILES = [
-	"gamen-rider-python-animation.glb",
-	"gamen-rider-arduino-add-animation-fix.glb",
-	"test.glb",
+	"gamen-rider-python-animation.v2.glb",
+	"gamen-rider-arduino-add-animation-fix.v2.glb",
+	"test.v2.glb",
 	"flutter.glb",
 ] as const;
 
