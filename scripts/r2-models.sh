@@ -24,11 +24,16 @@ BUCKET=gamen-rider-models
 # コードから参照している GLB（src/battle/arena3d.ts / src/routes/model-check.tsx）。
 # モデルを追加したらここに足して `pnpm models:upload` を実行する。
 # ※ public/model には未使用の大きいファイル（Untitled.glb 等）があるため *.glb 一括にはしない。
+#
+# .v2 はテクスチャ軽量化版（4096 PNG → 2048 WebP、22〜26MB → 1〜2MB）。生成手順:
+#   npx @gltf-transform/cli resize --width 2048 --height 2048 in.glb tmp.glb
+#   npx @gltf-transform/cli webp tmp.glb out.v2.glb
+# 新しいモデルを Blender 等から書き出したら同じ手順を通してからアップロードする。
 FILES=(
-  gamen-rider-python-animation.glb
-  gamen-rider-arduino-add-animation-fix.glb
+  gamen-rider-python-animation.v2.glb
+  gamen-rider-arduino-add-animation-fix.v2.glb
   flutter.glb
-  test.glb
+  test.v2.glb
 )
 
 case "${1:-}" in

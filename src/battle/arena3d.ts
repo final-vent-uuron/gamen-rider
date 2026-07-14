@@ -95,7 +95,7 @@ export interface RiderModel {
 // - hit / thrown: reaction クリップを共用。
 // - final / throw / abare は未収録 → idle フォールバック。
 export const DEFAULT_RIDER_MODEL: RiderModel = {
-	url: modelUrl("gamen-rider-python-animation.glb"),
+	url: modelUrl("gamen-rider-python-animation.v2.glb"),
 	height: 0.5, // box アバター(約1.9)より一回り小さめ。画面に対して大きすぎたため
 	rotateY: Math.PI / 2, // Mixamo リグは +z 正面 → このゲームの正面 +x へ
 	clips: {
@@ -123,7 +123,7 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 	// swift / cpp は GLB 未用意のため未登録 → 共通モデル(python)にフォールバック。
 	python: DEFAULT_RIDER_MODEL,
 	arduino: {
-		url: modelUrl("gamen-rider-arduino-add-animation-fix.glb"),
+		url: modelUrl("gamen-rider-arduino-add-animation-fix.v2.glb"),
 		height: 0.5,
 		rotateY: Math.PI / 2,
 		// guard / reaction は未収録 → guard・hit・thrown は idle フォールバック。
