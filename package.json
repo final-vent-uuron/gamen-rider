@@ -15,7 +15,10 @@
 		"deploy:battle": "wrangler deploy -c wrangler.battle.jsonc",
 		"generate-routes": "tsr generate",
 		"build": "vite build",
-		"preview": "vite preview"
+		"preview": "vite preview",
+		"models:setup": "bash scripts/r2-models.sh setup",
+		"models:upload": "bash scripts/r2-models.sh upload",
+		"models:url": "bash scripts/r2-models.sh url"
 	},
 	"dependencies": {
 		"@mediapipe/tasks-vision": "^0.10.35",

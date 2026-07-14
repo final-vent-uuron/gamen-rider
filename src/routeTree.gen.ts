@@ -9,15 +9,23 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SelectRouteImport } from './routes/select'
 import { Route as ResultRouteImport } from './routes/result'
 import { Route as PoseRouteImport } from './routes/pose'
+import { Route as ModelCheckRouteImport } from './routes/model-check'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
+import { Route as BattleTestRouteImport } from './routes/battle-test'
 import { Route as BattleRouteImport } from './routes/battle'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthIndexRouteImport } from './routes/auth/index'
 import { Route as AuthRegisterRouteImport } from './routes/auth/register'
 
+const SelectRoute = SelectRouteImport.update({
+  id: '/select',
+  path: '/select',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ResultRoute = ResultRouteImport.update({
   id: '/result',
   path: '/result',
@@ -28,6 +36,11 @@ const PoseRoute = PoseRouteImport.update({
   path: '/pose',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModelCheckRoute = ModelCheckRouteImport.update({
+  id: '/model-check',
+  path: '/model-check',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HenshinRoute = HenshinRouteImport.update({
   id: '/henshin',
   path: '/henshin',
@@ -36,6 +49,11 @@ const HenshinRoute = HenshinRouteImport.update({
 const DetectRoute = DetectRouteImport.update({
   id: '/detect',
   path: '/detect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BattleTestRoute = BattleTestRouteImport.update({
+  id: '/battle-test',
+  path: '/battle-test',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BattleRoute = BattleRouteImport.update({
@@ -62,20 +80,26 @@ const AuthRegisterRoute = AuthRegisterRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/battle': typeof BattleRoute
+  '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
+  '/model-check': typeof ModelCheckRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
+  '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth/': typeof AuthIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/battle': typeof BattleRoute
+  '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
+  '/model-check': typeof ModelCheckRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
+  '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth': typeof AuthIndexRoute
 }
@@ -83,10 +107,13 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/battle': typeof BattleRoute
+  '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
+  '/model-check': typeof ModelCheckRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
+  '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
   '/auth/': typeof AuthIndexRoute
 }
@@ -95,30 +122,39 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/battle'
+    | '/battle-test'
     | '/detect'
     | '/henshin'
+    | '/model-check'
     | '/pose'
     | '/result'
+    | '/select'
     | '/auth/register'
     | '/auth/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/battle'
+    | '/battle-test'
     | '/detect'
     | '/henshin'
+    | '/model-check'
     | '/pose'
     | '/result'
+    | '/select'
     | '/auth/register'
     | '/auth'
   id:
     | '__root__'
     | '/'
     | '/battle'
+    | '/battle-test'
     | '/detect'
     | '/henshin'
+    | '/model-check'
     | '/pose'
     | '/result'
+    | '/select'
     | '/auth/register'
     | '/auth/'
   fileRoutesById: FileRoutesById
@@ -126,16 +162,26 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BattleRoute: typeof BattleRoute
+  BattleTestRoute: typeof BattleTestRoute
   DetectRoute: typeof DetectRoute
   HenshinRoute: typeof HenshinRoute
+  ModelCheckRoute: typeof ModelCheckRoute
   PoseRoute: typeof PoseRoute
   ResultRoute: typeof ResultRoute
+  SelectRoute: typeof SelectRoute
   AuthRegisterRoute: typeof AuthRegisterRoute
   AuthIndexRoute: typeof AuthIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/select': {
+      id: '/select'
+      path: '/select'
+      fullPath: '/select'
+      preLoaderRoute: typeof SelectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/result': {
       id: '/result'
       path: '/result'
@@ -150,6 +196,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PoseRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/model-check': {
+      id: '/model-check'
+      path: '/model-check'
+      fullPath: '/model-check'
+      preLoaderRoute: typeof ModelCheckRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/henshin': {
       id: '/henshin'
       path: '/henshin'
@@ -162,6 +215,13 @@ declare module '@tanstack/react-router' {
       path: '/detect'
       fullPath: '/detect'
       preLoaderRoute: typeof DetectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/battle-test': {
+      id: '/battle-test'
+      path: '/battle-test'
+      fullPath: '/battle-test'
+      preLoaderRoute: typeof BattleTestRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/battle': {
@@ -198,10 +258,13 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BattleRoute: BattleRoute,
+  BattleTestRoute: BattleTestRoute,
   DetectRoute: DetectRoute,
   HenshinRoute: HenshinRoute,
+  ModelCheckRoute: ModelCheckRoute,
   PoseRoute: PoseRoute,
   ResultRoute: ResultRoute,
+  SelectRoute: SelectRoute,
   AuthRegisterRoute: AuthRegisterRoute,
   AuthIndexRoute: AuthIndexRoute,
 }

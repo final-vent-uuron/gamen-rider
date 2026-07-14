@@ -23,7 +23,7 @@ interface RankEntry {
 export const Route = createFileRoute('/result')({
   validateSearch: (
     search: Record<string, unknown>,
-  ): { players: RankEntry[]; rider?: string } => {
+  ): { players: RankEntry[]; rider?: string; name?: string } => {
     const raw = Array.isArray(search.players) ? (search.players as unknown[]) : []
     const players: RankEntry[] = raw.map((e) => {
       const o = (e ?? {}) as Record<string, unknown>
@@ -35,7 +35,11 @@ export const Route = createFileRoute('/result')({
         p: typeof o.p === 'number' ? o.p : Number(o.p) || 1,
       }
     })
-    return { players, rider: typeof search.rider === 'string' ? search.rider : undefined }
+    return {
+      players,
+      rider: typeof search.rider === 'string' ? search.rider : undefined,
+      name: typeof search.name === 'string' ? search.name : undefined, // 再戦時に /battle へ持ち帰る表示名
+    }
   },
   component: ResultPage,
 })
@@ -57,7 +61,7 @@ function metalOf(rank: number): [string, string, string] {
 }
 
 function ResultPage() {
-  const { players, rider } = Route.useSearch()
+  const { players, rider, name } = Route.useSearch()
   const winner = players[0] ?? null
   const losers = players.slice(1)
 
@@ -319,7 +323,7 @@ function ResultPage() {
       >
         <Link
           to="/battle"
-          search={rider ? { rider } : {}}
+          search={rider ? { rider, name } : {}}
           style={{
             padding: '0.65rem 1.8rem',
             background: '#a78bfa',

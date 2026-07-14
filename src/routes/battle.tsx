@@ -10,6 +10,7 @@ import {
   applyThrow,
   battleCardsFor,
   connectBattle,
+  createCameraGuardSource,
   createKeyboardSource,
   createSfx,
   meterStocks,
@@ -28,10 +29,12 @@ interface DamagePopup {
 }
 
 // rider をクエリで受け取り、無ければ先頭ルーチンを既定にする（/battle 単体でも動作確認できる）。
-// 変身フロー（/henshin）からは navigate({ to:'/battle', search:{ rider } }) で遷移してくる想定。
+// 認証フロー（/auth）からは navigate({ to:'/battle', search:{ rider } }) で遷移してくる想定。
+// name はデモ用キャラ選択（/select）が渡す表示名（RIDER_ROUTINES に無い登録ライダー用）。
 export const Route = createFileRoute('/battle')({
-  validateSearch: (search: Record<string, unknown>): { rider?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { rider?: string; name?: string } => ({
     rider: typeof search.rider === 'string' ? search.rider : undefined,
+    name: typeof search.name === 'string' ? search.name : undefined,
   }),
   component: BattlePage,
 })
@@ -61,14 +64,18 @@ function predAction(serverP: PlayerState, predP: PlayerState): PlayerState['acti
 }
 
 function BattlePage() {
-  const { rider } = Route.useSearch()
+  const { rider, name } = Route.useSearch()
   const navigate = useNavigate()
 
-  // 自分のライダーを解決。未指定 / 未対応なら先頭ルーチンで代用。
-  const routine = useMemo(
-    () => RIDER_ROUTINES.find((r) => r.riderId === rider) ?? RIDER_ROUTINES[0],
-    [rider],
-  )
+  // 自分のライダーを解決。RIDER_ROUTINES に無い id（登録ライダー・デモ選択）は id を
+  // そのまま使い、表示名はクエリの name → 既定ルーチン名 の順で代用する。
+  const routine = useMemo(() => {
+    const known = RIDER_ROUTINES.find((r) => r.riderId === rider)
+    return {
+      riderId: rider ?? RIDER_ROUTINES[0].riderId,
+      riderName: name ?? known?.riderName ?? RIDER_ROUTINES[0].riderName,
+    }
+  }, [rider, name])
 
   const cards = battleCardsFor(routine.riderId)
 
@@ -78,6 +85,7 @@ function BattlePage() {
   const [popups, setPopups] = useState<DamagePopup[]>([]) // 被弾ダメージ数字
   const [combo, setCombo] = useState<number | null>(null) // 進行中の最大コンボ数
   const [koFlash, setKoFlash] = useState(false) // KO の一瞬フラッシュ
+  const [camGuard, setCamGuard] = useState(false) // カメラがガードポーズを認識中か（表示用）
 
   const battleRef = useRef(battle)
   battleRef.current = battle
@@ -89,6 +97,7 @@ function BattlePage() {
   const finalActiveRef = useRef(false) // rAF ループから読む finalActive のミラー
   const netRef = useRef<BattleNet | null>(null)
   const sfxRef = useRef<Sfx | null>(null) // 効果音（WebAudio 合成）
+  const ventVideoRef = useRef<HTMLVideoElement>(null) // 右下カメラの <video>（ポーズ解析と共有）
   const comboTimerRef = useRef(0)
   const popupKeyRef = useRef(0)
   const koOrderRef = useRef<string[]>([]) // 撃墜された順（順位付け用。先頭＝最初に落ちた＝下位）
@@ -267,6 +276,18 @@ function BattlePage() {
     const applyPred = (fn: (s: BattleState) => BattleState) => {
       if (predRef.current && youIdRef.current) predRef.current = fn(predRef.current)
     }
+    // ガードはキーボードとカメラ（ボクシングの構え）の2系統。どちらかが on なら on（OR 合成）。
+    // カメラの構えを解いてもキーを押していればガード継続、の直感的な挙動にする。
+    const guardParts = { key: false, cam: false }
+    const setGuardPart = (part: keyof typeof guardParts, on: boolean) => {
+      if (guardParts[part] === on) return
+      guardParts[part] = on
+      const merged = guardParts.key || guardParts.cam
+      if (merged !== guardRef.current) {
+        guardRef.current = merged
+        net.sendGuard(merged)
+      }
+    }
     const source = createKeyboardSource((input) => {
       sfxRef.current?.resume()
       const now = Date.now()
@@ -291,8 +312,7 @@ function BattlePage() {
           sfxRef.current?.whiff()
           break
         case 'guard':
-          guardRef.current = input.on
-          net.sendGuard(input.on)
+          setGuardPart('key', input.on)
           break
         case 'throw':
           net.sendThrow()
@@ -316,8 +336,19 @@ function BattlePage() {
     })
     source.start()
 
+    // カメラガード: 右下カメラの映像で「ボクシングの構え」を認識している間、強制的にガード。
+    const camSource = createCameraGuardSource(
+      () => ventVideoRef.current,
+      (on) => {
+        setGuardPart('cam', on)
+        setCamGuard(on)
+      },
+    )
+    camSource.start()
+
     return () => {
       source.stop()
+      camSource.stop()
       net.close()
       netRef.current = null
       window.clearTimeout(finalTimerRef.current)
@@ -375,12 +406,14 @@ function BattlePage() {
   }, [])
 
   // three.js レンダラの初期化。SSR を避けるため three は動的 import（クライアント専用）。
+  // アバターは共通 GLB（DEFAULT_RIDER_MODEL）を fallback に使う（/battle-test で検証済みの構成）。
+  // RIDER_MODELS に riderId 別のモデルを登録すればそちらが優先され、GLB ロード中/失敗時は box。
   useEffect(() => {
     let disposed = false
     let renderer: ArenaRenderer | null = null
-    import('../battle/arena3d').then(({ createArenaRenderer }) => {
+    import('../battle/arena3d').then(({ createArenaRenderer, DEFAULT_RIDER_MODEL }) => {
       if (disposed || !arenaHostRef.current) return
-      renderer = createArenaRenderer(arenaHostRef.current)
+      renderer = createArenaRenderer(arenaHostRef.current, { fallbackModel: DEFAULT_RIDER_MODEL })
       rendererRef.current = renderer
       renderer.render(battleRef.current, finalActiveRef.current)
     })
@@ -420,10 +453,10 @@ function BattlePage() {
         ]
       })
       if (players.length === 0) return
-      navigate({ to: '/result', search: { players, rider: routine.riderId } })
+      navigate({ to: '/result', search: { players, rider: routine.riderId, name: routine.riderName } })
     }, 1600)
     return () => window.clearTimeout(t)
-  }, [battle.winnerId, navigate, routine.riderId])
+  }, [battle.winnerId, navigate, routine.riderId, routine.riderName])
 
   // カードクリックをダミー入力として扱う（マウスでも技を出せる）。
   function handleCard(card: BattleCard) {
@@ -509,8 +542,8 @@ function BattlePage() {
         <ControlsHelp />
       </div>
 
-      {/* 右下カメラ（ファイナルベント用。CLAUDE.md: 常時表示） */}
-      <FinalVentCam highlight={finalActive} />
+      {/* 右下カメラ（ファイナルベント＋カメラガード用。CLAUDE.md: 常時表示） */}
+      <FinalVentCam highlight={finalActive} guarding={camGuard} videoRef={ventVideoRef} />
 
       {/* ファイナルベント演出 */}
       {finalActive && <FinalVentBanner />}
@@ -909,6 +942,7 @@ function ControlsHelp() {
     ['J', 'パンチ(軽・発生早)'],
     ['K', 'キック(重・主力)'],
     ['Shift / S / ↓', 'ガード(押しっぱ・前後OK)'],
+    ['📷 構え', 'カメラにボクシングの構え(両拳を顔の前)でガード'],
     ['U', '投げ(ガード崩し)'],
     ['I', '波動弾(飛び道具・1発ずつ)'],
     ['E', '暴れ(1ゲージ・割り込み脱出)'],
@@ -945,10 +979,18 @@ function ControlsHelp() {
   )
 }
 
-// ---- 右下カメラ（ファイナルベント用） ------------------------------------
+// ---- 右下カメラ（ファイナルベント＋カメラガード用） ----------------------
+// videoRef は親から受け取り、カメラガード（MediaPipe ポーズ解析）と映像を共有する。
 
-function FinalVentCam({ highlight }: { highlight: boolean }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
+function FinalVentCam({
+  highlight,
+  guarding,
+  videoRef,
+}: {
+  highlight: boolean
+  guarding: boolean
+  videoRef: React.RefObject<HTMLVideoElement | null>
+}) {
   const [state, setState] = useState<'idle' | 'on' | 'error'>('idle')
 
   async function enable() {
@@ -984,8 +1026,12 @@ function FinalVentCam({ highlight }: { highlight: boolean }) {
         borderRadius: '10px',
         overflow: 'hidden',
         background: '#000',
-        border: highlight ? '3px solid #a78bfa' : '2px solid #334155',
-        boxShadow: highlight ? '0 0 20px #a78bfa' : '0 4px 12px rgba(0,0,0,0.4)',
+        border: highlight ? '3px solid #a78bfa' : guarding ? '3px solid #7fdfff' : '2px solid #334155',
+        boxShadow: highlight
+          ? '0 0 20px #a78bfa'
+          : guarding
+            ? '0 0 20px #7fdfff'
+            : '0 4px 12px rgba(0,0,0,0.4)',
         transition: 'border 0.2s, box-shadow 0.2s',
         zIndex: 50,
       }}
@@ -1010,6 +1056,25 @@ function FinalVentCam({ highlight }: { highlight: boolean }) {
       >
         FINAL VENT CAM
       </span>
+      {/* カメラガード認識中の表示（構えている間ガード状態） */}
+      {guarding && (
+        <span
+          style={{
+            position: 'absolute',
+            right: '6px',
+            bottom: '4px',
+            fontSize: '0.7rem',
+            fontWeight: 900,
+            color: '#001b22',
+            background: '#7fdfff',
+            padding: '1px 8px',
+            borderRadius: '4px',
+            letterSpacing: '0.08em',
+          }}
+        >
+          GUARD
+        </span>
+      )}
       {state !== 'on' && (
         <button
           type="button"

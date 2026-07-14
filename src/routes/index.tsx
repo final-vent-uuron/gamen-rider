@@ -80,10 +80,13 @@ function Home() {
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
           {(
             [
+              { to: '/select', label: 'キャラ選択（デモ）' },
               { to: '/pose', label: 'Pose 検知' },
               { to: '/detect', label: '画像検知' },
               { to: '/henshin', label: '変身フロー(旧)' },
               { to: '/battle', label: 'バトル単体' },
+              { to: '/battle-test', label: 'バトル検証' },
+              { to: '/model-check', label: 'モデル検証' },
               { to: '/auth/register', label: 'ライダー登録' },
             ] as const
           ).map((l) => (

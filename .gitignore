@@ -6,3 +6,7 @@ dist
 .wrangler
 
 src/assets/riders/
+
+# 3D モデル(GLB)は Cloudflare R2 で管理する（scripts/r2-models.sh / README 参照）。
+# 20MB 超のバイナリが多いためリポジトリにはコミットしない。
+public/model/

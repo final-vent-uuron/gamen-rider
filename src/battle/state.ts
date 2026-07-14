@@ -155,12 +155,15 @@ type MoveDef = {
   isThrow: boolean
 }
 
+// 技の合計時間（startup+active+recovery）は GLB アニメの尺（arena3d の ONESHOT_DURATION）に
+// 合わせてある。技中（アニメ再生中）は移動・ジャンプ・ガード・次の技がすべてロックされ、
+// 例外は「ヒット/ガード時のキャンセル窓」だけ（＝コンボ）。尺を変えるときは両方揃えること。
 export const MOVES: Record<MoveKind, MoveDef> = {
   // 軽い先手。発生が速く、ヒットで大きなキャンセル窓 → コンボ始動。
   punch: {
     startup: 75,
     active: 45,
-    recovery: 135,
+    recovery: 680, // 合計 800ms = punch アニメ 0.8s
     damage: ARENA.punchDamage,
     reach: ARENA.reachPunch,
     knockback: ARENA.knockback,
@@ -177,7 +180,7 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   kick: {
     startup: 120,
     active: 55,
-    recovery: 250,
+    recovery: 925, // 合計 1100ms = kick アニメ 1.1s
     damage: ARENA.kickDamage,
     reach: ARENA.reachKick,
     knockback: ARENA.kickKnockback,
@@ -194,13 +197,13 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   throw: {
     startup: 55,
     active: 35,
-    recovery: 440,
-    recoveryOnHit: 240,
+    recovery: 810, // 合計 900ms = throw アニメ 0.9s
+    recoveryOnHit: 810, // ヒット時もアニメ終端までロック（掴んだ瞬間からの残り尺）
     damage: ARENA.throwDamage,
     reach: ARENA.reachThrow,
     knockback: ARENA.throwKnockback,
     launch: 0,
-    hitstun: 620,
+    hitstun: 900, // thrown アニメ 0.9s の間は倒れたまま（投げた側の再行動とほぼ同時に起きる）
     blockstun: 0,
     hitstop: 110,
     cancelWindow: 0,
@@ -212,7 +215,7 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   final: {
     startup: 90,
     active: 130,
-    recovery: 680,
+    recovery: 980, // 合計 1200ms = final アニメ 1.2s
     damage: ARENA.finalDamage,
     reach: ARENA.reachFinal,
     knockback: ARENA.finalKnockback,
@@ -381,7 +384,9 @@ export function stepBattle(
     const guarding = (guardIntent[p.id] ?? false) && grounded && canAct
 
     let { x, facing, y, vy, vx } = p
-    const airborne = p.y > 0.001
+    // 上昇開始直後（y はまだ 0 だが vy > 0）も空中扱いにする。接地ブランチは入力なしで
+    // vx を 0 に戻すため、ここを接地扱いにするとジャンプの前方初速が離陸前に消えてしまう。
+    const airborne = p.y > 0.001 || p.vy > 0
     const canMove = canAct && !guarding
     if (airborne) {
       if (canMove) {
@@ -548,6 +553,9 @@ export function applyAbare(state: BattleState, playerId: string, now: number): B
   if (!self || self.hp <= 0) return state
   if (self.meter < ARENA.abareCost) return state
   if (now < self.invulnUntil) return state // 無敵中の連発は禁止（1本ずつ）
+  // 割り込めるのは「やられている側」（被弾・硬直）のみ。自分の技の最中に撃って
+  // 技をキャンセルする使い方はさせない（技中ロックの例外にしない）。
+  if (self.move !== null && now < self.actionUntil) return state
 
   const invulnUntil = now + ARENA.abareInvuln
   const players = state.players.map((p) => {
@@ -826,6 +834,8 @@ function stepProjectiles(
 }
 
 // ジャンプ。接地中かつ行動可能（非硬直・非ガード）のみ有効。純粋関数。
+// 跳んだ瞬間に向いている方向へ自動で前進する（前方ジャンプ）。空中の慣性(vx)に
+// 初速を入れるだけなので、空中で逆入力すれば airControl で軌道は変えられる。
 export function applyJump(state: BattleState, playerId: string, now: number): BattleState {
   if (state.winnerId) return state
   let changed = false
@@ -833,7 +843,12 @@ export function applyJump(state: BattleState, playerId: string, now: number): Ba
     if (p.id !== playerId) return p
     if (!canActNow(p, now) || p.y > 0.0001 || p.vy > 0 || p.guarding) return p
     changed = true
-    return { ...p, vy: ARENA.jumpVy, guarding: false }
+    return {
+      ...p,
+      vy: ARENA.jumpVy,
+      vx: p.facing * ARENA.moveSpeed * ARENA.airControl,
+      guarding: false,
+    }
   })
   return changed ? { ...state, players } : state
 }

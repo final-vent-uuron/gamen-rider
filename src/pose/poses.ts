@@ -17,6 +17,12 @@ const THRUST_FORESHORTEN_MAX = 0.6 // 肩→手首の2D長 / 腕の2D全長。�
 const THRUST_Z_MARGIN = 0.05 // 手首が肩よりカメラ手前にある量（z）。z はノイズが多いので向きの判定のみ。
 const THRUST_SIDE_MAX = 0.8 // 突き出し手首が横へ開きすぎない上限（肩幅比）
 
+// ボクシングガード（両拳を顔の前に構える）
+const GUARD_ELBOW_BEND_MAX_DEG = 120 // 肘を曲げている（伸ばした腕＝パンチ/Tポーズを除外）
+const GUARD_WRIST_ABOVE_ELBOW = 0.05 // 手首が肘より上にある量（肩幅比）
+const GUARD_WRIST_DROP_TOL = 0.35 // 手首が肩より下がってよい量（肩幅比）。拳は顔〜胸の高さ。
+const GUARD_WRIST_SIDE_MAX = 1.0 // 手首が体の中心から横へ開きすぎない上限（肩幅比）
+
 const ARM_IDS = [
   LM.L_SHOULDER,
   LM.R_SHOULDER,
@@ -98,10 +104,31 @@ export function isArmThrustForward(lm: Lm): boolean {
   return ARMS.some((arm) => isThrustArm(lm, arm))
 }
 
+// ボクシングのガード: 両拳（手首）を顔〜胸の高さまで上げ、肘を曲げて体の前に構える。
+// バトル中のカメラガード（構えている間ガード状態）に使う。左右対称なので鏡像表示の影響なし。
+export function isBoxingGuard(lm: Lm): boolean {
+  if (!allVisible(lm, ARM_IDS, MIN_VIS)) return false
+  const sw = shoulderWidth(lm)
+  const centerX = (lm[LM.L_SHOULDER].x + lm[LM.R_SHOULDER].x) / 2
+  return ARMS.every((arm) => {
+    const [s, e, w] = arm
+    // 肘が曲がっている（伸びた腕は構えではない）
+    if (armStraightness3d(lm, arm) > GUARD_ELBOW_BEND_MAX_DEG) return false
+    // 拳が肘よりはっきり上（y は下向き正）
+    if (lm[w].y > lm[e].y - GUARD_WRIST_ABOVE_ELBOW * sw) return false
+    // 拳が顔〜胸の高さ（肩より大きく下がっていない）
+    if (lm[w].y > lm[s].y + GUARD_WRIST_DROP_TOL * sw) return false
+    // 拳が体の前（真横へ開いていない）
+    if (Math.abs(lm[w].x - centerX) > GUARD_WRIST_SIDE_MAX * sw) return false
+    return true
+  })
+}
+
 // 幾何ルールで定義済みのポーズ一覧。ポーズ作成 UI でステップとして選べる。
 export const BUILTIN_POSES: { id: string; label: string; test: PoseTest }[] = [
   { id: 'tpose', label: 'Tポーズ', test: isTPose },
   { id: 'thrust', label: '前突き出し', test: isArmThrustForward },
+  { id: 'boxing-guard', label: 'ボクシングガード', test: isBoxingGuard },
 ]
 
 // 各ポーズの判定結果と主要な計測値（UI のデバッグ表示・しきい値調整用）
