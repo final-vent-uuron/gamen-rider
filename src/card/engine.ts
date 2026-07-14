@@ -25,6 +25,18 @@ const RANSAC_REPROJ = 5
 const MATCH_MIN_INLIERS = 12
 // 1位と2位のインライア差。これ未満なら「どれか曖昧」として未確定にする（似た画像の誤確定防止）。
 const MATCH_MARGIN = 6
+// インライア「率」（インライア数 / 比率テストを通った対応数）の下限。
+// 数だけだと、背景の雑多な特徴点にたまたま多く当たった場合に閾値を超えうる。
+// 本物のカードが映っていれば良い対応の大半が1枚の平面変形で説明できる＝率が高くなる。
+const MIN_INLIER_RATIO = 0.35
+// CLAHE（局所ヒストグラム平坦化）の強さとタイルサイズ。
+// 照明ムラ・テカリ・逆光を吸収する。clip を上げすぎるとノイズまで強調されるので 2.0 前後。
+const CLAHE_CLIP = 2.0
+const CLAHE_TILE = 8
+// ラプラシアン分散（画像の「エッジの立ち具合」）の下限。これ未満のフレームはブレ/ピンぼけ
+// と見なして検出自体をスキップする。ぼけたフレームは特徴点の記述子が崩れ、誤マッチの温床になる。
+// 低すぎると効かず、高すぎると常に弾いて検出不能になるので、/detect の sharpness 表示を見て調整する。
+const MIN_SHARPNESS = 25
 // 射影した参照画像の四隅がこの面積（処理px²）未満なら退化した変形として捨てる。
 const MIN_QUAD_AREA = 256
 // 同じ結果がこの回数連続したら確定（チラつき防止）。
@@ -119,23 +131,60 @@ function drawScaled(
   ctx.drawImage(source, 0, 0, canvas.width, canvas.height)
 }
 
-/** グレースケール化した canvas から ORB のキーポイント＋ディスクリプタを抽出する。 */
-function computeFeatures(
-  cv: Cv,
-  orb: any,
-  canvas: HTMLCanvasElement,
-): { kp: any; des: any; w: number; h: number } {
+/**
+ * canvas をグレースケール化し、CLAHE で局所コントラストを整えた Mat を返す（呼び出し側が delete する）。
+ * 参照画像とカメラフレームの両方を必ずこの関数に通すこと。前処理が食い違うと、
+ * 同じカードでも記述子がずれてマッチしなくなる（前処理の一貫性がそのまま精度になる）。
+ * clahe が生成できない環境では equalizeHist（全体平坦化）にフォールバックする。
+ */
+function toProcessedGray(cv: Cv, clahe: any, canvas: HTMLCanvasElement): any {
   const src = cv.imread(canvas)
   const gray = new cv.Mat()
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
+  src.delete()
+
+  const out = new cv.Mat()
+  if (clahe) clahe.apply(gray, out)
+  else cv.equalizeHist(gray, out)
+  gray.delete()
+  return out
+}
+
+/** CLAHE を生成する。ビルドに含まれていなければ null（呼び出し側が equalizeHist に落ちる）。 */
+function createClahe(cv: Cv): any {
+  if (typeof cv.CLAHE !== 'function') return null
+  try {
+    return new cv.CLAHE(CLAHE_CLIP, new cv.Size(CLAHE_TILE, CLAHE_TILE))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * ラプラシアン分散＝画像のエッジの立ち具合。値が小さいほどブレ・ピンぼけしている。
+ * ぼけたフレームは特徴点の記述子が崩れるので、検出に回す前にこれで足切りする。
+ */
+function sharpness(cv: Cv, gray: any): number {
+  const lap = new cv.Mat()
+  cv.Laplacian(gray, lap, cv.CV_64F)
+  const mean = new cv.Mat()
+  const stddev = new cv.Mat()
+  cv.meanStdDev(lap, mean, stddev)
+  const sd = stddev.data64F[0]
+  lap.delete()
+  mean.delete()
+  stddev.delete()
+  return sd * sd
+}
+
+/** 前処理済みグレースケール Mat から ORB のキーポイント＋ディスクリプタを抽出する。 */
+function computeFeatures(cv: Cv, orb: any, gray: any): { kp: any; des: any } {
   const kp = new cv.KeyPointVector()
   const des = new cv.Mat()
   const mask = new cv.Mat()
   orb.detectAndCompute(gray, mask, kp, des)
   mask.delete()
-  src.delete()
-  gray.delete()
-  return { kp, des, w: canvas.width, h: canvas.height }
+  return { kp, des }
 }
 
 /**
@@ -223,6 +272,9 @@ function matchAgainst(
     if (!quadIsPlausible(projected.data32F)) inliers = 0
     corners.delete()
     projected.delete()
+
+    // 良い対応のうち幾何的に整合した割合が低い＝カード面ではなく背景に散った偶然の一致。
+    if (inliers / good < MIN_INLIER_RATIO) inliers = 0
   }
 
   src.delete()
@@ -232,12 +284,26 @@ function matchAgainst(
   return inliers
 }
 
+// 直近1回の検出の内訳。しきい値（MIN_SHARPNESS / MATCH_MIN_INLIERS / MATCH_MARGIN）を
+// 実機で詰めるための観測用で、判定そのものには使わない。/detect の調整ラボが表示する。
+export interface MatchStats {
+  // ラプラシアン分散。MIN_SHARPNESS 未満なら blurred=true で検出をスキップした。
+  sharpness: number
+  blurred: boolean
+  // 1位・2位のインライア数（率のゲートで落ちたものは 0 になっている）。
+  bestLabel: string | null
+  bestInliers: number
+  secondInliers: number
+}
+
 export interface CardMatcher {
   // 参照画像の特徴量を事前計算し終えると解決する。
   ready: Promise<void>
   // 1フレーム照合する。throttle(DETECT_INTERVAL_MS)＋安定化(STABLE_FRAMES)を内部で行い、
   // 「確定中のマッチ」（無ければ null）を毎フレーム返す。戻り値は安定値なのでチラつかない。
   detect(video: HTMLVideoElement, now: number): CardMatch | null
+  // 直近の検出の内訳（間引き中は最後に検出した回の値）。しきい値調整用。
+  stats(): MatchStats | null
   // 確定状態を初期化する（Start のたびに呼ぶ）。
   reset(): void
   // OpenCV のリソースを解放する（アンマウント時に呼ぶ）。
@@ -249,6 +315,7 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
   const proc = document.createElement('canvas')
   let cv: Cv = null
   let orb: any = null
+  let clahe: any = null
   let signatures: Signature[] = []
   let disposed = false
 
@@ -256,6 +323,7 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
   let lastDetect = 0
   const stable: { id: string | null; count: number } = { id: null, count: 0 }
   let confirmed: CardMatch | null = null
+  let lastStats: MatchStats | null = null
 
   const ready = (async () => {
     const loaded = await loadCv()
@@ -272,6 +340,7 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
       31,
       ORB_FAST_THRESHOLD,
     )
+    clahe = createClahe(cv)
 
     const scratch = document.createElement('canvas')
     const sigs: Signature[] = []
@@ -279,8 +348,11 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
       const img = await loadImage(ref.url)
       if (disposed) return
       drawScaled(img, img.naturalWidth, img.naturalHeight, REF_MAX_WIDTH, scratch)
-      const { kp, des, w, h } = computeFeatures(cv, orb, scratch)
-      sigs.push({ ref, kp, des, w, h })
+      // フレーム側とまったく同じ前処理（グレースケール＋CLAHE）を通す。
+      const gray = toProcessedGray(cv, clahe, scratch)
+      const { kp, des } = computeFeatures(cv, orb, gray)
+      gray.delete()
+      sigs.push({ ref, kp, des, w: scratch.width, h: scratch.height })
     }
     if (disposed) {
       sigs.forEach((s) => {
@@ -299,16 +371,26 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
     if (now - lastDetect < DETECT_INTERVAL_MS) return confirmed
     lastDetect = now
 
-    // 処理用：PROCESS_WIDTH に縮小して特徴点抽出。
+    // 処理用：PROCESS_WIDTH に縮小し、参照画像と同じ前処理（グレースケール＋CLAHE）を通す。
     drawScaled(video, video.videoWidth, video.videoHeight, PROCESS_WIDTH, proc)
-    const frameSrc = cv.imread(proc)
-    const frameGray = new cv.Mat()
-    cv.cvtColor(frameSrc, frameGray, cv.COLOR_RGBA2GRAY)
-    const frameKp = new cv.KeyPointVector()
-    const frameDes = new cv.Mat()
-    const emptyMask = new cv.Mat()
-    orb.detectAndCompute(frameGray, emptyMask, frameKp, frameDes)
-    emptyMask.delete()
+    const frameGray = toProcessedGray(cv, clahe, proc)
+
+    // ブレ・ピンぼけフレームはここで捨てる。記述子が崩れていて誤マッチしか生まないので、
+    // 「判定を保留する」（＝確定値を維持し、安定化カウントも触らない）のが正しい扱い。
+    const sharp = sharpness(cv, frameGray)
+    if (sharp < MIN_SHARPNESS) {
+      lastStats = {
+        sharpness: sharp,
+        blurred: true,
+        bestLabel: null,
+        bestInliers: 0,
+        secondInliers: 0,
+      }
+      frameGray.delete()
+      return confirmed
+    }
+
+    const { kp: frameKp, des: frameDes } = computeFeatures(cv, orb, frameGray)
 
     // 各参照画像と照合し、インライア上位2件を求める。
     let best: { ref: CardRef; inliers: number } | null = null
@@ -327,10 +409,17 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
       matcher.delete()
     }
 
-    frameSrc.delete()
     frameGray.delete()
     frameKp.delete()
     frameDes.delete()
+
+    lastStats = {
+      sharpness: sharp,
+      blurred: false,
+      bestLabel: best?.ref.label ?? null,
+      bestInliers: best?.inliers ?? 0,
+      secondInliers: second,
+    }
 
     // 閾値を超え、かつ2位と十分差がついていれば確定候補。
     const confident =
@@ -353,11 +442,16 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
     return confirmed
   }
 
+  function stats(): MatchStats | null {
+    return lastStats
+  }
+
   function reset(): void {
     lastDetect = 0
     stable.id = null
     stable.count = 0
     confirmed = null
+    lastStats = null
   }
 
   function dispose(): void {
@@ -369,7 +463,9 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
     signatures = []
     orb?.delete?.()
     orb = null
+    clahe?.delete?.()
+    clahe = null
   }
 
-  return { ready, detect, reset, dispose }
+  return { ready, detect, stats, reset, dispose }
 }

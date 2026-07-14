@@ -6,7 +6,7 @@ import appleUrl from '#/assets/refs/apple.png'
 import bananaUrl from '#/assets/refs/banana.png'
 import grapeUrl from '#/assets/refs/grape.png'
 import agonekoUrl from '#/assets/refs/agoneko.png'
-import { createCardMatcher } from '../card'
+import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../card'
 import type { CardMatch, CardMatcher, CardRef } from '../card'
 import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner } from '../pose'
 import type { MediaPipeModules, RoutineRunner, RunnerState } from '../pose'
@@ -193,7 +193,11 @@ function HenshinPage() {
   async function handleStart() {
     if (!videoRef.current) return
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      // カード認証の精度は取得解像度に直結する（/auth と同じ指定に揃える）。
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: CAMERA_WIDTH }, height: { ideal: CAMERA_HEIGHT } },
+        audio: false,
+      })
       videoRef.current.srcObject = stream
       await videoRef.current.play()
       // フローを最初（カード認証）から開始

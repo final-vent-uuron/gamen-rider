@@ -6,8 +6,8 @@ import appleUrl from '#/assets/refs/apple.png'
 import bananaUrl from '#/assets/refs/banana.png'
 import grapeUrl from '#/assets/refs/grape.png'
 import agonekoUrl from '#/assets/refs/agoneko.png'
-import { createCardMatcher } from '../../card'
-import type { CardMatcher, CardRef } from '../../card'
+import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../../card'
+import type { CardMatcher, CardRef, MatchStats } from '../../card'
 import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner, customToRoutine } from '../../pose'
 import type { HenshinRoutine, MediaPipeModules, RoutineRunner, RunnerState } from '../../pose'
 import { cardToRiderId, emitHenshin } from '../../henshin'
@@ -47,10 +47,13 @@ function AuthPage() {
   const doneHandledRef = useRef(false)
   const lastUiRef = useRef(0)
   const lastCardLabelRef = useRef<string | null>(null)
+  const lastStatsUiRef = useRef(0)
 
   const [status, setStatus] = useState<Status>('loading')
   const [phase, setPhase] = useState<Phase>('card')
   const [cardLabel, setCardLabel] = useState<string | null>(null)
+  // カード認証の内訳（sharpness / インライア数）。しきい値調整と「なぜ通らないか」の把握用。
+  const [cardStats, setCardStats] = useState<MatchStats | null>(null)
   const [rider, setRider] = useState<Rider | null>(null)
   const [uiState, setUiState] = useState<RunnerState | null>(null)
 
@@ -103,7 +106,12 @@ function AuthPage() {
         mpRef.current = mp
         landmarkerRef.current = landmarker
 
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        // 解像度はカード認証の精度（＝どこまで離してかざせるか）に直結するので明示的に要求する。
+        // facingMode は指定しない：同じカメラでポーズ認証（自分が映る必要がある）も行うため。
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: CAMERA_WIDTH }, height: { ideal: CAMERA_HEIGHT } },
+          audio: false,
+        })
         const video = videoRef.current
         if (cancelled || !video) {
           stream.getTracks().forEach((t) => t.stop())
@@ -192,6 +200,11 @@ function AuthPage() {
       if (label !== lastCardLabelRef.current) {
         lastCardLabelRef.current = label
         setCardLabel(label)
+      }
+      // 内訳は毎フレーム setState すると重いので 200ms ごとに反映する。
+      if (now - lastStatsUiRef.current >= 200) {
+        lastStatsUiRef.current = now
+        setCardStats(matcherRef.current?.stats() ?? null)
       }
       drawCardOverlay(ctx, canvas, label)
       if (match) enterPose(match.id)
@@ -343,13 +356,29 @@ function AuthPage() {
         }}
       >
         {phase === 'card' && (
-          <span style={{ fontSize: '1.1rem' }}>
-            {status === 'running'
-              ? cardLabel
-                ? `カード認識中: ${cardLabel}`
-                : 'カードをカメラにかざしてください…'
-              : '準備中…'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem' }}>
+            <span style={{ fontSize: '1.1rem' }}>
+              {status === 'running'
+                ? cardLabel
+                  ? `カード認識中: ${cardLabel}`
+                  : 'カードをカメラにかざしてください…'
+                : '準備中…'}
+            </span>
+            {status === 'running' && cardStats && (
+              <span
+                style={{
+                  marginLeft: 'auto',
+                  fontFamily: 'monospace',
+                  fontSize: '0.85rem',
+                  color: cardStats.blurred ? '#fbbf24' : cardLabel ? '#4ade80' : '#9ca3af',
+                }}
+              >
+                {cardStats.blurred
+                  ? `ブレ検出 (sharp ${cardStats.sharpness.toFixed(0)})`
+                  : `sharp ${cardStats.sharpness.toFixed(0)} · ${cardStats.bestInliers}/${cardStats.secondInliers} pts`}
+              </span>
+            )}
+          </div>
         )}
 
         {phase === 'pose' && step && (
