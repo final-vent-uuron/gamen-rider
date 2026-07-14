@@ -4,9 +4,16 @@
 # 使い方（要 `npx wrangler login`）:
 #   pnpm models:setup    # 初回のみ: バケット作成 + r2.dev 公開 + CORS 設定
 #   pnpm models:upload   # public/model の使用中 GLB をアップロード（更新時も同じ）
-#   pnpm models:url      # 公開 URL（https://pub-….r2.dev）の確認
+#   pnpm models:url      # 開発用 URL（https://pub-….r2.dev）の確認
 #
-# 公開 URL は src/model-assets.ts の R2_PUBLIC_BASE_URL に貼ること（そこが配信元の既定になる）。
+# 本番の配信元はカスタムドメイン https://models.gamen-rider.com（CDN キャッシュが効く）。
+# バケットへの接続はセットアップ済み:
+#   npx wrangler r2 bucket domain add gamen-rider-models \
+#     --domain models.gamen-rider.com --zone-id bcf6a17300137f95761d4ed9f08fdd76
+# 配信元を変えるときは src/model-assets.ts の R2_PUBLIC_BASE_URL を更新する。
+#
+# 注意: Cache-Control を1年にしているため、モデルを差し替えるときは
+# 「同名で上書き」ではなくファイル名を変える（例: -v2 を付ける）こと。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -35,7 +42,8 @@ case "${1:-}" in
     for f in "${FILES[@]}"; do
       echo "==> $f"
       npx wrangler r2 object put "$BUCKET/$f" --file "public/model/$f" \
-        --content-type model/gltf-binary --remote
+        --content-type model/gltf-binary \
+        --cache-control "public, max-age=31536000" --remote
     done
     ;;
   url)

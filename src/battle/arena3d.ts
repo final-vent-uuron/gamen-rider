@@ -178,6 +178,20 @@ function loadGltfShared(url: string): Promise<GLTF> {
 	return p;
 }
 
+// バトル前の画面（認証中など）から呼び、使用する全 GLB を裏でロードしておく。
+// gltfCache に載るので、/battle 到達時にはダウンロードもパースも済んだ状態になる
+// （SPA 遷移でモジュールが生き続ける前提。リロードしてもブラウザの HTTP キャッシュは残る）。
+// 失敗したものはキャッシュから外し、バトル側の本ロードで再試行させる。
+export function preloadRiderModels(): void {
+	const urls = new Set<string>([
+		DEFAULT_RIDER_MODEL.url,
+		...Object.values(RIDER_MODELS).map((m) => m.url),
+	]);
+	for (const url of urls) {
+		loadGltfShared(url).catch(() => gltfCache.delete(url));
+	}
+}
+
 // ルートモーション除去: 各 position トラックから「最初→最後のキーへ直線的に進む
 // ドリフト成分」を差し引き、その場アニメに変換する。上下のバウンド等の周期成分は残り、
 // 最初と最後のキーが一致するのでループも綺麗に繋がる。

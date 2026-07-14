@@ -8,8 +8,8 @@
 // VITE_MODEL_BASE_URL（.env 等）を設定するとその値を優先する。
 // オフライン検証などで R2 を使えないときに `/model`（public/model のローカルファイル）へ
 // 切り替える用途。通常は未設定のままでよい。
-const R2_PUBLIC_BASE_URL =
-	"https://pub-7c2fbe2e557543dfba35d2c94333885e.r2.dev";
+// バケットのカスタムドメイン。r2.dev（開発用・レート制限あり）と違い CDN キャッシュが効く。
+const R2_PUBLIC_BASE_URL = "https://models.gamen-rider.com";
 
 export const MODEL_BASE_URL: string =
 	(import.meta.env?.VITE_MODEL_BASE_URL as string | undefined) ||
