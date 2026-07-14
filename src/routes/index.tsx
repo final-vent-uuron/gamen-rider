@@ -104,6 +104,92 @@ function Home() {
             </Link>
           ))}
         </div>
+      <h1 style={{ fontSize: '2.5rem', margin: 0 }}>Final Vent</h1>
+      <div style={{ display: 'flex', gap: '1rem' }}>
+        <Link
+          to="/pose"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#4ade80',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          Pose Detection →
+        </Link>
+        <Link
+          to="/detect"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#60a5fa',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          画像検知 →
+        </Link>
+        <Link
+          to="/henshin"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#a78bfa',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          変身フロー →
+        </Link>
+        <Link
+          to="/battle"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#f87171',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          バトル →
+        </Link>
+        <Link
+          to="/battle-test"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#fb923c',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          バトル検証 →
+        </Link>
+        <Link
+          to="/model-check"
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#fbbf24',
+            color: '#000',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontSize: '1.1rem',
+            fontWeight: 'bold',
+          }}
+        >
+          モデル検証 →
+        </Link>
       </div>
     </div>
   )

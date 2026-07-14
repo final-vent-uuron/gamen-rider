@@ -10,6 +10,7 @@ import {
   applyThrow,
   battleCardsFor,
   connectBattle,
+  createCameraGuardSource,
   createKeyboardSource,
   createSfx,
   meterStocks,
@@ -78,6 +79,7 @@ function BattlePage() {
   const [popups, setPopups] = useState<DamagePopup[]>([]) // 被弾ダメージ数字
   const [combo, setCombo] = useState<number | null>(null) // 進行中の最大コンボ数
   const [koFlash, setKoFlash] = useState(false) // KO の一瞬フラッシュ
+  const [camGuard, setCamGuard] = useState(false) // カメラがガードポーズを認識中か（表示用）
 
   const battleRef = useRef(battle)
   battleRef.current = battle
@@ -89,6 +91,7 @@ function BattlePage() {
   const finalActiveRef = useRef(false) // rAF ループから読む finalActive のミラー
   const netRef = useRef<BattleNet | null>(null)
   const sfxRef = useRef<Sfx | null>(null) // 効果音（WebAudio 合成）
+  const ventVideoRef = useRef<HTMLVideoElement>(null) // 右下カメラの <video>（ポーズ解析と共有）
   const comboTimerRef = useRef(0)
   const popupKeyRef = useRef(0)
   const koOrderRef = useRef<string[]>([]) // 撃墜された順（順位付け用。先頭＝最初に落ちた＝下位）
@@ -267,6 +270,18 @@ function BattlePage() {
     const applyPred = (fn: (s: BattleState) => BattleState) => {
       if (predRef.current && youIdRef.current) predRef.current = fn(predRef.current)
     }
+    // ガードはキーボードとカメラ（ボクシングの構え）の2系統。どちらかが on なら on（OR 合成）。
+    // カメラの構えを解いてもキーを押していればガード継続、の直感的な挙動にする。
+    const guardParts = { key: false, cam: false }
+    const setGuardPart = (part: keyof typeof guardParts, on: boolean) => {
+      if (guardParts[part] === on) return
+      guardParts[part] = on
+      const merged = guardParts.key || guardParts.cam
+      if (merged !== guardRef.current) {
+        guardRef.current = merged
+        net.sendGuard(merged)
+      }
+    }
     const source = createKeyboardSource((input) => {
       sfxRef.current?.resume()
       const now = Date.now()
@@ -291,8 +306,7 @@ function BattlePage() {
           sfxRef.current?.whiff()
           break
         case 'guard':
-          guardRef.current = input.on
-          net.sendGuard(input.on)
+          setGuardPart('key', input.on)
           break
         case 'throw':
           net.sendThrow()
@@ -316,8 +330,19 @@ function BattlePage() {
     })
     source.start()
 
+    // カメラガード: 右下カメラの映像で「ボクシングの構え」を認識している間、強制的にガード。
+    const camSource = createCameraGuardSource(
+      () => ventVideoRef.current,
+      (on) => {
+        setGuardPart('cam', on)
+        setCamGuard(on)
+      },
+    )
+    camSource.start()
+
     return () => {
       source.stop()
+      camSource.stop()
       net.close()
       netRef.current = null
       window.clearTimeout(finalTimerRef.current)
@@ -509,8 +534,8 @@ function BattlePage() {
         <ControlsHelp />
       </div>
 
-      {/* 右下カメラ（ファイナルベント用。CLAUDE.md: 常時表示） */}
-      <FinalVentCam highlight={finalActive} />
+      {/* 右下カメラ（ファイナルベント＋カメラガード用。CLAUDE.md: 常時表示） */}
+      <FinalVentCam highlight={finalActive} guarding={camGuard} videoRef={ventVideoRef} />
 
       {/* ファイナルベント演出 */}
       {finalActive && <FinalVentBanner />}
@@ -909,6 +934,7 @@ function ControlsHelp() {
     ['J', 'パンチ(軽・発生早)'],
     ['K', 'キック(重・主力)'],
     ['Shift / S / ↓', 'ガード(押しっぱ・前後OK)'],
+    ['📷 構え', 'カメラにボクシングの構え(両拳を顔の前)でガード'],
     ['U', '投げ(ガード崩し)'],
     ['I', '波動弾(飛び道具・1発ずつ)'],
     ['E', '暴れ(1ゲージ・割り込み脱出)'],
@@ -945,10 +971,18 @@ function ControlsHelp() {
   )
 }
 
-// ---- 右下カメラ（ファイナルベント用） ------------------------------------
+// ---- 右下カメラ（ファイナルベント＋カメラガード用） ----------------------
+// videoRef は親から受け取り、カメラガード（MediaPipe ポーズ解析）と映像を共有する。
 
-function FinalVentCam({ highlight }: { highlight: boolean }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
+function FinalVentCam({
+  highlight,
+  guarding,
+  videoRef,
+}: {
+  highlight: boolean
+  guarding: boolean
+  videoRef: React.RefObject<HTMLVideoElement | null>
+}) {
   const [state, setState] = useState<'idle' | 'on' | 'error'>('idle')
 
   async function enable() {
@@ -984,8 +1018,12 @@ function FinalVentCam({ highlight }: { highlight: boolean }) {
         borderRadius: '10px',
         overflow: 'hidden',
         background: '#000',
-        border: highlight ? '3px solid #a78bfa' : '2px solid #334155',
-        boxShadow: highlight ? '0 0 20px #a78bfa' : '0 4px 12px rgba(0,0,0,0.4)',
+        border: highlight ? '3px solid #a78bfa' : guarding ? '3px solid #7fdfff' : '2px solid #334155',
+        boxShadow: highlight
+          ? '0 0 20px #a78bfa'
+          : guarding
+            ? '0 0 20px #7fdfff'
+            : '0 4px 12px rgba(0,0,0,0.4)',
         transition: 'border 0.2s, box-shadow 0.2s',
         zIndex: 50,
       }}
@@ -1010,6 +1048,25 @@ function FinalVentCam({ highlight }: { highlight: boolean }) {
       >
         FINAL VENT CAM
       </span>
+      {/* カメラガード認識中の表示（構えている間ガード状態） */}
+      {guarding && (
+        <span
+          style={{
+            position: 'absolute',
+            right: '6px',
+            bottom: '4px',
+            fontSize: '0.7rem',
+            fontWeight: 900,
+            color: '#001b22',
+            background: '#7fdfff',
+            padding: '1px 8px',
+            borderRadius: '4px',
+            letterSpacing: '0.08em',
+          }}
+        >
+          GUARD
+        </span>
+      )}
       {state !== 'on' && (
         <button
           type="button"
