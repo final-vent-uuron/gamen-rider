@@ -20,7 +20,9 @@ export type WorkerMsg =
 
 let landmarker: PoseLandmarker | null = null
 
-createPoseLandmarker('lite').then(
+// lite + CPU: バトル画面は three.js が GPU を使い切るため、推論も GPU に載せると
+// ワーカーからでも描画とぶつかってカクつく。CPU(WASM) 推論ならワーカーのスレッドで完結する。
+createPoseLandmarker('lite', 'CPU').then(
   ({ landmarker: l }) => {
     landmarker = l
     postMessage({ t: 'ready' } satisfies WorkerMsg)

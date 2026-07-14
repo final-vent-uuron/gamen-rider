@@ -16,7 +16,14 @@ export type PoseModel = keyof typeof MODEL_URLS
 
 // MediaPipe PoseLandmarker を生成する。pose.tsx（調整ラボ）と henshin.tsx（変身フロー）が共有する。
 // クライアント（ブラウザ）でのみ呼ぶこと。返り値の mp は描画ユーティリティ用に保持する。
-export async function createPoseLandmarker(model: PoseModel = 'full'): Promise<{
+// delegate:
+//   GPU（既定）… 推論が速い。変身フローなど 3D 描画と同居しない画面向け。
+//   CPU        … three.js と同居する画面（バトル中のカメラガード）向け。GPU 推論は
+//                ワーカーに移しても同じ GPU を奪い合って描画を止めるため、CPU で回す。
+export async function createPoseLandmarker(
+  model: PoseModel = 'full',
+  delegate: 'GPU' | 'CPU' = 'GPU',
+): Promise<{
   mp: MediaPipeModules
   landmarker: PoseLandmarker
 }> {
@@ -25,7 +32,7 @@ export async function createPoseLandmarker(model: PoseModel = 'full'): Promise<{
   const landmarker = await mp.PoseLandmarker.createFromOptions(vision, {
     baseOptions: {
       modelAssetPath: MODEL_URLS[model],
-      delegate: 'GPU',
+      delegate,
     },
     runningMode: 'VIDEO',
     numPoses: 1,

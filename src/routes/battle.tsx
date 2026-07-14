@@ -1007,7 +1007,16 @@ function FinalVentCam({
 
   async function enable() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      // 解像度・fps は低めに要求する。この映像は 180px のプレビューと構え判定（320px に
+      // 縮小して解析）にしか使わないので、高解像度・高 fps はデコード/合成の無駄な負荷になる。
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 15, max: 24 },
+        },
+        audio: false,
+      })
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
