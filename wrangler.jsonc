@@ -1,17 +1,25 @@
 {
-  // Cloudflare Workers（Git連携 / `wrangler deploy`）用設定。SSR 構成。
-  // TanStack Start が出力する dist/server/server.js（export default { fetch }）を
-  // そのまま module worker の main として載せ、dist/client を静的資産として配信する。
-  // name は Cloudflare 側のプロジェクト名に合わせること。
-  "name": "gamen-rider",
-  "main": "dist/server/server.js",
-  "compatibility_date": "2025-05-05",
-  // server.js は node:http / async_hooks / process 等を使うため必須。
-  "compatibility_flags": ["nodejs_compat"],
-  "assets": {
-    // クライアント資産。パスが一致する静的ファイルは worker より先に配信され、
-    // 一致しないルート（/, /detect 等）は worker(SSR) が処理する。
-    "directory": "dist/client",
-    "binding": "ASSETS"
-  }
+	// Cloudflare Workers（Git連携 / `wrangler deploy`）用設定。SSR 構成。
+	// TanStack Start が出力する dist/server/server.js（export default { fetch }）を
+	// そのまま module worker の main として載せ、dist/client を静的資産として配信する。
+	// name は Cloudflare 側のプロジェクト名に合わせること。
+	"name": "gamen-rider",
+	"main": "dist/server/server.js",
+	"compatibility_date": "2025-05-05",
+	// server.js は node:http / async_hooks / process 等を使うため必須。
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"assets": {
+		// クライアント資産。パスが一致する静的ファイルは worker より先に配信され、
+		// 一致しないルート（/, /detect 等）は worker(SSR) が処理する。
+		"directory": "dist/client",
+		"binding": "ASSETS"
+	},
+	"r2_buckets": [
+		{
+			"bucket_name": "gamen-rider-models",
+			"binding": "gamen_rider_models"
+		}
+	]
 }
