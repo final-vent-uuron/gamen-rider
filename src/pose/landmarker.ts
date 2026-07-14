@@ -4,13 +4,19 @@ import type { PoseLandmarker } from '@mediapipe/tasks-vision'
 export type MediaPipeModules = typeof import('@mediapipe/tasks-vision')
 
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm'
-// full モデル: lite よりランドマーク（特に z）が安定し認識精度が上がる
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
+// full: lite よりランドマーク（特に z）が安定し認識精度が上がる → 変身のポーズ認証用。
+// lite: 推論が軽い（メインスレッドを塞ぐ時間が短い）→ バトル中のカメラガード用。
+//       ガード判定（両拳が顔の前）は大まかな位置関係しか見ないので lite で足りる。
+const MODEL_URLS = {
+  full: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
+  lite: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+} as const
+
+export type PoseModel = keyof typeof MODEL_URLS
 
 // MediaPipe PoseLandmarker を生成する。pose.tsx（調整ラボ）と henshin.tsx（変身フロー）が共有する。
 // クライアント（ブラウザ）でのみ呼ぶこと。返り値の mp は描画ユーティリティ用に保持する。
-export async function createPoseLandmarker(): Promise<{
+export async function createPoseLandmarker(model: PoseModel = 'full'): Promise<{
   mp: MediaPipeModules
   landmarker: PoseLandmarker
 }> {
@@ -18,7 +24,7 @@ export async function createPoseLandmarker(): Promise<{
   const vision = await mp.FilesetResolver.forVisionTasks(WASM_BASE)
   const landmarker = await mp.PoseLandmarker.createFromOptions(vision, {
     baseOptions: {
-      modelAssetPath: MODEL_URL,
+      modelAssetPath: MODEL_URLS[model],
       delegate: 'GPU',
     },
     runningMode: 'VIDEO',

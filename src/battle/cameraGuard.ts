@@ -7,7 +7,9 @@ import { createPoseLandmarker } from '../pose/landmarker'
 import { isBoxingGuard } from '../pose/poses'
 import type { InputSource } from './input'
 
-const DETECT_INTERVAL_MS = 80 // 解析周期（~12fps）。three.js と同居するので毎フレームは回さない
+// 解析周期。detectForVideo はメインスレッドを同期的に塞ぐため、three.js の 60fps 描画と
+// 同居するには回数を絞るしかない（lite モデル併用で 1 回あたりの停止時間も短くする）。
+const DETECT_INTERVAL_MS = 150
 const ON_FRAMES = 2 // 連続何回「構え」を見たら guard on（誤爆防止）
 const OFF_FRAMES = 3 // 連続何回見失ったら guard off（ちらつき防止）
 
@@ -63,7 +65,8 @@ export function createCameraGuardSource(
       if (running) return
       running = true
       // モデルのロードは重いので非同期。stop 済みなら即クローズ。
-      createPoseLandmarker()
+      // バトル中は描画優先なので軽量な lite モデル（構え判定には十分）。
+      createPoseLandmarker('lite')
         .then(({ landmarker: l }) => {
           if (!running) {
             l.close()

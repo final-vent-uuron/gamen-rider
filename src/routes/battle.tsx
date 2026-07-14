@@ -89,6 +89,7 @@ function BattlePage() {
 
   const battleRef = useRef(battle)
   battleRef.current = battle
+  const lastUiSyncRef = useRef(0) // setBattle（React 再レンダー）の間引き用
   const youIdRef = useRef('') // 自分のプレイヤー id（サーバーが welcome で通知）
   const rafRef = useRef(0)
   const finalTimerRef = useRef(0)
@@ -265,7 +266,18 @@ function BattlePage() {
         processEvents(prev, next, youId)
         reconcilePrediction(next, youId)
         battleRef.current = next
-        setBattle(next)
+        // サーバー配信は 60Hz だが、React の再レンダー（HP バー・ゲージ・カード等の UI）まで
+        // 60Hz で回すと three.js の描画ループとメインスレッドを取り合ってガタつく。
+        // 3D 描画は rAF ループが battleRef を直接読むので毎フレーム反映される。
+        // setBattle は約 10Hz に間引く（HP バーは transition 0.25s なので見た目は滑らかなまま）。
+        // 参加人数の増減と決着だけは UI 即時反映（決着は /result 遷移のトリガでもある）。
+        const nowMs = performance.now()
+        const structural =
+          prev.players.length !== next.players.length || prev.winnerId !== next.winnerId
+        if (structural || nowMs - lastUiSyncRef.current >= 100) {
+          lastUiSyncRef.current = nowMs
+          setBattle(next)
+        }
       },
     })
     netRef.current = net
