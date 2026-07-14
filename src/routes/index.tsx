@@ -85,6 +85,7 @@ function Home() {
               { to: '/henshin', label: '変身フロー(旧)' },
               { to: '/battle', label: 'バトル単体' },
               { to: '/auth/register', label: 'ライダー登録' },
+              { to: '/bluetooth', label: 'Bluetooth' },
             ] as const
           ).map((l) => (
             <Link

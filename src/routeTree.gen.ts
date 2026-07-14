@@ -13,6 +13,7 @@ import { Route as ResultRouteImport } from './routes/result'
 import { Route as PoseRouteImport } from './routes/pose'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
+import { Route as BluetoothRouteImport } from './routes/bluetooth'
 import { Route as BattleRouteImport } from './routes/battle'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthIndexRouteImport } from './routes/auth/index'
@@ -36,6 +37,11 @@ const HenshinRoute = HenshinRouteImport.update({
 const DetectRoute = DetectRouteImport.update({
   id: '/detect',
   path: '/detect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BluetoothRoute = BluetoothRouteImport.update({
+  id: '/bluetooth',
+  path: '/bluetooth',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BattleRoute = BattleRouteImport.update({
@@ -62,6 +68,7 @@ const AuthRegisterRoute = AuthRegisterRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/battle': typeof BattleRoute
+  '/bluetooth': typeof BluetoothRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
@@ -72,6 +79,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/battle': typeof BattleRoute
+  '/bluetooth': typeof BluetoothRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/battle': typeof BattleRoute
+  '/bluetooth': typeof BluetoothRoute
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/pose': typeof PoseRoute
@@ -95,6 +104,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/battle'
+    | '/bluetooth'
     | '/detect'
     | '/henshin'
     | '/pose'
@@ -105,6 +115,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/battle'
+    | '/bluetooth'
     | '/detect'
     | '/henshin'
     | '/pose'
@@ -115,6 +126,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/battle'
+    | '/bluetooth'
     | '/detect'
     | '/henshin'
     | '/pose'
@@ -126,6 +138,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BattleRoute: typeof BattleRoute
+  BluetoothRoute: typeof BluetoothRoute
   DetectRoute: typeof DetectRoute
   HenshinRoute: typeof HenshinRoute
   PoseRoute: typeof PoseRoute
@@ -164,6 +177,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DetectRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bluetooth': {
+      id: '/bluetooth'
+      path: '/bluetooth'
+      fullPath: '/bluetooth'
+      preLoaderRoute: typeof BluetoothRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/battle': {
       id: '/battle'
       path: '/battle'
@@ -198,6 +218,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BattleRoute: BattleRoute,
+  BluetoothRoute: BluetoothRoute,
   DetectRoute: DetectRoute,
   HenshinRoute: HenshinRoute,
   PoseRoute: PoseRoute,

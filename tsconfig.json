@@ -10,7 +10,8 @@
       "#/*": ["./src/*"]
     },
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client", "node"],
+    // Web Bluetooth (navigator.bluetooth) は DOM lib に含まれないので型を足す。
+    "types": ["vite/client", "node", "web-bluetooth"],
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
