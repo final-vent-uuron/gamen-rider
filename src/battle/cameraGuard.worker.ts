@@ -28,7 +28,11 @@ createPoseLandmarker('lite', 'CPU').then(
     landmarker = l
     postMessage({ t: 'ready' } satisfies WorkerMsg)
   },
-  () => postMessage({ t: 'error' } satisfies WorkerMsg),
+  (err) => {
+    // 失敗理由はページの console に出る（原因調査用。UI には 'error' 状態だけ渡す）
+    console.error('[cameraGuard.worker] pose init failed:', err)
+    postMessage({ t: 'error' } satisfies WorkerMsg)
+  },
 )
 
 self.onmessage = (ev: MessageEvent<FrameMsg>) => {

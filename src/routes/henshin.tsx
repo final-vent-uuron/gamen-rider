@@ -52,12 +52,13 @@ function HenshinPage() {
 
   const navigate = useNavigate()
 
-  // 変身成立の演出を少し見せてから、バトル画面へ自動遷移（issue #24）。
+  // 変身成立の演出を少し見せてから、センサーペアリング画面へ自動遷移。
+  // （/pairing でリングの接続・入力テストをしてから「バトルへ →」で /battle に進む）
   // Stop / やり直し で phase が変わると setTimeout はクリーンアップで解除される。
   useEffect(() => {
     if (phase !== 'done' || !rider || status !== 'running') return
     const t = setTimeout(() => {
-      navigate({ to: '/battle', search: { rider: rider.id } })
+      navigate({ to: '/pairing', search: { rider: rider.id } })
     }, 1200)
     return () => clearTimeout(t)
   }, [phase, rider, status, navigate])

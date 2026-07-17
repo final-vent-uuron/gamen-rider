@@ -18,10 +18,13 @@ const THRUST_Z_MARGIN = 0.05 // 手首が肩よりカメラ手前にある量（
 const THRUST_SIDE_MAX = 0.8 // 突き出し手首が横へ開きすぎない上限（肩幅比）
 
 // ボクシングガード（両拳を顔の前に構える）
-const GUARD_ELBOW_BEND_MAX_DEG = 120 // 肘を曲げている（伸ばした腕＝パンチ/Tポーズを除外）
-const GUARD_WRIST_ABOVE_ELBOW = 0.05 // 手首が肘より上にある量（肩幅比）
-const GUARD_WRIST_DROP_TOL = 0.35 // 手首が肩より下がってよい量（肩幅比）。拳は顔〜胸の高さ。
-const GUARD_WRIST_SIDE_MAX = 1.0 // 手首が体の中心から横へ開きすぎない上限（肩幅比）
+// バトル中の実用入力なので認証ポーズよりだいぶ緩い（「肘を曲げて両手を上げていれば」成立）。
+// lite モデル＋CPU 推論は z がノイジーで、厳しくすると構えているのに通らない。
+const GUARD_MIN_VIS = 0.2 // ガード専用の可視性下限（拳がカメラに近く画面端でも判定できるよう緩め）
+const GUARD_ELBOW_BEND_MAX_DEG = 150 // 肘が伸び切っていなければよい（パンチ/Tポーズの除外だけ）
+const GUARD_WRIST_ABOVE_ELBOW = -0.15 // 手首は肘よりこの分（肩幅比）下がるまで許容（負 = 肘より下も可）
+const GUARD_WRIST_DROP_TOL = 0.75 // 手首が肩より下がってよい量（肩幅比）。拳は顔〜みぞおちの高さ。
+const GUARD_WRIST_SIDE_MAX = 1.4 // 手首が体の中心から横へ開きすぎない上限（肩幅比）
 
 const ARM_IDS = [
   LM.L_SHOULDER,
@@ -107,14 +110,14 @@ export function isArmThrustForward(lm: Lm): boolean {
 // ボクシングのガード: 両拳（手首）を顔〜胸の高さまで上げ、肘を曲げて体の前に構える。
 // バトル中のカメラガード（構えている間ガード状態）に使う。左右対称なので鏡像表示の影響なし。
 export function isBoxingGuard(lm: Lm): boolean {
-  if (!allVisible(lm, ARM_IDS, MIN_VIS)) return false
+  if (!allVisible(lm, ARM_IDS, GUARD_MIN_VIS)) return false
   const sw = shoulderWidth(lm)
   const centerX = (lm[LM.L_SHOULDER].x + lm[LM.R_SHOULDER].x) / 2
   return ARMS.every((arm) => {
     const [s, e, w] = arm
-    // 肘が曲がっている（伸びた腕は構えではない）
+    // 肘が伸び切っていない（伸びた腕は構えではない）
     if (armStraightness3d(lm, arm) > GUARD_ELBOW_BEND_MAX_DEG) return false
-    // 拳が肘よりはっきり上（y は下向き正）
+    // 拳が肘のあたりより上（y は下向き正。多少下がっても許容）
     if (lm[w].y > lm[e].y - GUARD_WRIST_ABOVE_ELBOW * sw) return false
     // 拳が顔〜胸の高さ（肩より大きく下がっていない）
     if (lm[w].y > lm[s].y + GUARD_WRIST_DROP_TOL * sw) return false

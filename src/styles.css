@@ -139,6 +139,42 @@ body,
   }
 }
 
+/* リザルト: 電脳空間の星のまばたき */
+@keyframes starTwinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* リザルト: 漂うコード片（ゆっくり上下に浮遊） */
+@keyframes codeDrift {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateY(-14px);
+    opacity: 0.7;
+  }
+}
+
+/* リザルト: 敗者（倒れたライダー）のフェードイン（静かに現れる。勝者のポップとは対照的に） */
+@keyframes fallenIn {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 /* リザルト: 勝者の背後で回る後光 */
 @keyframes winnerRays {
   from {

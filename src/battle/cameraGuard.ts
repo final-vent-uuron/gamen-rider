@@ -10,10 +10,13 @@ import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
 import type { FrameMsg, WorkerMsg } from './cameraGuard.worker'
 import type { InputSource } from './input'
 
-const DETECT_INTERVAL_MS = 100 // 解析周期（~10fps）。推論はワーカー側なのでこの間隔は転送頻度の上限
+const DETECT_INTERVAL_MS = 66 // 解析周期（~15fps）。推論は別スレッドの CPU なので描画への影響はない
 const BITMAP_WIDTH = 320 // 転送前に縮小（lite モデルの入力は小さいので精度への影響なし・転送も軽い）
 const ON_FRAMES = 2 // 連続何回「構え」を見たら guard on（誤爆防止）
 const OFF_FRAMES = 3 // 連続何回見失ったら guard off（ちらつき防止）
+
+// ポーズ解析パイプラインの状態。UI に出して「なぜ骨格が出ないか」を見えるようにする。
+export type CameraGuardStatus = 'loading' | 'ready' | 'error'
 
 export function createCameraGuardSource(
   getVideo: () => HTMLVideoElement | null,
@@ -21,6 +24,8 @@ export function createCameraGuardSource(
   // 検出結果ごとに呼ぶ（未検出は null）。プレビューの骨格オーバーレイ用。
   // 第2引数はデバウンス後の現在のガード状態（線の色分けに使う）。
   onLandmarks?: (lm: NormalizedLandmark[] | null, guarding: boolean) => void,
+  // ワーカー/モデルの読み込み状態（loading → ready / error）。表示用。
+  onStatus?: (status: CameraGuardStatus) => void,
 ): InputSource {
   let running = false
   let rafId = 0
@@ -89,6 +94,7 @@ export function createCameraGuardSource(
     start() {
       if (running) return
       running = true
+      onStatus?.('loading')
       worker = new Worker(new URL('./cameraGuard.worker.ts', import.meta.url), {
         type: 'module',
       })
@@ -96,16 +102,20 @@ export function createCameraGuardSource(
         const msg = ev.data
         if (msg.t === 'ready') {
           workerReady = true
+          onStatus?.('ready')
         } else if (msg.t === 'result') {
           busy = false
           onResult(msg.posed)
           onLandmarks?.(msg.landmarks, guarding)
+        } else if (msg.t === 'error') {
+          // モデル/WASM の取得失敗等。カメラガードは無効のまま継続（キーボードガードは生きている）
+          onStatus?.('error')
         }
-        // 'error'（モデル取得失敗＝オフライン等）はカメラガード無効のまま静かに継続
       }
       worker.onerror = () => {
-        // ワーカー自体の起動失敗も無効のまま継続（キーボードガードは生きている）
+        // ワーカー自体の起動失敗も無効のまま継続
         workerReady = false
+        onStatus?.('error')
       }
       rafId = requestAnimationFrame(loop)
     },

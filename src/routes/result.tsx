@@ -4,10 +4,10 @@ import { useEffect, useMemo, useRef } from 'react'
 import { playWinBgm } from '../battle/bgm'
 import type { WinnerPresenter } from '../battle/winner3d'
 
-// 勝者（リザルト）ページ。スマブラのリザルト画面イメージ。
-//   - 1位を巨大に見せる（月桂樹の「1」＋ Pペナント ＋ 巨大な名前 ＋ 立ち絵プレースホルダ）
-//   - 2位以降は左下に斜めの小カード（順位バッジ＋ポートレート＋Pタグ）
-//   - 背景はステージ風の夕景
+// 勝者（リザルト）ページ。バトルロワイヤルの決着後シーン。
+//   - 勝者は画面中央に大きく（王冠＋後光＋月桂樹の「1」＋巨大な名前）
+//   - 敗者は death モーションで倒れたまま周囲に散らばる（暗め・低彩度）
+//   - 背景はバトルと同じ「Webワールド（電脳空間）」: 星ノイズ・コード片・遠近グリッドの床
 //
 // バトル画面（/battle）は決着を検知すると、全順位を players（1位→最下位）に載せて遷移してくる。
 // WebSocket 接続はバトル画面の unmount で閉じるので、この画面は受け取った順位を描くだけ。
@@ -51,6 +51,16 @@ function hexToInt(hex: string): number {
   return Number.isNaN(n) ? 0xa78bfa : n
 }
 
+// 漂うコード片（Webワールドの空気づけ。リザルトの状況を模したスニペット）。
+const CODE_FRAGMENTS: { text: string; top: string; left?: string; right?: string }[] = [
+  { text: 'if (survivor) crown();', top: '16%', left: '4%' },
+  { text: '</battle>', top: '28%', right: '5%' },
+  { text: 'rank.sort((a, b) => a - b)', top: '52%', left: '2%' },
+  { text: '0111 0111 0110 1001 0110 1110', top: '10%', right: '20%' },
+  { text: 'GAME_SET = true;', top: '44%', right: '3%' },
+  { text: 'respawn --lobby', top: '62%', right: '12%' },
+]
+
 // 順位バッジの色（1=金 / 2=銀 / 3=銅 / 以降=青）。数字テキストのメタリック塗り。
 const RANK_METAL: Record<number, [string, string, string]> = {
   1: ['#fff6a8', '#ffd21e', '#b8860b'],
@@ -69,26 +79,19 @@ function ResultPage() {
   // 勝利ジングル（win-bgm）。バトル画面が main BGM をフェードアウトさせてから遷移してくる。
   useEffect(() => playWinBgm(), [])
 
-  // 勝者の 3D 立ち絵。three は動的 import（クライアント専用・SSR 回避）でマウントする。
-  // arena3d と同じアバター抽象なので、RIDER_MODELS に GLB を足せばここも自動で 3D モデルに。
-  const stageHostRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!winner) return
-    let disposed = false
-    let presenter: WinnerPresenter | null = null
-    import('../battle/winner3d').then(({ createWinnerPresenter }) => {
-      if (disposed || !stageHostRef.current) return
-      presenter = createWinnerPresenter(stageHostRef.current, {
-        riderId: winner.riderId,
-        color: hexToInt(winner.color),
-        action: 'idle',
-      })
-    })
-    return () => {
-      disposed = true
-      presenter?.dispose()
-    }
-  }, [winner?.riderId, winner?.color])
+  // 星（電脳ノイズ粒）の配置はマウント時に一度だけ確定させる。
+  const stars = useMemo(
+    () =>
+      Array.from({ length: 34 }).map((_, i) => ({
+        key: i,
+        left: Math.random() * 100,
+        top: Math.random() * 58, // 地平線より上だけ
+        size: 1 + Math.round(Math.random() * 2),
+        delay: Math.random() * 3,
+        cyan: i % 3 === 0,
+      })),
+    [],
+  )
 
   // 紙吹雪の見た目はマウント時に一度だけ確定させる（毎レンダーで飛ばないように）。
   const confetti = useMemo(
@@ -135,33 +138,85 @@ function ResultPage() {
         minHeight: '100vh',
         overflow: 'hidden',
         color: '#fff',
-        // ステージ風の夕景（上＝空 → 下＝夕焼け）。
+        // Webワールド（電脳空間）の空。バトル画面（arena3d の backdrop）と同じ世界観。
         background:
-          'linear-gradient(180deg, #7fb0ef 0%, #b8cdec 26%, #f3d7a6 58%, #ff9f5c 88%, #f4854a 100%)',
+          'radial-gradient(ellipse at 50% 18%, #1b2a52 0%, #101a33 45%, #0b1220 72%, #070b16 100%)',
       }}
     >
-      {/* 雲（ふわっとした白い塊を数個） */}
-      {[
-        { top: '12%', left: '8%', w: 220 },
-        { top: '20%', left: '55%', w: 300 },
-        { top: '6%', left: '78%', w: 180 },
-      ].map((c, i) => (
-        <div
-          key={i}
+      {/* 星（電脳空間のノイズ粒。まばたきする） */}
+      {stars.map((s) => (
+        <span
+          key={s.key}
           style={{
             position: 'absolute',
-            top: c.top,
-            left: c.left,
-            width: c.w,
-            height: c.w * 0.36,
-            background: 'radial-gradient(closest-side, rgba(255,255,255,0.85), rgba(255,255,255,0))',
-            filter: 'blur(4px)',
+            left: `${s.left}%`,
+            top: `${s.top}%`,
+            width: `${s.size}px`,
+            height: `${s.size}px`,
+            borderRadius: '50%',
+            background: s.cyan ? '#7fd4ff' : '#dbeafe',
+            boxShadow: s.cyan ? '0 0 6px #38bdf8' : '0 0 4px #fff',
+            animation: `starTwinkle ${2 + s.delay}s ease-in-out ${s.delay}s infinite`,
             pointerEvents: 'none',
           }}
         />
       ))}
 
-      {/* 下部の暗いステージ床（カードを乗せる土台の陰） */}
+      {/* 漂うコード片（この世界がプログラムでできていることを匂わせる） */}
+      {CODE_FRAGMENTS.map((f, i) => (
+        <span
+          key={i}
+          style={{
+            position: 'absolute',
+            top: f.top,
+            left: f.left,
+            right: f.right,
+            fontFamily: 'monospace',
+            fontSize: 'clamp(0.7rem, 1.4vw, 0.95rem)',
+            color: 'rgba(56,189,248,0.45)',
+            textShadow: '0 0 10px rgba(56,189,248,0.35)',
+            animation: `codeDrift ${6 + (i % 3)}s ease-in-out ${i * 0.9}s infinite`,
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {f.text}
+        </span>
+      ))}
+
+      {/* 電脳グリッドの床（地平線へ向かう遠近グリッド。バトルステージの床と同じ意匠） */}
+      <div
+        style={{
+          position: 'absolute',
+          left: '-15%',
+          right: '-15%',
+          bottom: 0,
+          height: '42%',
+          backgroundImage:
+            'repeating-linear-gradient(90deg, rgba(56,189,248,0.25) 0 2px, transparent 2px 90px), repeating-linear-gradient(0deg, rgba(56,189,248,0.25) 0 2px, transparent 2px 60px)',
+          transform: 'perspective(320px) rotateX(58deg)',
+          transformOrigin: '50% 100%',
+          maskImage: 'linear-gradient(180deg, transparent 0%, #000 55%)',
+          WebkitMaskImage: 'linear-gradient(180deg, transparent 0%, #000 55%)',
+          pointerEvents: 'none',
+        }}
+      />
+      {/* 地平線のネオンライン */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: '42%',
+          height: '2px',
+          background:
+            'linear-gradient(90deg, transparent, rgba(56,189,248,0.55) 30%, rgba(167,139,250,0.55) 70%, transparent)',
+          boxShadow: '0 0 18px rgba(56,189,248,0.35)',
+          pointerEvents: 'none',
+        }}
+      />
+
+      {/* 下部の暗い床の陰（キャラを立たせる土台） */}
       <div
         style={{
           position: 'absolute',
@@ -169,7 +224,7 @@ function ResultPage() {
           right: 0,
           bottom: 0,
           height: '34%',
-          background: 'linear-gradient(180deg, rgba(10,8,20,0) 0%, rgba(10,8,20,0.55) 60%, rgba(6,5,12,0.85) 100%)',
+          background: 'linear-gradient(180deg, rgba(7,11,22,0) 0%, rgba(7,11,22,0.55) 60%, rgba(4,7,14,0.9) 100%)',
           pointerEvents: 'none',
         }}
       />
@@ -194,63 +249,61 @@ function ResultPage() {
         ))}
       </div>
 
-      {/* 勝者の立ち絵（右側・3D）。中身は winner3d が three.js で描く（GLB 登録で自動差し替え）。 */}
+      {/* 敗者たち（バトルロワイヤルの戦場跡: death モーションで倒れたまま周囲に散らばる）。
+          勝者より奥（zIndex 0）・暗め・彩度低めで「決着後」の空気を出す。 */}
+      {losers.map((pl, i) => {
+        const spot = FALLEN_SPOTS[i % FALLEN_SPOTS.length]
+        return (
+          <div
+            key={`${pl.p}-${i}`}
+            style={{
+              position: 'absolute',
+              ...spot.style,
+              zIndex: 0,
+              animation: `fallenIn 0.7s ease-out ${0.35 + i * 0.15}s both`,
+            }}
+          >
+            <FallenStandee entry={pl} rank={i + 2} facingDeg={spot.facingDeg} />
+          </div>
+        )
+      })}
+
+      {/* 勝者（画面中央・大きく。王冠＋後光つき）。
+          センタリングは margin auto（winnerPop が transform を上書きするため translateX は使えない） */}
       <div
         style={{
           position: 'absolute',
-          right: '2%',
+          left: 0,
+          right: 0,
+          marginInline: 'auto',
           bottom: 0,
-          width: 'clamp(240px, 32vw, 460px)',
-          height: 'clamp(340px, 74vh, 660px)',
+          width: 'clamp(260px, 34vw, 480px)',
+          height: 'clamp(360px, 66vh, 640px)',
+          zIndex: 1,
           animation: 'winnerPop 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
         }}
       >
-        {/* 背後の後光 */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '14%',
-            left: '50%',
-            width: '460px',
-            height: '460px',
-            transform: 'translate(-50%, 0)',
-            background:
-              'repeating-conic-gradient(from 0deg, rgba(255,255,255,0.22) 0deg 11deg, transparent 11deg 22deg)',
-            borderRadius: '50%',
-            animation: 'winnerRays 16s linear infinite',
-            pointerEvents: 'none',
-          }}
-        />
-        {/* 3D キャンバスのホスト（背景透過なので CSS の夕景の上にキャラだけ乗る） */}
-        <div ref={stageHostRef} style={{ position: 'absolute', inset: 0 }} />
-        {/* 王冠（3D キャラの頭上あたり） */}
-        <span
-          style={{
-            position: 'absolute',
-            top: '4%',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            fontSize: '3.4rem',
-            filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
-            animation: 'winnerFloat 3.4s ease-in-out infinite',
-            pointerEvents: 'none',
-          }}
-        >
-          👑
-        </span>
+        <WinnerStandee entry={winner} />
       </div>
 
-      {/* 1位クラスタ（左・手前） */}
+      {/* 1位クラスタ（上部中央: 月桂樹の1 ＋ ペナント ＋ 巨大な勝者名）。
+          センタリングは margin auto（winnerPop が transform を上書きするため） */}
       <div
         style={{
           position: 'absolute',
-          top: 'clamp(1.5rem, 6vh, 4rem)',
-          left: 'clamp(1rem, 4vw, 3.5rem)',
-          maxWidth: '66%',
+          top: 'clamp(1rem, 4vh, 2.5rem)',
+          left: 0,
+          right: 0,
+          marginInline: 'auto',
+          width: 'min(92%, 900px)',
           display: 'flex',
           flexDirection: 'column',
-          gap: '0.4rem',
+          alignItems: 'center',
+          gap: '0.3rem',
+          zIndex: 2,
+          textAlign: 'center',
           animation: 'winnerPop 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
+          pointerEvents: 'none',
         }}
       >
         {/* Pペナント ＋ 月桂樹の「1」 */}
@@ -262,7 +315,7 @@ function ResultPage() {
         {/* 巨大な勝者名 */}
         <span
           style={{
-            fontSize: 'clamp(2.6rem, 11vw, 8rem)',
+            fontSize: 'clamp(2.4rem, 9vw, 6.5rem)',
             fontWeight: 900,
             fontStyle: 'italic',
             letterSpacing: '-0.01em',
@@ -277,15 +330,25 @@ function ResultPage() {
         >
           {winner.name}
         </span>
+        <span
+          style={{
+            fontSize: 'clamp(0.8rem, 1.8vw, 1rem)',
+            fontWeight: 800,
+            letterSpacing: '0.25em',
+            color: 'rgba(255,255,255,0.85)',
+            textShadow: '0 1px 4px rgba(0,0,0,0.5)',
+          }}
+        >
+          — BATTLE ROYALE SURVIVOR —
+        </span>
         {winner.mine && (
           <span
             style={{
               marginTop: '0.2rem',
-              fontSize: 'clamp(1rem, 2.6vw, 1.5rem)',
+              fontSize: 'clamp(1rem, 2.6vw, 1.4rem)',
               fontWeight: 800,
               color: '#166534',
               background: '#bbf7d0',
-              alignSelf: 'flex-start',
               padding: '2px 14px',
               borderRadius: '999px',
               transform: 'skewX(-6deg)',
@@ -295,24 +358,6 @@ function ResultPage() {
           </span>
         )}
       </div>
-
-      {/* 2位以降（左下・斜めカード） */}
-      {losers.length > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            left: 'clamp(1rem, 4vw, 3.5rem)',
-            bottom: 'clamp(1rem, 4vh, 2.5rem)',
-            display: 'flex',
-            gap: '0.9rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          {losers.map((pl, i) => (
-            <LoserCard key={`${pl.p}-${i}`} entry={pl} rank={i + 2} />
-          ))}
-        </div>
-      )}
 
       {/* 操作（右下・控えめ） */}
       <div
@@ -414,37 +459,152 @@ function LaurelRank({ rank }: { rank: number }) {
   )
 }
 
-// 2位以降の斜めカード（順位バッジ＋ポートレート＋Pタグ）。
-function LoserCard({ entry, rank }: { entry: RankEntry; rank: number }) {
-  const [c0, c1, c2] = metalOf(rank)
+// 敗者の配置スポット（散らばり方。順位 2位から順に使う）。
+// 中央の勝者を避けて左右へ、手前/奥で大きさに変化をつける。facingDeg で倒れる向きも散らす。
+const FALLEN_SPOTS: {
+  style: React.CSSProperties
+  facingDeg: number
+}[] = [
+  {
+    style: { left: '4%', bottom: '1%', width: 'clamp(170px, 20vw, 280px)', height: 'clamp(140px, 26vh, 240px)' },
+    facingDeg: -35,
+  },
+  {
+    style: { right: '4%', bottom: '2%', width: 'clamp(160px, 19vw, 260px)', height: 'clamp(130px, 24vh, 220px)' },
+    facingDeg: 40,
+  },
+  {
+    style: { left: '20%', bottom: '14%', width: 'clamp(120px, 14vw, 200px)', height: 'clamp(100px, 18vh, 170px)' },
+    facingDeg: 75,
+  },
+  {
+    style: { right: '20%', bottom: '15%', width: 'clamp(115px, 13vw, 190px)', height: 'clamp(95px, 17vh, 160px)' },
+    facingDeg: -70,
+  },
+]
+
+// 勝者の 3D 立ち絵（中央・王冠＋後光つき）。名前は上部中央のクラスタが出すのでここは絵だけ。
+function WinnerStandee({ entry }: { entry: RankEntry }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    let disposed = false
+    let presenter: WinnerPresenter | null = null
+    import('../battle/winner3d').then(({ createWinnerPresenter }) => {
+      if (disposed || !hostRef.current) return
+      presenter = createWinnerPresenter(hostRef.current, {
+        riderId: entry.riderId,
+        color: hexToInt(entry.color),
+        action: 'idle',
+      })
+    })
+    return () => {
+      disposed = true
+      presenter?.dispose()
+    }
+  }, [entry.riderId, entry.color])
+
   return (
-    <div
-      style={{
-        position: 'relative',
-        width: 'clamp(140px, 16vw, 184px)',
-        height: 'clamp(84px, 11vh, 104px)',
-        transform: 'skewX(-9deg)',
-        background: 'linear-gradient(180deg, #1a2233, #0b1120)',
-        border: `3px solid ${entry.color}`,
-        borderRadius: '8px',
-        boxShadow: '0 8px 18px rgba(0,0,0,0.5)',
-        overflow: 'hidden',
-      }}
-    >
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* 背後の後光 */}
       <div
         style={{
-          transform: 'skewX(9deg)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.4rem',
-          height: '100%',
-          padding: '0 0.7rem',
+          position: 'absolute',
+          bottom: '8%',
+          left: '50%',
+          width: '135%',
+          aspectRatio: '1',
+          transform: 'translate(-50%, 0)',
+          background:
+            'repeating-conic-gradient(from 0deg, rgba(255,255,255,0.22) 0deg 11deg, transparent 11deg 22deg)',
+          borderRadius: '50%',
+          animation: 'winnerRays 16s linear infinite',
+          pointerEvents: 'none',
+        }}
+      />
+      {/* 3D キャンバスのホスト（背景透過なので CSS の夕景の上にキャラだけ乗る） */}
+      <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
+      {/* 王冠（3D キャラの頭上あたり） */}
+      <span
+        style={{
+          position: 'absolute',
+          top: '3%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          fontSize: '3.4rem',
+          filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+          animation: 'winnerFloat 3.4s ease-in-out infinite',
+          pointerEvents: 'none',
+          zIndex: 1,
         }}
       >
-        {/* 順位番号（メタリック） */}
+        👑
+      </span>
+    </div>
+  )
+}
+
+// 敗者の 3D 立ち絵（death モーションで倒れたまま）。暗め・低彩度で「戦いのあと」を出しつつ、
+// 足元に順位チップ（メタリック数字＋名前＋P）を添える。
+function FallenStandee({
+  entry,
+  rank,
+  facingDeg,
+}: {
+  entry: RankEntry
+  rank: number
+  facingDeg: number
+}) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    let disposed = false
+    let presenter: WinnerPresenter | null = null
+    import('../battle/winner3d').then(({ createWinnerPresenter }) => {
+      if (disposed || !hostRef.current) return
+      presenter = createWinnerPresenter(hostRef.current, {
+        riderId: entry.riderId,
+        color: hexToInt(entry.color),
+        action: 'down', // death クリップを一度再生して倒れたまま静止
+        facingDeg,
+      })
+    })
+    return () => {
+      disposed = true
+      presenter?.dispose()
+    }
+  }, [entry.riderId, entry.color, facingDeg])
+
+  const [c0, c1, c2] = metalOf(rank)
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div
+        ref={hostRef}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          filter: 'brightness(0.72) saturate(0.7)', // 敗者は暗め・低彩度（勝者を引き立てる）
+        }}
+      />
+      {/* 順位チップ */}
+      <span
+        style={{
+          position: 'absolute',
+          bottom: '-2px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.35rem',
+          background: 'rgba(0,0,0,0.55)',
+          border: '1px solid rgba(255,255,255,0.18)',
+          borderRadius: '999px',
+          padding: '2px 12px',
+          whiteSpace: 'nowrap',
+          maxWidth: '130%',
+        }}
+      >
         <span
           style={{
-            fontSize: 'clamp(1.9rem, 4.5vw, 2.8rem)',
+            fontSize: '1.05rem',
             fontWeight: 900,
             fontStyle: 'italic',
             backgroundImage: `linear-gradient(180deg, ${c0} 0%, ${c1} 52%, ${c2} 100%)`,
@@ -457,18 +617,6 @@ function LoserCard({ entry, rank }: { entry: RankEntry; rank: number }) {
         >
           {rank}
         </span>
-        {/* ポートレート（プレースホルダ・色玉） */}
-        <div
-          style={{
-            width: '46px',
-            height: '46px',
-            borderRadius: '50%',
-            flexShrink: 0,
-            background: `radial-gradient(circle at 35% 30%, ${entry.color}, ${entry.color}55 65%, #0b1120)`,
-            border: `2px solid ${entry.color}`,
-          }}
-        />
-        {/* 名前（小さく） */}
         <span
           style={{
             fontSize: '0.72rem',
@@ -476,27 +624,20 @@ function LoserCard({ entry, rank }: { entry: RankEntry; rank: number }) {
             color: '#e5e7eb',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
           }}
         >
           {entry.name}
         </span>
-      </div>
-      {/* Pタグ（カード右下） */}
-      <span
-        style={{
-          position: 'absolute',
-          right: '4px',
-          bottom: '2px',
-          transform: 'skewX(9deg)',
-          fontSize: '0.7rem',
-          fontWeight: 900,
-          fontStyle: 'italic',
-          color: '#fff',
-          textShadow: '0 1px 2px #000',
-        }}
-      >
-        {entry.p}P
+        <span
+          style={{
+            fontSize: '0.65rem',
+            fontWeight: 900,
+            fontStyle: 'italic',
+            color: '#9ca3af',
+          }}
+        >
+          {entry.p}P
+        </span>
       </span>
     </div>
   )

@@ -16,18 +16,18 @@ import type { BattleState, PlayerState } from "./state";
 
 // プレイヤー表示色（battle.tsx の PLAYER_COLORS と対応）。
 const PLAYER_COLORS = [0xa78bfa, 0xf87171, 0x34d399, 0xfbbf24, 0x38bdf8];
-const WORLD_W = 22; // 正規化 x(0..1) をワールド X(-11..11) に写す（ステージ横幅）
+const WORLD_W = 28; // 正規化 x(0..1) をワールド X(-14..14) に写す（ステージ横幅）
 const JUMP_WORLD = 2.4; // 正規化ジャンプ高さ(y) → ワールド高さ
 
 // 格ゲー風フォローカメラの設定。据わった横視点で、ゆっくり pan、ズームは控えめ。
 const CAM = {
 	fov: 36, // やや望遠（平面的で 2D 格ゲーっぽい見え方）
 	y: 2.7, // カメラ高さ（低め＝横視点）
-	lookY: 1.3, // 注視点の高さ
+	lookY: 3.0, // 注視点の高さ。キャラの頭上を見る＝画面の中心が上がり、キャラは下寄り・背景が広く映る
 	padX: 2.5, // 左右の余白（ワールド）
 	halfY: 2.6, // 縦に収める範囲（ジャンプで無理に引かない）
-	minDist: 10, // 最接近
-	maxDist: 20, // 最遠（ステージ幅 22 の端↔端でも全員収まる距離）
+	minDist: 15, // 最接近（近づきすぎると迫力はあるが状況が見えないので遠めに据える）
+	maxDist: 30, // 最遠（ステージ幅 28 の端↔端でも全員収まる距離）
 	damp: 0.045, // 追従の滑らかさ（小さい＝ゆっくり据わる）
 };
 
@@ -336,7 +336,9 @@ export function flattenLateralRotation(
 	// idle 先頭の胸の合成姿勢（＝直立の基準）から、胸ボーン空間での「上」を逆算する。
 	const chest = new THREE.Quaternion();
 	const spin = new THREE.Quaternion();
-	chest.fromArray(refHips.values, 0).multiply(spineOfRef(refHips.times[0], spin));
+	chest
+		.fromArray(refHips.values, 0)
+		.multiply(spineOfRef(refHips.times[0], spin));
 	const upBone = HIPS_UP.clone().applyQuaternion(chest.clone().invert());
 
 	const qh = new THREE.Quaternion();
@@ -359,6 +361,41 @@ function ctx2d(c: HTMLCanvasElement): CanvasRenderingContext2D {
 	const ctx = c.getContext("2d");
 	if (!ctx) throw new Error("2d context unavailable");
 	return ctx;
+}
+
+// 頭上のプレイヤー番号タグのテクスチャ（「1P」等。自分は下に「YOU」を併記）。
+// 格ゲー風の太字イタリック＋黒フチ。色はプレイヤーカラー。
+function makeTagTexture(
+	label: string,
+	color: number,
+	isSelf: boolean,
+): THREE.CanvasTexture {
+	const c = document.createElement("canvas");
+	c.width = 256;
+	c.height = 128;
+	const ctx = ctx2d(c);
+	const colorCss = `#${color.toString(16).padStart(6, "0")}`;
+	ctx.textAlign = "center";
+	ctx.textBaseline = "middle";
+	ctx.lineJoin = "round";
+	// 番号（1P など）
+	ctx.font = "italic 900 64px system-ui, sans-serif";
+	ctx.lineWidth = 14;
+	ctx.strokeStyle = "rgba(0,0,0,0.85)";
+	ctx.strokeText(label, 128, isSelf ? 44 : 64);
+	ctx.fillStyle = colorCss;
+	ctx.fillText(label, 128, isSelf ? 44 : 64);
+	// 自分にだけ YOU（どれが自分か一目で分かるように）
+	if (isSelf) {
+		ctx.font = "900 30px system-ui, sans-serif";
+		ctx.lineWidth = 8;
+		ctx.strokeText("あなた", 128, 96);
+		ctx.fillStyle = "#ffffff";
+		ctx.fillText("あなた", 128, 96);
+	}
+	const tex = new THREE.CanvasTexture(c);
+	tex.colorSpace = THREE.SRGBColorSpace;
+	return tex;
 }
 
 function darken(hex: number, f: number): number {
@@ -418,7 +455,7 @@ export function createArenaRenderer(
 
 	const scene = new THREE.Scene();
 	scene.background = new THREE.Color(0x0b1220);
-	scene.fog = new THREE.Fog(0x0b1220, 22, 48); // カメラ最遠(20)でもキャラが霞まない距離
+	scene.fog = new THREE.Fog(0x0b1220, 32, 62); // カメラ最遠(30)でもキャラが霞まない距離
 
 	const camera = new THREE.PerspectiveCamera(
 		CAM.fov,
@@ -445,8 +482,8 @@ export function createArenaRenderer(
 	key.position.set(5, 11, 7);
 	key.castShadow = true;
 	key.shadow.mapSize.set(1024, 1024);
-	key.shadow.camera.left = -12; // ステージ幅 22 の端でも影が切れないように
-	key.shadow.camera.right = 12;
+	key.shadow.camera.left = -16; // ステージ幅 28 の端でも影が切れないように
+	key.shadow.camera.right = 16;
 	key.shadow.camera.top = 8;
 	key.shadow.camera.bottom = -2;
 	key.shadow.camera.near = 1;
@@ -487,6 +524,30 @@ export function createArenaRenderer(
 	const lastX = new Map<string, number>();
 	const yaws = new Map<string, number>(); // 現在の向き（振り向きをなめらかに回す）
 	const worldX = (x: number) => (x - 0.5) * WORLD_W;
+
+	// プレイヤー番号タグ（キャラ頭上の「1P」「2P」…）。
+	// 頭の高さ(topY)はアバターの実寸から測る。GLB は非同期ロードで後から身長が変わる
+	// （ロード完了で root に子が増える）ので、子の数の変化を検知して測り直す。
+	const playerTags = new Map<
+		string,
+		{
+			sprite: THREE.Sprite;
+			mat: THREE.SpriteMaterial;
+			tex: THREE.CanvasTexture;
+			childCount: number;
+			topY: number;
+		}
+	>();
+	const tagBox = new THREE.Box3();
+	const tagVec = new THREE.Vector3();
+	function removeTag(id: string) {
+		const tag = playerTags.get(id);
+		if (!tag) return;
+		scene.remove(tag.sprite);
+		tag.mat.dispose();
+		tag.tex.dispose();
+		playerTags.delete(id);
+	}
 
 	// --- FX（ジュース）: 画面シェイク / ヒットスパーク / ズームパンチ ---
 	const camBase = new THREE.Vector3(0, CAM.y, 12);
@@ -590,6 +651,7 @@ export function createArenaRenderer(
 				lastX.delete(id);
 				yaws.delete(id);
 				removeGuardFx(id);
+				removeTag(id);
 			}
 		}
 
@@ -611,6 +673,50 @@ export function createArenaRenderer(
 			const moving = Math.abs(wx - prev) > 0.003;
 			lastX.set(p.id, wx);
 			av.update(p, t, moving);
+
+			// 頭上のプレイヤー番号タグ（1P/2P…）。自分は色付きで「YOU」を併記。
+			let tag = playerTags.get(p.id);
+			if (!tag) {
+				const color = PLAYER_COLORS[index % PLAYER_COLORS.length];
+				const tex = makeTagTexture(`${index + 1}P`, color, p.isSelf);
+				const mat = new THREE.SpriteMaterial({
+					map: tex,
+					transparent: true,
+					depthWrite: false,
+					fog: false,
+				});
+				const sprite = new THREE.Sprite(mat);
+				scene.add(sprite);
+				tag = { sprite, mat, tex, childCount: -1, topY: 1.0 };
+				playerTags.set(p.id, tag);
+			}
+			if (av.root.children.length !== tag.childCount) {
+				// アバターの実寸から頭の高さを測る（スキンメッシュは Box3 だと骨格スケールを
+				// 拾えないため、ロード時計測と同じくボーンのワールド座標から測る）。
+				tag.childCount = av.root.children.length;
+				av.root.updateMatrixWorld(true);
+				tagBox.makeEmpty();
+				let bones = 0;
+				av.root.traverse((o) => {
+					if ((o as THREE.Bone).isBone) {
+						bones++;
+						tagBox.expandByPoint(o.getWorldPosition(tagVec));
+					}
+				});
+				if (bones === 0) tagBox.setFromObject(av.root);
+				const top = tagBox.max.y;
+				if (Number.isFinite(top))
+					tag.topY = Math.max(0.4, top - av.root.position.y);
+				// タグの大きさは身長に比例させる（モデルごとの全高差があっても見た目が揃う）
+				const s = Math.min(1.4, Math.max(0.45, tag.topY * 0.9));
+				tag.sprite.scale.set(s, s / 2, 1);
+			}
+			tag.sprite.position.set(
+				av.root.position.x,
+				av.root.position.y + tag.topY * 1.15 + 0.18,
+				0,
+			);
+			tag.mat.opacity = p.hp <= 0 ? 0.3 : 0.95; // KO したら薄く
 
 			// ガードシールド: ガード中はフェードインして正面に維持、解除でフェードアウト。
 			// guard クリップ（構え）に加えて出す。ブロック成立が一目で分かる演出として残す。
@@ -745,6 +851,7 @@ export function createArenaRenderer(
 			}
 			projSprites.clear();
 			for (const id of [...guardFx.keys()]) removeGuardFx(id);
+			for (const id of [...playerTags.keys()]) removeTag(id);
 			guardTex.dispose();
 			sparkTex.dispose();
 			floor.geometry.dispose();
@@ -1098,8 +1205,10 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 					const target = obj.getObjectByName(track.name.slice(0, dot));
 					if (!target) continue;
 					const prop = track.name.slice(dot + 1);
-					if (prop === "quaternion") target.quaternion.fromArray(track.values, 0);
-					else if (prop === "position") target.position.fromArray(track.values, 0);
+					if (prop === "quaternion")
+						target.quaternion.fromArray(track.values, 0);
+					else if (prop === "position")
+						target.position.fromArray(track.values, 0);
 					else if (prop === "scale") target.scale.fromArray(track.values, 0);
 				}
 			}

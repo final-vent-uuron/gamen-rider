@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SelectRouteImport } from './routes/select'
 import { Route as ResultRouteImport } from './routes/result'
 import { Route as PoseRouteImport } from './routes/pose'
+import { Route as PairingRouteImport } from './routes/pairing'
 import { Route as ModelCheckRouteImport } from './routes/model-check'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as DetectRouteImport } from './routes/detect'
@@ -34,6 +35,11 @@ const ResultRoute = ResultRouteImport.update({
 const PoseRoute = PoseRouteImport.update({
   id: '/pose',
   path: '/pose',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PairingRoute = PairingRouteImport.update({
+  id: '/pairing',
+  path: '/pairing',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModelCheckRoute = ModelCheckRouteImport.update({
@@ -84,6 +90,7 @@ export interface FileRoutesByFullPath {
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
+  '/pairing': typeof PairingRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
@@ -97,6 +104,7 @@ export interface FileRoutesByTo {
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
+  '/pairing': typeof PairingRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
@@ -111,6 +119,7 @@ export interface FileRoutesById {
   '/detect': typeof DetectRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
+  '/pairing': typeof PairingRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
@@ -126,6 +135,7 @@ export interface FileRouteTypes {
     | '/detect'
     | '/henshin'
     | '/model-check'
+    | '/pairing'
     | '/pose'
     | '/result'
     | '/select'
@@ -139,6 +149,7 @@ export interface FileRouteTypes {
     | '/detect'
     | '/henshin'
     | '/model-check'
+    | '/pairing'
     | '/pose'
     | '/result'
     | '/select'
@@ -152,6 +163,7 @@ export interface FileRouteTypes {
     | '/detect'
     | '/henshin'
     | '/model-check'
+    | '/pairing'
     | '/pose'
     | '/result'
     | '/select'
@@ -166,6 +178,7 @@ export interface RootRouteChildren {
   DetectRoute: typeof DetectRoute
   HenshinRoute: typeof HenshinRoute
   ModelCheckRoute: typeof ModelCheckRoute
+  PairingRoute: typeof PairingRoute
   PoseRoute: typeof PoseRoute
   ResultRoute: typeof ResultRoute
   SelectRoute: typeof SelectRoute
@@ -194,6 +207,13 @@ declare module '@tanstack/react-router' {
       path: '/pose'
       fullPath: '/pose'
       preLoaderRoute: typeof PoseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pairing': {
+      id: '/pairing'
+      path: '/pairing'
+      fullPath: '/pairing'
+      preLoaderRoute: typeof PairingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/model-check': {
@@ -262,6 +282,7 @@ const rootRouteChildren: RootRouteChildren = {
   DetectRoute: DetectRoute,
   HenshinRoute: HenshinRoute,
   ModelCheckRoute: ModelCheckRoute,
+  PairingRoute: PairingRoute,
   PoseRoute: PoseRoute,
   ResultRoute: ResultRoute,
   SelectRoute: SelectRoute,

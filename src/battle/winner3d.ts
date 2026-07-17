@@ -21,7 +21,15 @@ export interface WinnerPresenterOptions {
   facingDeg?: number // カメラに対する向き（度。既定 -70°＝3/4 のヒーローアングル）
 }
 
+// setAction に渡せるアクション。'walk'/'jump' は PlayerState の action には無い
+// 見た目だけの疑似アクション（moving フラグ・y>0 でアバターの該当クリップを引き出す）。
+export type PresenterAction = PlayerAction | 'walk' | 'jump'
+
 export interface WinnerPresenter {
+  // 立ちポーズを差し替える（ペアリング画面の入力テストでパンチ等を再生する用）。
+  // GLB のクリップは一回再生系（punch/kick 等）でもアバター側が idle へ戻す判断をしないため、
+  // 呼び出し側で少し待って 'idle' に戻すこと。
+  setAction(action: PresenterAction): void
   dispose(): void
 }
 
@@ -82,7 +90,8 @@ export function createWinnerPresenter(
   container.appendChild(renderer.domElement)
 
   // ライティング（box の MeshStandardMaterial を立たせる）。
-  scene.add(new THREE.HemisphereLight(0xffe6c2, 0x33241a, 1.05))
+  // Webワールド（電脳空間）の背景に合わせた寒色系（リザルト・ペアリングとも共通）。
+  scene.add(new THREE.HemisphereLight(0xcfe2ff, 0x1a2233, 1.05))
   const key = new THREE.DirectionalLight(0xffffff, 1.5)
   key.position.set(2.4, 5, 4)
   key.castShadow = true
@@ -112,6 +121,10 @@ export function createWinnerPresenter(
   scene.add(avatar.root)
 
   const synth = standPose(opts.riderId, opts.action ?? 'idle')
+  // 'down'（倒れる）はアバター側が hp<=0 で判定するため、action 指定だけでなく hp も落とす
+  // （リザルトの敗者表示: death クリップを一度再生して倒れたまま止まる）。
+  if (synth.action === 'down') synth.hp = 0
+  let moving = false // 'walk' 疑似アクション用（update の moving フラグで走りクリップを出す）
   const baseYaw = ((opts.facingDeg ?? -70) * Math.PI) / 180
 
   // --- カメラの全身フィット ---
@@ -137,17 +150,25 @@ export function createWinnerPresenter(
     scene.updateMatrixWorld(true)
     measure()
     const size = fitBox.getSize(fitVec)
-    const h = size.y
+    // 縦だけでなく横も収める（倒れたポーズ＝横に長い場合はアスペクト換算で引く）。
+    const h = Math.max(size.y, size.x / Math.max(0.3, camera.aspect))
     if (!(h > 0.01) || !Number.isFinite(h)) return
+    const cx = (fitBox.min.x + fitBox.max.x) / 2
     const cy = (fitBox.min.y + fitBox.max.y) / 2
+    const cz = (fitBox.min.z + fitBox.max.z) / 2
     // ボーン基準の箱は頭頂・手先のメッシュ分だけ実際より小さいので余白を持たせる。
-    const fitH = h * 1.45
+    // 係数は見た目調整: 大きいほどカメラが引く（1.45 では寄りすぎたため 1.9）。
+    const fitH = h * 1.9
     const dist = fitH / 2 / Math.tan((camera.fov * Math.PI) / 360)
-    // 軟着（アニメで箱が揺れてもカメラがガタつかない）
-    camera.position.x += (0 - camera.position.x) * 0.08
+    // 軟着（アニメで箱が揺れてもカメラがガタつかない）。
+    // 横位置(x/z)もキャラの実位置を追う: death のようにルートモーションで移動する
+    // クリップだと、原点固定のままではキャラがフレーム外へずれていく。
+    camera.position.x += (cx - camera.position.x) * 0.08
     camera.position.y += (cy + h * 0.08 - camera.position.y) * 0.08
-    camera.position.z += (Math.max(0.8, dist) - camera.position.z) * 0.08
+    camera.position.z += (cz + Math.max(0.8, dist) - camera.position.z) * 0.08
+    lookTarget.x += (cx - lookTarget.x) * 0.08
     lookTarget.y += (cy - lookTarget.y) * 0.08
+    lookTarget.z += (cz - lookTarget.z) * 0.08
     camera.lookAt(lookTarget)
   }
 
@@ -159,7 +180,7 @@ export function createWinnerPresenter(
     // 毎フレーム位置をリセットしてから update（box の踏み込み加算が溜まらないように）。
     avatar.root.position.set(0, 0, 0)
     avatar.root.rotation.y = baseYaw + Math.sin(t * 0.6) * 0.12 // 緩いターンテーブル
-    avatar.update(synth, t, false)
+    avatar.update(synth, t, moving)
     fitCamera()
     renderer.render(scene, camera)
     raf = requestAnimationFrame(loop)
@@ -175,6 +196,23 @@ export function createWinnerPresenter(
   ro.observe(container)
 
   return {
+    setAction(action) {
+      if (action === 'walk') {
+        synth.action = 'idle'
+        synth.y = 0
+        moving = true
+      } else if (action === 'jump') {
+        // p.y > 0 でアバターが jump クリップに切り替わる（root も少し浮く）
+        synth.action = 'idle'
+        synth.y = 0.25
+        moving = false
+      } else {
+        synth.action = action
+        synth.y = 0
+        moving = false
+      }
+      synth.hp = action === 'down' ? 0 : 100 // down はアバターが hp<=0 で判定する
+    },
     dispose() {
       disposed = true
       cancelAnimationFrame(raf)
