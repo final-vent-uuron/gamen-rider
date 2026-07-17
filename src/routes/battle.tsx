@@ -11,13 +11,14 @@ import {
   applyThrow,
   battleCardsFor,
   connectBattle,
+  createBgm,
   createCameraGuardSource,
   createKeyboardSource,
   createSfx,
   meterStocks,
   stepBattle,
 } from '../battle'
-import type { BattleCard, BattleNet, BattleState, NetStatus, PlayerState, Sfx } from '../battle'
+import type { BattleCard, BattleNet, BattleState, Bgm, NetStatus, PlayerState, Sfx } from '../battle'
 import type { ArenaRenderer } from '../battle/arena3d'
 
 // 被弾ダメージの浮き数字。命中検出で追加し、一定時間で消す。
@@ -94,6 +95,7 @@ function BattlePage() {
   const [combo, setCombo] = useState<number | null>(null) // 進行中の最大コンボ数
   const [koFlash, setKoFlash] = useState(false) // KO の一瞬フラッシュ
   const [camGuard, setCamGuard] = useState(false) // カメラがガードポーズを認識中か（表示用）
+  const [intruder, setIntruder] = useState<string | null>(null) // 乱入 WARNING（乱入者名。null = 非表示）
 
   const battleRef = useRef(battle)
   battleRef.current = battle
@@ -106,6 +108,9 @@ function BattlePage() {
   const finalActiveRef = useRef(false) // rAF ループから読む finalActive のミラー
   const netRef = useRef<BattleNet | null>(null)
   const sfxRef = useRef<Sfx | null>(null) // 効果音（WebAudio 合成）
+  const bgmRef = useRef<Bgm | null>(null) // BGM（public/bgm/ の mp3）
+  const intrusionSeenRef = useRef(0) // 処理済みの intrusionUntil（同じ乱入を1回だけ演出する）
+  const intrusionTimerRef = useRef(0)
   const ventVideoRef = useRef<HTMLVideoElement>(null) // 右下カメラの <video>（ポーズ解析と共有）
   const ventCanvasRef = useRef<HTMLCanvasElement>(null) // 右下カメラの骨格オーバーレイ
   const comboTimerRef = useRef(0)
@@ -140,6 +145,18 @@ function BattlePage() {
     return () => {
       sfx.close()
       sfxRef.current = null
+    }
+  }, [])
+
+  // BGM: 入場でメインをループ再生（自動再生がブロックされたら最初の操作で開始）。
+  // 乱入・ファイナルベントの割り込みは bgm.ts 側が main の停止/復帰まで面倒を見る。
+  useEffect(() => {
+    const bgm = createBgm()
+    bgmRef.current = bgm
+    bgm.playMain()
+    return () => {
+      bgm.close()
+      bgmRef.current = null
     }
   }, [])
 
@@ -218,7 +235,28 @@ function BattlePage() {
         }
       }
 
-      if (newFinal) flashFinal()
+      if (newFinal) {
+        flashFinal()
+        bgmRef.current?.finalVent() // 掛け声＋ファイナルベント BGM（main は自動で復帰）
+      }
+
+      // 乱入（3人目以降の途中参戦）: サーバーが intrusionUntil を立てて全員を停止させる。
+      // 新しい intrusionUntil を一度だけ拾い、WARNING 表示＋Intrusion-bgm を演出時間ぶん流す。
+      const intrusionUntil = next.intrusionUntil ?? 0
+      if (intrusionUntil > Date.now() && intrusionUntil !== intrusionSeenRef.current) {
+        intrusionSeenRef.current = intrusionUntil
+        const prevIds = new Set(prev.players.map((p) => p.id))
+        const newcomer = next.players.find((p) => !prevIds.has(p.id))
+        // 乱入者本人の画面は prev が空（全員 newcomer 扱い）なので名前は出さず汎用文言にする
+        const name = prev.players.length >= 2 ? (newcomer?.riderName ?? null) : null
+        setIntruder(name ?? '???')
+        bgmRef.current?.intrusion(intrusionUntil - Date.now())
+        window.clearTimeout(intrusionTimerRef.current)
+        intrusionTimerRef.current = window.setTimeout(
+          () => setIntruder(null),
+          intrusionUntil - Date.now(),
+        )
+      }
       if (fresh.length) {
         setPopups((ps) => [...ps, ...fresh])
         for (const pu of fresh) {
@@ -242,7 +280,12 @@ function BattlePage() {
       const now = Date.now()
       const pred = predRef.current?.players[0]
       if (!pred || pred.id !== serverSelf.id) {
-        predRef.current = { players: [{ ...serverSelf }], projectiles: [], winnerId: null }
+        predRef.current = {
+          players: [{ ...serverSelf }],
+          projectiles: [],
+          winnerId: null,
+          intrusionUntil: next.intrusionUntil,
+        }
         return
       }
       const merged: PlayerState = { ...serverSelf } // 権威フィールド(hp/meter/timer等)はサーバー採用
@@ -264,7 +307,12 @@ function BattlePage() {
         merged.vy = pred.vy
         merged.facing = pred.facing
       }
-      predRef.current = { players: [merged], projectiles: predRef.current?.projectiles ?? [], winnerId: null }
+      predRef.current = {
+        players: [merged],
+        projectiles: predRef.current?.projectiles ?? [],
+        winnerId: null,
+        intrusionUntil: next.intrusionUntil, // 予測ループ(stepBattle)も乱入停止に従わせる
+      }
     }
 
     const net = connectBattle({
@@ -387,6 +435,7 @@ function BattlePage() {
       netRef.current = null
       window.clearTimeout(finalTimerRef.current)
       window.clearTimeout(comboTimerRef.current)
+      window.clearTimeout(intrusionTimerRef.current)
     }
   }, [routine])
 
@@ -489,6 +538,7 @@ function BattlePage() {
   // 遷移で battle 画面は unmount し WebSocket も閉じる → 再戦は /result から /battle への再参加で行う。
   useEffect(() => {
     if (!battle.winnerId) return
+    bgmRef.current?.fadeOutMain() // リザルトの win-bgm へ繋ぐ（main はここで終了）
     const t = window.setTimeout(() => {
       const st = battleRef.current
       const order: string[] = []
@@ -535,21 +585,24 @@ function BattlePage() {
         display: 'flex',
         flexDirection: 'column',
         minHeight: '100vh',
-        padding: '1rem',
-        gap: '0.75rem',
+        height: '100vh',
+        padding: '0.5rem 0.75rem 0.75rem',
+        gap: '0.5rem',
       }}
     >
-      {/* ヘッダー */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-        <Link to="/" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '0.9rem' }}>
+      {/* ヘッダー（1行のスリムバー。メイン画面を広く取る） */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', minHeight: '26px' }}>
+        <Link to="/" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '0.8rem' }}>
           ← Back
         </Link>
-        <h1 style={{ margin: 0, fontSize: '1.3rem' }}>バトル</h1>
-        <span style={{ color: '#a78bfa', fontWeight: 'bold' }}>あなた: {routine.riderName}</span>
+        <h1 style={{ margin: 0, fontSize: '1rem' }}>バトル</h1>
+        <span style={{ color: '#a78bfa', fontWeight: 'bold', fontSize: '0.85rem' }}>
+          あなた: {routine.riderName}
+        </span>
 
         {/* 接続状態 ＋ 参加人数（プレイヤーは WebSocket 経由で動的に増減する） */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
-          <span style={{ fontSize: '0.85rem', color: '#9ca3af' }}>参加 {battle.players.length}人</span>
+          <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>参加 {battle.players.length}人</span>
           <ConnBadge status={status} />
         </div>
       </div>
@@ -561,7 +614,8 @@ function BattlePage() {
       {status === 'open' && battle.players.length < 2 && !winner && <WaitingHint />}
       {status !== 'open' && <DisconnectedHint status={status} />}
 
-      {/* ステージ（three.js の 3D シーン ＋ 演出オーバーレイ） */}
+      {/* ステージ（three.js の 3D シーン ＋ 演出オーバーレイ）。
+          カード・操作説明はステージ上のオーバーレイに載せ、メイン画面を最大化する。 */}
       <div
         style={{
           position: 'relative',
@@ -587,18 +641,23 @@ function BattlePage() {
             }}
           />
         )}
-      </div>
 
-      {/* 下段: カードトレイ ＋ 操作ヘルプ */}
-      <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <CardTray
-          cards={cards}
-          disabled={!!winner || (self?.hp ?? 0) <= 0}
-          finalReady={(self?.meter ?? 0) >= ARENA.meterMax}
-          onCard={handleCard}
-        />
+        {/* カードトレイ（ステージ左下のオーバーレイ） */}
+        <div style={{ position: 'absolute', left: '10px', bottom: '10px' }}>
+          <CardTray
+            cards={cards}
+            disabled={!!winner || (self?.hp ?? 0) <= 0}
+            finalReady={(self?.meter ?? 0) >= ARENA.meterMax}
+            onCard={handleCard}
+          />
+        </div>
+
+        {/* 操作説明（ステージ右上・開閉式） */}
         <ControlsHelp />
       </div>
+
+      {/* 乱入 WARNING（サーバーが全員を停止させている間、中央に表示） */}
+      {intruder != null && <IntrusionWarning name={intruder} />}
 
       {/* 右下カメラ（ファイナルベント＋カメラガード用。CLAUDE.md: 常時表示） */}
       <FinalVentCam
@@ -950,7 +1009,6 @@ function CardTray({
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-      <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>カード</span>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         {cards.map((c) => {
           const isFinal = c.kind === 'final'
@@ -963,11 +1021,11 @@ function CardTray({
               disabled={cardDisabled}
               onClick={() => onCard(c)}
               style={{
-                width: '78px',
-                height: '104px',
+                width: '68px',
+                height: '92px',
                 borderRadius: '8px',
                 border: `2px solid ${c.color}`,
-                background: `linear-gradient(160deg, ${c.color}22, #0f172a)`,
+                background: `linear-gradient(160deg, ${c.color}33, rgba(15,23,42,0.88))`,
                 color: '#fff',
                 cursor: cardDisabled ? 'not-allowed' : 'pointer',
                 opacity: cardDisabled ? 0.4 : 1,
@@ -996,9 +1054,11 @@ function CardTray({
   )
 }
 
-// ---- 操作ヘルプ ----------------------------------------------------------
+// ---- 操作ヘルプ（開閉式・ステージ右上のオーバーレイ） ---------------------
+// メイン画面を広く使うため、普段は小さなボタンだけを置き、押したときだけパネルを開く。
 
 function ControlsHelp() {
+  const [open, setOpen] = useState(false)
   const rows: [string, string][] = [
     ['← → / A D', '移動'],
     ['W / ↑ / Space', 'ジャンプ'],
@@ -1012,32 +1072,145 @@ function ControlsHelp() {
     ['L / F', 'ファイナル(5ゲージ)'],
   ]
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-      <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>操作（キーボード = センサーのダミー入力）</span>
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-        {rows.map(([k, v]) => (
-          <span key={k} style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>
-            <kbd
-              style={{
-                background: '#374151',
-                borderRadius: '4px',
-                padding: '1px 6px',
-                fontFamily: 'monospace',
-                marginRight: '4px',
-              }}
-            >
-              {k}
-            </kbd>
-            {v}
+    <div
+      style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: '0.4rem',
+        maxWidth: 'min(380px, 70%)',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          background: 'rgba(15,23,42,0.8)',
+          color: '#cbd5e1',
+          border: '1px solid #334155',
+          borderRadius: '999px',
+          padding: '3px 12px',
+          fontSize: '0.75rem',
+          cursor: 'pointer',
+        }}
+      >
+        🎮 操作説明 {open ? '▲' : '▼'}
+      </button>
+      {open && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.45rem',
+            background: 'rgba(10,15,28,0.92)',
+            border: '1px solid #334155',
+            borderRadius: '10px',
+            padding: '0.7rem 0.8rem',
+            boxShadow: '0 8px 20px rgba(0,0,0,0.45)',
+          }}
+        >
+          <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>
+            操作（キーボード = センサーのダミー入力）
           </span>
-        ))}
+          <div style={{ display: 'flex', gap: '0.35rem 0.7rem', flexWrap: 'wrap' }}>
+            {rows.map(([k, v]) => (
+              <span key={k} style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>
+                <kbd
+                  style={{
+                    background: '#374151',
+                    borderRadius: '4px',
+                    padding: '1px 6px',
+                    fontFamily: 'monospace',
+                    marginRight: '4px',
+                  }}
+                >
+                  {k}
+                </kbd>
+                {v}
+              </span>
+            ))}
+          </div>
+          <span style={{ fontSize: '0.72rem', color: '#fbbf24' }}>
+            コンボ: 当てた技を<strong>ヒット中にキャンセル</strong>して次へ → 例) パンチ→キック→ファイナル
+          </span>
+          <span style={{ fontSize: '0.72rem', color: '#7fdfff' }}>
+            ピンチ: <strong>E で暴れ</strong>（ゲージ1本）→ 無敵で割り込み、両隣を突き放してハメを脱出
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- 乱入 WARNING ---------------------------------------------------------
+// 3人目以降が途中参戦した瞬間の演出。サーバーが intrusionUntil で全員を停止させている間、
+// 中央に WARNING を出す（BGM は Intrusion-bgm に切り替わる）。
+
+function IntrusionWarning({ name }: { name: string }) {
+  const stripes =
+    'repeating-linear-gradient(45deg, rgba(239,68,68,0.28) 0 20px, rgba(0,0,0,0.55) 20px 40px)'
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '0.8rem',
+        background: 'rgba(0,0,0,0.5)',
+        pointerEvents: 'none',
+        zIndex: 55,
+      }}
+    >
+      {/* 上下の危険ストライプ帯 */}
+      {(['top', 'bottom'] as const).map((side) => (
+        <div
+          key={side}
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            [side]: '18%',
+            height: '26px',
+            background: stripes,
+            backgroundSize: '80px 80px',
+            animation: 'warningStripes 0.9s linear infinite',
+            borderTop: '2px solid #ef4444',
+            borderBottom: '2px solid #ef4444',
+          }}
+        />
+      ))}
+      <div style={{ animation: 'warningIn 0.3s ease-out both', textAlign: 'center' }}>
+        <div
+          style={{
+            fontSize: 'clamp(3rem, 12vw, 6rem)',
+            fontWeight: 900,
+            fontStyle: 'italic',
+            letterSpacing: '0.18em',
+            color: '#ef4444',
+            animation: 'warningPulse 0.8s ease-in-out infinite',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          ⚠ WARNING ⚠
+        </div>
+        <div
+          style={{
+            marginTop: '0.4rem',
+            fontSize: 'clamp(1rem, 3vw, 1.6rem)',
+            fontWeight: 800,
+            color: '#fff',
+            textShadow: '0 2px 8px #000',
+          }}
+        >
+          乱入者が現れた — <span style={{ color: '#fbbf24' }}>{name}</span> 参戦！
+        </div>
       </div>
-      <span style={{ fontSize: '0.75rem', color: '#fbbf24' }}>
-        コンボ: 当てた技を<strong>ヒット中にキャンセル</strong>して次へ → 例) パンチ→キック→ファイナル
-      </span>
-      <span style={{ fontSize: '0.75rem', color: '#7fdfff' }}>
-        ピンチ: <strong>E で暴れ</strong>（ゲージ1本）→ 無敵で割り込み、両隣を突き放してハメを脱出
-      </span>
     </div>
   )
 }
@@ -1095,7 +1268,7 @@ function FinalVentCam({
         position: 'fixed',
         right: '16px',
         bottom: '16px',
-        width: '180px',
+        width: '280px',
         aspectRatio: '4/3',
         borderRadius: '10px',
         overflow: 'hidden',
@@ -1117,11 +1290,11 @@ function FinalVentCam({
         style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
       />
       {/* 骨格オーバーレイ（MediaPipe の棒人間）。映像と同じミラー変換で座標が揃う。
-          内部解像度は 4:3 固定（要求解像度 640x480 と同比。プレビューが小さいので 240 で十分） */}
+          内部解像度は 4:3 固定（要求解像度 640x480 と同比。280px プレビューに合わせて 320） */}
       <canvas
         ref={canvasRef}
-        width={240}
-        height={180}
+        width={320}
+        height={240}
         style={{
           position: 'absolute',
           inset: 0,

@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef } from 'react'
 
+import { playWinBgm } from '../battle/bgm'
 import type { WinnerPresenter } from '../battle/winner3d'
 
 // 勝者（リザルト）ページ。スマブラのリザルト画面イメージ。
@@ -64,6 +65,9 @@ function ResultPage() {
   const { players, rider, name } = Route.useSearch()
   const winner = players[0] ?? null
   const losers = players.slice(1)
+
+  // 勝利ジングル（win-bgm）。バトル画面が main BGM をフェードアウトさせてから遷移してくる。
+  useEffect(() => playWinBgm(), [])
 
   // 勝者の 3D 立ち絵。three は動的 import（クライアント専用・SSR 回避）でマウントする。
   // arena3d と同じアバター抽象なので、RIDER_MODELS に GLB を足せばここも自動で 3D モデルに。

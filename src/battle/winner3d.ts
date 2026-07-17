@@ -66,7 +66,8 @@ export function createWinnerPresenter(
 
   const scene = new THREE.Scene()
 
-  // 立ち姿がちょうど収まる縦長のポートレート・カメラ（キャラ全高 ~2.3、中心 y~1.15）。
+  // 縦長のポートレート・カメラ。初期値は仮置きで、実際の構図はループ内の自動フィットが
+  // キャラの実寸（box ≈1.9 / GLB は height 指定で ~0.5 とモデルごとに全高が違う）に合わせる。
   const camera = new THREE.PerspectiveCamera(30, width() / height(), 0.1, 100)
   camera.position.set(0, 1.35, 4.4)
   camera.lookAt(0, 1.1, 0)
@@ -113,6 +114,43 @@ export function createWinnerPresenter(
   const synth = standPose(opts.riderId, opts.action ?? 'idle')
   const baseYaw = ((opts.facingDeg ?? -70) * Math.PI) / 180
 
+  // --- カメラの全身フィット ---
+  // GLB は非同期ロード＋モデルごとに全高が違う（自動フィットの height 指定）ため、
+  // 固定カメラだと頭が切れたり豆粒になったりする。毎フレーム実寸を測って軟着させる。
+  // スキンメッシュは Box3.setFromObject だと骨格のスケールを拾えないので、
+  // arena3d のロード時計測と同じくボーンのワールド座標から測る。
+  const fitBox = new THREE.Box3()
+  const fitVec = new THREE.Vector3()
+  const lookTarget = new THREE.Vector3(0, 1.1, 0)
+  const measure = () => {
+    fitBox.makeEmpty()
+    let bones = 0
+    avatar.root.traverse((o) => {
+      if ((o as THREE.Bone).isBone) {
+        bones++
+        fitBox.expandByPoint(o.getWorldPosition(fitVec))
+      }
+    })
+    if (bones === 0) fitBox.setFromObject(avatar.root)
+  }
+  const fitCamera = () => {
+    scene.updateMatrixWorld(true)
+    measure()
+    const size = fitBox.getSize(fitVec)
+    const h = size.y
+    if (!(h > 0.01) || !Number.isFinite(h)) return
+    const cy = (fitBox.min.y + fitBox.max.y) / 2
+    // ボーン基準の箱は頭頂・手先のメッシュ分だけ実際より小さいので余白を持たせる。
+    const fitH = h * 1.45
+    const dist = fitH / 2 / Math.tan((camera.fov * Math.PI) / 360)
+    // 軟着（アニメで箱が揺れてもカメラがガタつかない）
+    camera.position.x += (0 - camera.position.x) * 0.08
+    camera.position.y += (cy + h * 0.08 - camera.position.y) * 0.08
+    camera.position.z += (Math.max(0.8, dist) - camera.position.z) * 0.08
+    lookTarget.y += (cy - lookTarget.y) * 0.08
+    camera.lookAt(lookTarget)
+  }
+
   let raf = 0
   let disposed = false
   const loop = () => {
@@ -122,6 +160,7 @@ export function createWinnerPresenter(
     avatar.root.position.set(0, 0, 0)
     avatar.root.rotation.y = baseYaw + Math.sin(t * 0.6) * 0.12 // 緩いターンテーブル
     avatar.update(synth, t, false)
+    fitCamera()
     renderer.render(scene, camera)
     raf = requestAnimationFrame(loop)
   }

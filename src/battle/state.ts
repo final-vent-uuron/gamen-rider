@@ -72,6 +72,9 @@ export interface BattleState {
   players: PlayerState[]
   projectiles: Projectile[] // 飛翔中の波動弾
   winnerId: string | null
+  // 乱入演出の終了時刻(ms)。3人目以降が参戦した瞬間にサーバーが設定し、
+  // この時刻まで全員の時間が完全停止する（クライアントは WARNING を表示する）。
+  intrusionUntil?: number
 }
 
 // バランス・当たり判定パラメータ。ここだけ触れば挙動が変わる。
@@ -133,6 +136,10 @@ export const ARENA = {
   abareInvuln: 520, // 発動者の無敵時間
   abareRecovery: 380, // 発動者の後隙
   abareHitstop: 80,
+
+  // 乱入（3人目以降の途中参戦）: 全員の時間を止めて WARNING を出す演出時間。
+  // クライアントの Intrusion-bgm / WARNING 表示もこの長さに合わせる。
+  intrusionFreezeMs: 4000,
 } as const
 
 // 技のフレームデータ（ミリ秒）。startup=発生, active=持続, recovery=硬直。
@@ -325,11 +332,21 @@ export function createBattle(inits: PlayerInit[]): BattleState {
   }
 }
 
-export function addPlayer(state: BattleState, init: PlayerInit): BattleState {
+export function addPlayer(state: BattleState, init: PlayerInit, now = Date.now()): BattleState {
   if (state.players.some((p) => p.id === init.id)) return state
   const x = spawnX(state.players)
   const player = freshPlayer(init, x, x < 0.5 ? 1 : -1)
-  return checkWinner({ ...state, winnerId: null, players: [...state.players, player] })
+  // 乱入: 対戦中（2人以上）の部屋に途中参戦したら、全員の時間を止めて WARNING 演出へ。
+  // 実際の停止は stepBattle / 各 apply 系の intrusionUntil ガードが行う。
+  const intrusion = state.players.length >= 2
+  return checkWinner({
+    ...state,
+    winnerId: null,
+    players: [...state.players, player],
+    // 飛翔中の弾は消す（停止中の無防備な相手へ着弾するのを防ぐ）。
+    projectiles: intrusion ? [] : state.projectiles,
+    intrusionUntil: intrusion ? now + ARENA.intrusionFreezeMs : state.intrusionUntil,
+  })
 }
 
 export function removePlayer(state: BattleState, id: string): BattleState {
@@ -366,6 +383,8 @@ export function stepBattle(
   guardIntent: Record<string, boolean> = {},
 ): BattleState {
   if (state.winnerId) return state
+  // 乱入演出中は全員（弾・物理も含めて）完全停止。時刻ベースなので明け際の tick で自然に再開する。
+  if (now < (state.intrusionUntil ?? 0)) return state
   const dt = Math.min(dtMs, 50) / 1000
   const moved = state.players.map((p) => {
     if (p.hp <= 0)
@@ -483,6 +502,7 @@ function canActNow(p: PlayerState, now: number): boolean {
 // applyAttack/applyThrow の共通実装。
 function startMove(state: BattleState, id: string, kind: MoveKind, now: number): BattleState {
   if (state.winnerId) return state
+  if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
   const attacker = state.players.find((p) => p.id === id)
   if (!attacker || attacker.hp <= 0) return state
 
@@ -549,6 +569,7 @@ export function meterStocks(meter: number): number {
 // 被弾・コンボ・硬直・ヒットストップの最中でも発動できる（＝ハメ回避）のが唯一の特徴。純粋関数。
 export function applyAbare(state: BattleState, playerId: string, now: number): BattleState {
   if (state.winnerId) return state
+  if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
   const self = state.players.find((p) => p.id === playerId)
   if (!self || self.hp <= 0) return state
   if (self.meter < ARENA.abareCost) return state
@@ -838,6 +859,7 @@ function stepProjectiles(
 // 初速を入れるだけなので、空中で逆入力すれば airControl で軌道は変えられる。
 export function applyJump(state: BattleState, playerId: string, now: number): BattleState {
   if (state.winnerId) return state
+  if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
   let changed = false
   const players = state.players.map((p) => {
     if (p.id !== playerId) return p
