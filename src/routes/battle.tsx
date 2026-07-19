@@ -18,6 +18,7 @@ import {
 	createCameraGuardSource,
 	createKeyboardSource,
 	createSfx,
+	getPairedLimbs,
 	meterStocks,
 	stepBattle,
 } from "../battle";
@@ -27,7 +28,9 @@ import type {
 	BattleState,
 	Bgm,
 	CameraGuardStatus,
+	LimbKey,
 	NetStatus,
+	PairedLimbs,
 	PlayerState,
 	Sfx,
 } from "../battle";
@@ -123,6 +126,8 @@ function BattlePage() {
 	const [camGuard, setCamGuard] = useState(false); // カメラがガードポーズを認識中か（表示用）
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
 	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
+	// 加速度センサー（右手/左手/右足/左足）のペアリング有無。null = 確認中
+	const [pairedLimbs, setPairedLimbs] = useState<PairedLimbs | null>(null);
 	const [intruder, setIntruder] = useState<string | null>(null); // 乱入 WARNING（乱入者名。null = 非表示）
 
 	const battleRef = useRef(battle);
@@ -174,6 +179,22 @@ function BattlePage() {
 		return () => {
 			sfx.close();
 			sfxRef.current = null;
+		};
+	}, []);
+
+	// 加速度センサーのペアリング状態。Web Bluetooth の許可済みデバイス名から部位別に判定する
+	// （接続はしない）。ペアリングは /pairing 画面で行うので、ここは表示のために定期確認するだけ。
+	useEffect(() => {
+		let alive = true;
+		const check = async () => {
+			const limbs = await getPairedLimbs();
+			if (alive) setPairedLimbs(limbs);
+		};
+		check();
+		const id = window.setInterval(check, 3000);
+		return () => {
+			alive = false;
+			window.clearInterval(id);
 		};
 	}, []);
 
@@ -822,8 +843,13 @@ function BattlePage() {
 					</span>
 				</div> */}
 
-				{/* 左: カメラの部位検出ステータス（顔・両手・両足の可視ゲージ＋体の向き） */}
-				<CamStatusBar lmRef={camLmRef} side={camSide} pose={camPose} />
+				{/* 左: 部位ステータス（顔=カメラ可視ゲージ、手足=センサーのペアリング＋カメラ可視） */}
+				<CamStatusBar
+					lmRef={camLmRef}
+					side={camSide}
+					pose={camPose}
+					paired={pairedLimbs}
+				/>
 
 				{/* 中央: HP ゲージ（全プレイヤー・スマブラ風。余った幅を全部使う） */}
 				<div style={{ flex: 1, minWidth: 0 }}>
@@ -1431,8 +1457,7 @@ function ControlsHelp() {
 						))}
 					</div>
 					<span style={{ fontSize: "0.72rem", color: "#fbbf24" }}>
-						コンボ: 当てた技を<strong>ヒット中にキャンセル</strong>して次へ →
-						例) パンチ→キック→ファイナル
+						技は<strong>出し切り</strong>制: モーション中は次の技を出せない（連打非対応）
 					</span>
 					<span style={{ fontSize: "0.72rem", color: "#7fdfff" }}>
 						ピンチ: <strong>E でエラーモード</strong>（ゲージ3本）→
@@ -1525,22 +1550,25 @@ function IntrusionWarning({ name }: { name: string }) {
 // 可視化。親は検出ループ(~15fps)のたびに ref へ書くだけで、この component が 200ms 周期で
 // ref を読んで自分だけ再レンダーする（BattlePage 全体を 15fps で再レンダーさせない）。
 
-const STATUS_PARTS: [string, number][] = [
-	["顔", LM.NOSE],
-	["右手", LM.R_WRIST],
-	["左手", LM.L_WRIST],
-	["右足", LM.R_ANKLE],
-	["左足", LM.L_ANKLE],
+// [表示名, カメラのランドマーク index, 対応するセンサー部位（null = センサー無し・カメラのみ）]
+const STATUS_PARTS: [string, number, LimbKey | null][] = [
+	["顔", LM.NOSE, null],
+	["右手", LM.R_WRIST, "rightHand"],
+	["左手", LM.L_WRIST, "leftHand"],
+	["右足", LM.R_ANKLE, "rightFoot"],
+	["左足", LM.L_ANKLE, "leftFoot"],
 ];
 
 function CamStatusBar({
 	lmRef,
 	side,
 	pose,
+	paired,
 }: {
 	lmRef: React.RefObject<NormalizedLandmark[] | null>;
 	side: boolean;
 	pose: CameraGuardStatus;
+	paired: PairedLimbs | null; // 加速度センサーのペアリング有無（null = 確認中）
 }) {
 	const [, setTick] = useState(0);
 	useEffect(() => {
@@ -1597,11 +1625,57 @@ function CamStatusBar({
 		);
 	};
 
-	if (pose !== "ready") {
-		return (
-			<span style={{ fontSize: "0.7rem", color: "#9ca3af", flexShrink: 0 }}>
-				ポーズ解析 {pose === "error" ? "エラー" : "準備中…"}
+	// 未ペアリングの部位はゲージの代わりに表示（入力は加速度センサー由来のため、
+	// ペアリングされていなければカメラに映っていても操作できない）。
+	const unpaired = (label: string) => (
+		<span
+			key={label}
+			style={{
+				display: "inline-flex",
+				alignItems: "center",
+				gap: "4px",
+				fontSize: "0.66rem",
+				fontFamily: "monospace",
+				whiteSpace: "nowrap",
+				color: "#cbd5e1",
+			}}
+		>
+			<span style={{ width: "2.4em", textAlign: "right" }}>{label}</span>
+			<span
+				style={{
+					fontWeight: 700,
+					color: "#f87171",
+					background: "rgba(127,29,29,0.35)",
+					border: "1px solid #7f1d1d",
+					borderRadius: "3px",
+					padding: "0 5px",
+					fontSize: "0.6rem",
+				}}
+			>
+				未ペアリング
 			</span>
+		</span>
+	);
+
+	if (pose !== "ready") {
+		// カメラ（ポーズ解析）が起動していなくても、センサーのペアリング有無は独立して見せる
+		return (
+			<div
+				style={{
+					display: "grid",
+					gridTemplateColumns: "repeat(2, auto)",
+					gap: "0.15rem 0.7rem",
+					flexShrink: 0,
+					padding: "0 0.2rem",
+				}}
+			>
+				<span style={{ fontSize: "0.66rem", color: "#9ca3af", whiteSpace: "nowrap" }}>
+					ポーズ解析 {pose === "error" ? "エラー" : "準備中…"}
+				</span>
+				{STATUS_PARTS.filter(([, , limb]) => limb && !(paired?.[limb] ?? false)).map(
+					([label]) => unpaired(label),
+				)}
+			</div>
 		);
 	}
 	return (
@@ -1614,8 +1688,10 @@ function CamStatusBar({
 				padding: "0 0.2rem",
 			}}
 		>
-			{STATUS_PARTS.map(([label, idx]) =>
-				gauge(label, lm?.[idx]?.visibility ?? 0, !!lm),
+			{STATUS_PARTS.map(([label, idx, limb]) =>
+				limb && !(paired?.[limb] ?? false)
+					? unpaired(label)
+					: gauge(label, lm?.[idx]?.visibility ?? 0, !!lm),
 			)}
 			{/* 向き: 正面か横向きか（肩幅/胴長比のデバウンス済み判定） */}
 			<span
