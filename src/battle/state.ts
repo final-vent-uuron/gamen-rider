@@ -879,6 +879,22 @@ export function applyJump(state: BattleState, playerId: string, now: number): Ba
   return changed ? { ...state, players } : state
 }
 
+// 振り向き（facing 反転）。カメラの体の向き検出（正面 → 横向き）から呼ぶ。
+// 位置は変えず向きだけ反転する。行動可能時のみ（硬直・被弾中は無効）。
+// 移動中は stepBattle が moveIntent で facing を上書きするため、実質は静止中の入力。
+export function applyTurn(state: BattleState, playerId: string, now: number): BattleState {
+  if (state.winnerId) return state
+  if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
+  let changed = false
+  const players = state.players.map((p) => {
+    if (p.id !== playerId) return p
+    if (!canActNow(p, now)) return p
+    changed = true
+    return { ...p, facing: (p.facing === 1 ? -1 : 1) as 1 | -1 }
+  })
+  return changed ? { ...state, players } : state
+}
+
 function checkWinner(state: BattleState): BattleState {
   if (state.players.length < 2) return state
   const alive = state.players.filter((p) => p.hp > 0)

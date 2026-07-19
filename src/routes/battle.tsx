@@ -5,6 +5,7 @@ import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
 
 import { RIDER_ROUTINES } from "../pose";
 import { LM } from "../pose/landmarks";
+import { facingMetrics } from "../pose/poses";
 import { createSkeletonSmoother } from "../pose/skeleton";
 import {
 	ARENA,
@@ -12,6 +13,7 @@ import {
 	applyAttack,
 	applyJump,
 	applyThrow,
+	applyTurn,
 	battleCardsFor,
 	connectBattle,
 	createBgm,
@@ -73,6 +75,9 @@ const EMPTY_BATTLE: BattleState = {
 // 他プレイヤーの動きがカクつく。この時間だけ過去を描画時刻とし、その前後の受信
 // スナップショット間で位置を補間して滑らかにする。ローカル開発では相手がこの分だけ
 // 遅れて見えるだけで、体感はほぼ変わらない。
+// 時間軸は受信時刻ではなく「サーバー送信時刻(st)」を使う。受信時刻軸だと到着ジッタが
+// そのまま補間結果に乗り、120ms 遅らせてもカクつきが残るため。描画時刻(rt)は毎フレーム
+// 実時間で前進させつつ、最新 st - 遅延 へゆっくり寄せる（時計ドリフト・バースト到着を吸収）。
 const INTERP_DELAY_MS = 120;
 
 // 予測の見た目: 自分の技/ガードはサーバーが追いつく前でも即表示。被弾中はサーバー優先。
@@ -159,7 +164,10 @@ function BattlePage() {
 	const guardRef = useRef(false); // 自分のガード入力
 	const lastPredTRef = useRef(0);
 	// 受信スナップショットの履歴（他プレイヤーの補間用。INTERP_DELAY_MS 参照）
-	const snapsRef = useRef<{ t: number; state: BattleState }[]>([]);
+	// st はサーバー送信時刻。到着ジッタを持ち込まないため受信時刻は使わない。
+	const snapsRef = useRef<{ st: number; state: BattleState }[]>([]);
+	const interpRtRef = useRef(0); // 補間の描画時刻（サーバー時計軸）
+	const lastLoopTRef = useRef(0); // rt を実時間で前進させるための前フレーム時刻
 
 	function flashFinal() {
 		setFinalActive(true);
@@ -390,7 +398,7 @@ function BattlePage() {
 			riderId: routine.riderId,
 			riderName: routine.riderName,
 			onStatus: setStatus,
-			onState: (state, youId) => {
+			onState: (state, youId, st) => {
 				youIdRef.current = youId;
 				const prev = battleRef.current;
 				// isSelf は端末ごとに違う（youId と一致する人が自分）。ここで付け直す。
@@ -402,14 +410,14 @@ function BattlePage() {
 				processEvents(prev, next, youId);
 				reconcilePrediction(next, youId);
 				battleRef.current = next;
-				// 補間用の履歴に積む（描画に必要な直近 ~0.5 秒だけ残す）
-				const snapNow = performance.now();
-				snapsRef.current.push({ t: snapNow, state: next });
-				while (
-					snapsRef.current.length > 2 &&
-					snapsRef.current[0].t < snapNow - 500
-				) {
-					snapsRef.current.shift();
+				// 補間用の履歴に積む（描画に必要な直近 ~0.5 秒だけ残す）。
+				// 順不同・重複 st（再接続やバースト）は捨てて単調増加を保つ。
+				const snaps = snapsRef.current;
+				if (snaps.length === 0 || st > snaps[snaps.length - 1].st) {
+					snaps.push({ st, state: next });
+					while (snaps.length > 2 && snaps[0].st < st - 500) {
+						snaps.shift();
+					}
 				}
 				// サーバー配信は 60Hz だが、React の再レンダー（HP バー・ゲージ・カード等の UI）まで
 				// 60Hz で回すと three.js の描画ループとメインスレッドを取り合ってガタつく。
@@ -511,8 +519,15 @@ function BattlePage() {
 			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
-			// 体の向き（カメラに対して横向きか）
-			setCamSide,
+			// 体の向き（カメラに対して横向きか）。正面 → 横向きの瞬間に振り向く（facing 反転）。
+			// デバウンス済みの変化時のみ呼ばれるので、横向き 1 回につき 1 回だけ送られる。
+			(side) => {
+				setCamSide(side);
+				if (side) {
+					net.sendTurn();
+					applyPred((s) => applyTurn(s, youIdRef.current, Date.now()));
+				}
+			},
 		);
 		camSource.start();
 
@@ -536,18 +551,28 @@ function BattlePage() {
 
 			// --- 他プレイヤーの補間（INTERP_DELAY_MS 分の過去を、受信履歴の間で lerp）---
 			// 自分は下の予測で描くので対象外。履歴が rt を挟めない（受信直後・停滞中）は最新のまま。
+			// rt はサーバー時計軸。毎フレーム実時間で前進させ、目標（最新 st - 遅延）へ 5%/frame で
+			// 寄せることで、到着ジッタやバーストが動きに乗らないようにする。大きく外れたら
+			// （タブ非表示からの復帰・再接続など）追従し直す。
 			let players = server.players;
 			const snaps = snapsRef.current;
 			if (snaps.length >= 2) {
-				const rt = performance.now() - INTERP_DELAY_MS;
+				const nowP = performance.now();
+				const dt = lastLoopTRef.current ? nowP - lastLoopTRef.current : 16;
+				lastLoopTRef.current = nowP;
+				const target = snaps[snaps.length - 1].st - INTERP_DELAY_MS;
+				let rt = interpRtRef.current === 0 ? target : interpRtRef.current + dt;
+				rt += (target - rt) * 0.05;
+				if (Math.abs(target - rt) > 300) rt = target;
+				interpRtRef.current = rt;
 				let hi = snaps.length - 1;
-				while (hi > 0 && snaps[hi - 1].t > rt) hi--;
-				if (hi > 0 && snaps[hi].t > rt) {
+				while (hi > 0 && snaps[hi - 1].st > rt) hi--;
+				if (hi > 0 && snaps[hi].st > rt) {
 					const s0 = snaps[hi - 1];
 					const s1 = snaps[hi];
 					const f = Math.max(
 						0,
-						Math.min(1, (rt - s0.t) / Math.max(1, s1.t - s0.t)),
+						Math.min(1, (rt - s0.st) / Math.max(1, s1.st - s0.st)),
 					);
 					players = players.map((p) => {
 						if (p.id === selfId) return p;
@@ -1714,6 +1739,18 @@ function CamStatusBar({
 				>
 					{!lm ? "--" : side ? "横向き" : "正面"}
 				</span>
+				{/* しきい値調整用の生値: 肩幅/胴長の比と左右（肩・腰）の可視性 */}
+				{(() => {
+					const m = lm ? facingMetrics(lm) : null;
+					return (
+						m && (
+							<span style={{ color: "#6b7280" }}>
+								比{m.ratio.toFixed(2)} 角{Math.round(m.yawDeg)} L
+								{m.leftVis.toFixed(2)} R{m.rightVis.toFixed(2)}
+							</span>
+						)
+					);
+				})()}
 			</span>
 		</div>
 	);

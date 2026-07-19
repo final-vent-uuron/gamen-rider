@@ -496,7 +496,13 @@ function avatarAction(p: PlayerState, moving: boolean): AvatarAction {
 	if (p.action === "kick") return "kick";
 	if (p.action === "shot") return "shot";
 	if (p.action === "final") return "final";
-	if (p.y > 0.001) return "jump";
+	if (p.y > 0.001) {
+		// 被弾由来の滞空（打ち上げられた・空中で殴られた直後）は、硬直が明けても
+		// ジャンプモーションに切り替えず吹き飛びのまま落とす。コンボ被弾中
+		// （comboCount > 0。着弾から ~0.8s でリセット）を「被弾由来」の目印にする。
+		if (p.comboCount > 0) return "hit-air";
+		return "jump";
+	}
 	if (moving) return "walk";
 	return "idle";
 }

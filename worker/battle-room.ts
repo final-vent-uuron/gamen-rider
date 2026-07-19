@@ -18,6 +18,7 @@ import {
   applyAttack,
   applyJump,
   applyThrow,
+  applyTurn,
   createBattle,
   removePlayer,
   stepBattle,
@@ -26,10 +27,17 @@ import {
 const TICK_MS = 1000 / 60 // シミュレーション更新（60Hz）
 const BROADCAST_MS = 1000 / 60 // 状態配信（60Hz）。量子化遅延を減らして体感を軽く（ペイロードは小さい）
 
+// ハートビート: WiFi 切り替え・スリープ等では TCP が黙って死に、close イベントが
+// 飛ばないままゴーストプレイヤーが部屋に残る。クライアントは PING 間隔（net.ts: 3s）で
+// ping を送り、サーバーは最終受信からこの時間を超えた接続を強制的に落とす。
+const STALE_MS = 10_000 // これを超えて何も受信しない接続はゴーストとみなして切る
+const SWEEP_MS = 1_000 // ゴースト掃除の周期（sim ループ内で間引き実行）
+
 interface Conn {
   id: string
   riderId?: string
   riderName?: string
+  lastSeen: number // 最終受信時刻（ハートビート判定用。どのメッセージでも更新）
 }
 
 type ClientMsg =
@@ -38,9 +46,11 @@ type ClientMsg =
   | { t: 'jump' }
   | { t: 'attack'; kind?: unknown }
   | { t: 'guard'; on?: unknown }
+  | { t: 'turn' } // 振り向き（カメラの体の向き検出: 正面 → 横向き）
   | { t: 'throw' }
   | { t: 'abare' }
   | { t: 'reset' }
+  | { t: 'ping' } // ハートビート（生存確認のみ。ゲームへの影響なし）
 
 export class BattleRoom extends DurableObject {
   private sockets = new Map<WebSocket, Conn>()
@@ -48,6 +58,7 @@ export class BattleRoom extends DurableObject {
   private moveIntent: Record<string, -1 | 0 | 1> = {}
   private guardIntent: Record<string, boolean> = {}
   private last = 0
+  private lastSweep = 0 // 直近のゴースト掃除時刻（SWEEP_MS 間隔で間引く）
   private simTimer: number | null = null
   private broadcastTimer: number | null = null
 
@@ -61,7 +72,7 @@ export class BattleRoom extends DurableObject {
     server.accept()
 
     const id = 'p_' + Math.random().toString(36).slice(2, 9)
-    this.sockets.set(server, { id })
+    this.sockets.set(server, { id, lastSeen: Date.now() })
     server.send(JSON.stringify({ t: 'welcome', youId: id }))
     this.ensureLoop()
 
@@ -82,6 +93,7 @@ export class BattleRoom extends DurableObject {
     }
     const conn = this.sockets.get(ws)
     if (!conn) return
+    conn.lastSeen = Date.now() // どのメッセージでも生存扱い（ping 専用にしない）
 
     switch (msg.t) {
       case 'join': {
@@ -124,6 +136,9 @@ export class BattleRoom extends DurableObject {
       case 'guard':
         this.guardIntent[conn.id] = msg.on === true
         break
+      case 'turn':
+        this.battle = applyTurn(this.battle, conn.id, Date.now())
+        break
       case 'throw':
         this.battle = applyThrow(this.battle, conn.id, Date.now())
         break
@@ -133,6 +148,8 @@ export class BattleRoom extends DurableObject {
       case 'reset':
         this.resetRoom()
         break
+      case 'ping':
+        break // lastSeen の更新（上で実施）だけが目的
     }
   }
 
@@ -174,6 +191,14 @@ export class BattleRoom extends DurableObject {
       const dt = now - this.last
       this.last = now
       this.battle = stepBattle(this.battle, dt, now, this.moveIntent, this.guardIntent)
+      // ゴースト掃除（1秒ごとに間引き実行）: close イベントが飛ばないまま死んだ接続を
+      // 最終受信からの経過時間で検出して落とす（WiFi 切り替え・スリープ対策）。
+      if (now - this.lastSweep >= SWEEP_MS) {
+        this.lastSweep = now
+        for (const [ws, conn] of this.sockets) {
+          if (now - conn.lastSeen > STALE_MS) this.onClose(ws)
+        }
+      }
     }, TICK_MS) as unknown as number
     this.broadcastTimer = setInterval(() => this.broadcast(), BROADCAST_MS) as unknown as number
   }
@@ -190,7 +215,9 @@ export class BattleRoom extends DurableObject {
 
   private broadcast() {
     if (this.sockets.size === 0) return
-    const payload = JSON.stringify({ t: 'state', state: this.battle })
+    // st: サーバー時刻。クライアントは受信時刻でなくこれを補間の時間軸に使う
+    // （ネットワークのバースト到着の揺れが他プレイヤーの動きに出ないように）。
+    const payload = JSON.stringify({ t: 'state', state: this.battle, st: Date.now() })
     for (const ws of this.sockets.keys()) {
       try {
         ws.send(payload)
