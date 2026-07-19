@@ -5,6 +5,13 @@ import type { PoseLandmarker } from '@mediapipe/tasks-vision'
 // ※ public/ に置いた JS は Vite がソースからの import を禁止しているため ?url を使う。
 import wasmLoaderUrl from '@mediapipe/tasks-vision/vision_wasm_internal.js?url'
 import wasmBinaryUrl from '@mediapipe/tasks-vision/vision_wasm_internal.wasm?url'
+// module worker 用の ESM ローダー。classic 版（上）は importScripts / <script> タグで
+// 読み込まれる前提のスクリプトで、メインスレッドでは <script> 注入で動くが、
+// module worker には importScripts が無く import() では中身がグローバルに出ないため失敗する。
+// tasks-vision は module 環境向けに ESM ビルドを別途同梱している（FilesetResolver.
+// forVisionTasks(base, true) 相当）。ワーカーからはこちらを使う。
+import wasmModuleLoaderUrl from '@mediapipe/tasks-vision/vision_wasm_module_internal.js?url'
+import wasmModuleBinaryUrl from '@mediapipe/tasks-vision/vision_wasm_module_internal.wasm?url'
 
 // @mediapipe/tasks-vision モジュール全体の型（DrawingUtils や POSE_CONNECTIONS を使うため）
 export type MediaPipeModules = typeof import('@mediapipe/tasks-vision')
@@ -37,7 +44,12 @@ export async function createPoseLandmarker(
   // FilesetResolver.forVisionTasks(basePath) は使わず fileset を自前で組む。
   // （SIMD 判定をして nosimd 版へフォールバックする仕組みだが、対象は数年前のブラウザのみ。
   //   常に SIMD 版を指す。）
-  const vision = { wasmLoaderPath: wasmLoaderUrl, wasmBinaryPath: wasmBinaryUrl }
+  // メインスレッド（変身/調整ラボ）は classic 版、Web Worker（バトルのカメラガード）は
+  // ESM 版を選ぶ。document の有無でワーカー判定する。
+  const inWorker = typeof document === 'undefined'
+  const vision = inWorker
+    ? { wasmLoaderPath: wasmModuleLoaderUrl, wasmBinaryPath: wasmModuleBinaryUrl }
+    : { wasmLoaderPath: wasmLoaderUrl, wasmBinaryPath: wasmBinaryUrl }
   const landmarker = await mp.PoseLandmarker.createFromOptions(vision, {
     baseOptions: {
       modelAssetPath: MODEL_URLS[model],

@@ -1,7 +1,8 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { playWinBgm } from '../battle/bgm'
+import { WEBWORLD_SKY, WebWorldBackdrop } from '../webworld-backdrop'
 import type { WinnerPresenter } from '../battle/winner3d'
 
 // 勝者（リザルト）ページ。バトルロワイヤルの決着後シーン。
@@ -79,34 +80,6 @@ function ResultPage() {
   // 勝利ジングル（win-bgm）。バトル画面が main BGM をフェードアウトさせてから遷移してくる。
   useEffect(() => playWinBgm(), [])
 
-  // 星（電脳ノイズ粒）の配置はマウント時に一度だけ確定させる。
-  const stars = useMemo(
-    () =>
-      Array.from({ length: 34 }).map((_, i) => ({
-        key: i,
-        left: Math.random() * 100,
-        top: Math.random() * 58, // 地平線より上だけ
-        size: 1 + Math.round(Math.random() * 2),
-        delay: Math.random() * 3,
-        cyan: i % 3 === 0,
-      })),
-    [],
-  )
-
-  // 紙吹雪の見た目はマウント時に一度だけ確定させる（毎レンダーで飛ばないように）。
-  const confetti = useMemo(
-    () =>
-      Array.from({ length: 20 }).map((_, i) => ({
-        key: i,
-        left: Math.round(Math.random() * 100),
-        color: ['#ffd21e', '#f87171', '#34d399', '#38bdf8', '#f472b6'][i % 5],
-        delay: Math.random() * 2.5,
-        duration: 2.6 + Math.random() * 2.4,
-        size: 7 + Math.round(Math.random() * 7),
-      })),
-    [],
-  )
-
   // 想定外の直リンク等で順位が無いとき用のフォールバック。
   if (!winner) {
     return (
@@ -139,115 +112,11 @@ function ResultPage() {
         overflow: 'hidden',
         color: '#fff',
         // Webワールド（電脳空間）の空。バトル画面（arena3d の backdrop）と同じ世界観。
-        background:
-          'radial-gradient(ellipse at 50% 18%, #1b2a52 0%, #101a33 45%, #0b1220 72%, #070b16 100%)',
+        background: WEBWORLD_SKY,
       }}
     >
-      {/* 星（電脳空間のノイズ粒。まばたきする） */}
-      {stars.map((s) => (
-        <span
-          key={s.key}
-          style={{
-            position: 'absolute',
-            left: `${s.left}%`,
-            top: `${s.top}%`,
-            width: `${s.size}px`,
-            height: `${s.size}px`,
-            borderRadius: '50%',
-            background: s.cyan ? '#7fd4ff' : '#dbeafe',
-            boxShadow: s.cyan ? '0 0 6px #38bdf8' : '0 0 4px #fff',
-            animation: `starTwinkle ${2 + s.delay}s ease-in-out ${s.delay}s infinite`,
-            pointerEvents: 'none',
-          }}
-        />
-      ))}
-
-      {/* 漂うコード片（この世界がプログラムでできていることを匂わせる） */}
-      {CODE_FRAGMENTS.map((f, i) => (
-        <span
-          key={i}
-          style={{
-            position: 'absolute',
-            top: f.top,
-            left: f.left,
-            right: f.right,
-            fontFamily: 'monospace',
-            fontSize: 'clamp(0.7rem, 1.4vw, 0.95rem)',
-            color: 'rgba(56,189,248,0.45)',
-            textShadow: '0 0 10px rgba(56,189,248,0.35)',
-            animation: `codeDrift ${6 + (i % 3)}s ease-in-out ${i * 0.9}s infinite`,
-            pointerEvents: 'none',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {f.text}
-        </span>
-      ))}
-
-      {/* 電脳グリッドの床（地平線へ向かう遠近グリッド。バトルステージの床と同じ意匠） */}
-      <div
-        style={{
-          position: 'absolute',
-          left: '-15%',
-          right: '-15%',
-          bottom: 0,
-          height: '42%',
-          backgroundImage:
-            'repeating-linear-gradient(90deg, rgba(56,189,248,0.25) 0 2px, transparent 2px 90px), repeating-linear-gradient(0deg, rgba(56,189,248,0.25) 0 2px, transparent 2px 60px)',
-          transform: 'perspective(320px) rotateX(58deg)',
-          transformOrigin: '50% 100%',
-          maskImage: 'linear-gradient(180deg, transparent 0%, #000 55%)',
-          WebkitMaskImage: 'linear-gradient(180deg, transparent 0%, #000 55%)',
-          pointerEvents: 'none',
-        }}
-      />
-      {/* 地平線のネオンライン */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: '42%',
-          height: '2px',
-          background:
-            'linear-gradient(90deg, transparent, rgba(56,189,248,0.55) 30%, rgba(167,139,250,0.55) 70%, transparent)',
-          boxShadow: '0 0 18px rgba(56,189,248,0.35)',
-          pointerEvents: 'none',
-        }}
-      />
-
-      {/* 下部の暗い床の陰（キャラを立たせる土台） */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          height: '34%',
-          background: 'linear-gradient(180deg, rgba(7,11,22,0) 0%, rgba(7,11,22,0.55) 60%, rgba(4,7,14,0.9) 100%)',
-          pointerEvents: 'none',
-        }}
-      />
-
-      {/* 紙吹雪 */}
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
-        {confetti.map((c) => (
-          <span
-            key={c.key}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: `${c.left}%`,
-              width: `${c.size}px`,
-              height: `${c.size * 1.6}px`,
-              background: c.color,
-              borderRadius: '2px',
-              opacity: 0.9,
-              animation: `confettiFall ${c.duration}s linear ${c.delay}s infinite`,
-            }}
-          />
-        ))}
-      </div>
+      {/* Webワールドの背景一式（星・コードレイン・地球・ブラウザ窓・グリッド床） */}
+      <WebWorldBackdrop fragments={CODE_FRAGMENTS} />
 
       {/* 敗者たち（バトルロワイヤルの戦場跡: death モーションで倒れたまま周囲に散らばる）。
           勝者より奥（zIndex 0）・暗め・彩度低めで「決着後」の空気を出す。 */}
@@ -494,7 +363,9 @@ function WinnerStandee({ entry }: { entry: RankEntry }) {
       presenter = createWinnerPresenter(hostRef.current, {
         riderId: entry.riderId,
         color: hexToInt(entry.color),
-        action: 'idle',
+        // 勝利ポーズ: 必殺技クリップ（arduino は special）を一度再生して最終フレームで静止。
+        // クリップ未収録のモデルは idle にフォールバックする（従来と同じ見た目）。
+        action: 'final',
       })
     })
     return () => {
@@ -505,23 +376,20 @@ function WinnerStandee({ entry }: { entry: RankEntry }) {
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      {/* 背後の後光 */}
+      {/* 足元のスポットライト（電脳空間に立つ勝者を静かに照らす） */}
       <div
         style={{
           position: 'absolute',
-          bottom: '8%',
-          left: '50%',
-          width: '135%',
-          aspectRatio: '1',
-          transform: 'translate(-50%, 0)',
+          bottom: '-2%',
+          left: '10%',
+          right: '10%',
+          height: '18%',
           background:
-            'repeating-conic-gradient(from 0deg, rgba(255,255,255,0.22) 0deg 11deg, transparent 11deg 22deg)',
-          borderRadius: '50%',
-          animation: 'winnerRays 16s linear infinite',
+            'radial-gradient(ellipse at 50% 100%, rgba(56,189,248,0.35) 0%, rgba(167,139,250,0.18) 45%, transparent 75%)',
           pointerEvents: 'none',
         }}
       />
-      {/* 3D キャンバスのホスト（背景透過なので CSS の夕景の上にキャラだけ乗る） */}
+      {/* 3D キャンバスのホスト（背景透過なので CSS の電脳空間の上にキャラだけ乗る） */}
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {/* 王冠（3D キャラの頭上あたり） */}
       <span

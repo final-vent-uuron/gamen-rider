@@ -1,7 +1,10 @@
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
+
 import { RIDER_ROUTINES } from "../pose";
+import { LM } from "../pose/landmarks";
 import { createSkeletonSmoother } from "../pose/skeleton";
 import {
 	ARENA,
@@ -84,6 +87,7 @@ function predAction(
 	if (
 		predP.action === "punch" ||
 		predP.action === "kick" ||
+		predP.action === "shot" ||
 		predP.action === "throw" ||
 		predP.action === "final" ||
 		predP.action === "abare" ||
@@ -118,6 +122,7 @@ function BattlePage() {
 	const [koFlash, setKoFlash] = useState(false); // KO の一瞬フラッシュ
 	const [camGuard, setCamGuard] = useState(false); // カメラがガードポーズを認識中か（表示用）
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
+	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
 	const [intruder, setIntruder] = useState<string | null>(null); // 乱入 WARNING（乱入者名。null = 非表示）
 
 	const battleRef = useRef(battle);
@@ -136,6 +141,7 @@ function BattlePage() {
 	const intrusionTimerRef = useRef(0);
 	const ventVideoRef = useRef<HTMLVideoElement>(null); // 右下カメラの <video>（ポーズ解析と共有）
 	const ventCanvasRef = useRef<HTMLCanvasElement>(null); // 右下カメラの骨格オーバーレイ
+	const camLmRef = useRef<NormalizedLandmark[] | null>(null); // 最新の検出ランドマーク（画面下ステータス用）
 	const comboTimerRef = useRef(0);
 	const popupKeyRef = useRef(0);
 	const koOrderRef = useRef<string[]>([]); // 撃墜された順（順位付け用。先頭＝最初に落ちた＝下位）
@@ -478,9 +484,14 @@ function BattlePage() {
 				setGuardPart("cam", on);
 				setCamGuard(on);
 			},
-			(lm, guarding) => skeleton.push(lm, guarding ? "#7fdfff" : "#4ade80"),
+			(lm, guarding) => {
+				camLmRef.current = lm; // 画面下ステータス（部位の生値）用。React は通さない
+				skeleton.push(lm, guarding ? "#7fdfff" : "#4ade80");
+			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
+			// 体の向き（カメラに対して横向きか）
+			setCamSide,
 		);
 		camSource.start();
 
@@ -811,6 +822,9 @@ function BattlePage() {
 					</span>
 				</div> */}
 
+				{/* 左: カメラの部位検出ステータス（顔・両手・両足の可視ゲージ＋体の向き） */}
+				<CamStatusBar lmRef={camLmRef} side={camSide} pose={camPose} />
+
 				{/* 中央: HP ゲージ（全プレイヤー・スマブラ風。余った幅を全部使う） */}
 				<div style={{ flex: 1, minWidth: 0 }}>
 					<HpBars players={battle.players} />
@@ -829,6 +843,7 @@ function BattlePage() {
 						highlight={finalActive}
 						guarding={camGuard}
 						poseStatus={camPose}
+						facingSide={camSide}
 						videoRef={ventVideoRef}
 						canvasRef={ventCanvasRef}
 					/>
@@ -1133,7 +1148,7 @@ function HpBar({
 	);
 }
 
-// 逆転ゲージ（5 ゲージ制）。1 本たまれば「暴れ(割り込み)」、5 本満タンで「ファイナル」。
+// 逆転ゲージ（5 ゲージ制）。2 本で「波動弾」、3 本で「エラーモード(割り込み)」、満タンで「ファイナル」。
 // たまった本数は発光したセルで示し、満タンで全体が脈動する。
 function MeterBar({ meter, color }: { meter: number; color: string }) {
 	const STOCKS = ARENA.meterMax / ARENA.meterPerStock;
@@ -1347,8 +1362,8 @@ function ControlsHelp() {
 		["Shift / S / ↓", "ガード(押しっぱ・前後OK)"],
 		["📷 構え", "カメラにボクシングの構え(両拳を顔の前)でガード"],
 		["U", "投げ(ガード崩し)"],
-		["I", "波動弾(飛び道具・1発ずつ)"],
-		["E", "暴れ(1ゲージ・割り込み脱出)"],
+		["I", "波動弾(2ゲージ・飛び道具・1発ずつ)"],
+		["E", "エラーモード(3ゲージ・割り込み脱出)"],
 		["L / F", "ファイナル(5ゲージ)"],
 	];
 	return (
@@ -1420,7 +1435,7 @@ function ControlsHelp() {
 						例) パンチ→キック→ファイナル
 					</span>
 					<span style={{ fontSize: "0.72rem", color: "#7fdfff" }}>
-						ピンチ: <strong>E で暴れ</strong>（ゲージ1本）→
+						ピンチ: <strong>E でエラーモード</strong>（ゲージ3本）→
 						無敵で割り込み、両隣を突き放してハメを脱出
 					</span>
 				</div>
@@ -1505,6 +1520,129 @@ function IntrusionWarning({ name }: { name: string }) {
 	);
 }
 
+// ---- 画面下ステータス（カメラの部位検出の生値） ---------------------------
+// 顔・両手・両足の可視性(%)と体の向きを HUD バー左端に出す。デバッグ兼「なぜ判定されないか」の
+// 可視化。親は検出ループ(~15fps)のたびに ref へ書くだけで、この component が 200ms 周期で
+// ref を読んで自分だけ再レンダーする（BattlePage 全体を 15fps で再レンダーさせない）。
+
+const STATUS_PARTS: [string, number][] = [
+	["顔", LM.NOSE],
+	["右手", LM.R_WRIST],
+	["左手", LM.L_WRIST],
+	["右足", LM.R_ANKLE],
+	["左足", LM.L_ANKLE],
+];
+
+function CamStatusBar({
+	lmRef,
+	side,
+	pose,
+}: {
+	lmRef: React.RefObject<NormalizedLandmark[] | null>;
+	side: boolean;
+	pose: CameraGuardStatus;
+}) {
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		const id = window.setInterval(() => setTick((v) => v + 1), 200);
+		return () => window.clearInterval(id);
+	}, []);
+
+	const lm = lmRef.current;
+	// 部位ごとの可視性ゲージ（0..1）。緑 ≥0.6 / 黄 ≥0.3 / 赤 それ未満。
+	const gauge = (label: string, v: number, active: boolean) => {
+		const color = !active
+			? "#4b5563"
+			: v >= 0.6
+				? "#4ade80"
+				: v >= 0.3
+					? "#fbbf24"
+					: "#f87171";
+		return (
+			<span
+				key={label}
+				style={{
+					display: "inline-flex",
+					alignItems: "center",
+					gap: "4px",
+					fontSize: "0.66rem",
+					fontFamily: "monospace",
+					color: "#cbd5e1",
+					whiteSpace: "nowrap",
+				}}
+			>
+				<span style={{ width: "2.4em", textAlign: "right" }}>{label}</span>
+				<span
+					style={{
+						position: "relative",
+						width: "54px",
+						height: "7px",
+						background: "#1f2937",
+						borderRadius: "4px",
+						overflow: "hidden",
+					}}
+				>
+					<span
+						style={{
+							position: "absolute",
+							inset: 0,
+							width: `${Math.round((active ? v : 0) * 100)}%`,
+							background: color,
+							borderRadius: "4px",
+							transition: "width 0.15s linear",
+						}}
+					/>
+				</span>
+			</span>
+		);
+	};
+
+	if (pose !== "ready") {
+		return (
+			<span style={{ fontSize: "0.7rem", color: "#9ca3af", flexShrink: 0 }}>
+				ポーズ解析 {pose === "error" ? "エラー" : "準備中…"}
+			</span>
+		);
+	}
+	return (
+		<div
+			style={{
+				display: "grid",
+				gridTemplateColumns: "repeat(2, auto)",
+				gap: "0.15rem 0.7rem",
+				flexShrink: 0,
+				padding: "0 0.2rem",
+			}}
+		>
+			{STATUS_PARTS.map(([label, idx]) =>
+				gauge(label, lm?.[idx]?.visibility ?? 0, !!lm),
+			)}
+			{/* 向き: 正面か横向きか（肩幅/胴長比のデバウンス済み判定） */}
+			<span
+				style={{
+					display: "inline-flex",
+					alignItems: "center",
+					gap: "4px",
+					fontSize: "0.66rem",
+					fontFamily: "monospace",
+					color: "#cbd5e1",
+					whiteSpace: "nowrap",
+				}}
+			>
+				<span style={{ width: "2.4em", textAlign: "right" }}>向き</span>
+				<span
+					style={{
+						fontWeight: 700,
+						color: !lm ? "#4b5563" : side ? "#fbbf24" : "#4ade80",
+					}}
+				>
+					{!lm ? "--" : side ? "横向き" : "正面"}
+				</span>
+			</span>
+		</div>
+	);
+}
+
 // ---- 右下カメラ（ファイナルベント＋カメラガード用） ----------------------
 // videoRef は親から受け取り、カメラガード（MediaPipe ポーズ解析）と映像を共有する。
 
@@ -1512,12 +1650,14 @@ function FinalVentCam({
 	highlight,
 	guarding,
 	poseStatus,
+	facingSide,
 	videoRef,
 	canvasRef,
 }: {
 	highlight: boolean;
 	guarding: boolean;
 	poseStatus: CameraGuardStatus; // ポーズ解析（骨格・ガード判定）の読み込み状態
+	facingSide: boolean; // カメラに対して横向き（向き検出）
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
@@ -1619,6 +1759,25 @@ function FinalVentCam({
 			>
 				FINAL VENT CAM
 			</span>
+			{/* 横向き検出中の表示 */}
+			{facingSide && (
+				<span
+					style={{
+						position: "absolute",
+						right: "6px",
+						top: "4px",
+						fontSize: "0.7rem",
+						fontWeight: 900,
+						color: "#1c1917",
+						background: "#fbbf24",
+						padding: "1px 8px",
+						borderRadius: "4px",
+						letterSpacing: "0.08em",
+					}}
+				>
+					横向き
+				</span>
+			)}
 			{/* ポーズ解析（骨格・ガード判定）の状態。ready になるまで出す＝骨格が出ない原因の切り分け */}
 			{poseStatus !== "ready" && (
 				<span

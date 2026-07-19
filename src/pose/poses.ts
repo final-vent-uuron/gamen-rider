@@ -127,6 +127,30 @@ export function isBoxingGuard(lm: Lm): boolean {
   })
 }
 
+// 体の向き（正面 / 横向き）。見かけの肩幅と胴の長さの比で判定する。
+// 正面では肩幅が広く写り、横を向くほど肩幅が潰れて写る。胴の縦の長さ（肩中点→腰中点）は
+// 体のヨー回転でほぼ変わらないので、スケールの基準に使う（カメラとの距離にも影響されない）。
+export type BodyFacing = 'front' | 'side'
+const FACING_MIN_VIS = 0.4 // 肩・腰がこの可視性未満なら判定しない（見失いは null = 現状維持）
+const FACING_SIDE_RATIO = 0.45 // 肩幅 / 胴長 がこれ未満なら横向き（正面はおおむね 0.7 前後）
+
+export function bodyFacing(lm: Lm): BodyFacing | null {
+  const ls = lm[LM.L_SHOULDER]
+  const rs = lm[LM.R_SHOULDER]
+  const lh = lm[LM.L_HIP]
+  const rh = lm[LM.R_HIP]
+  if (!ls || !rs || !lh || !rh) return null
+  for (const p of [ls, rs, lh, rh]) {
+    if ((p.visibility ?? 1) < FACING_MIN_VIS) return null
+  }
+  const torso = Math.hypot(
+    (ls.x + rs.x) / 2 - (lh.x + rh.x) / 2,
+    (ls.y + rs.y) / 2 - (lh.y + rh.y) / 2,
+  )
+  if (torso < 1e-3) return null
+  return Math.abs(ls.x - rs.x) / torso < FACING_SIDE_RATIO ? 'side' : 'front'
+}
+
 // 幾何ルールで定義済みのポーズ一覧。ポーズ作成 UI でステップとして選べる。
 export const BUILTIN_POSES: { id: string; label: string; test: PoseTest }[] = [
   { id: 'tpose', label: 'Tポーズ', test: isTPose },

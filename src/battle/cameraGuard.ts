@@ -7,6 +7,7 @@
 // 「一定間隔で ImageBitmap を切り出して転送する」だけなので、three.js の 60fps 描画を塞がない。
 
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
+import type { BodyFacing } from '../pose/poses'
 import type { FrameMsg, WorkerMsg } from './cameraGuard.worker'
 import type { InputSource } from './input'
 
@@ -14,6 +15,7 @@ const DETECT_INTERVAL_MS = 66 // 解析周期（~15fps）。推論は別スレ�
 const BITMAP_WIDTH = 320 // 転送前に縮小（lite モデルの入力は小さいので精度への影響なし・転送も軽い）
 const ON_FRAMES = 2 // 連続何回「構え」を見たら guard on（誤爆防止）
 const OFF_FRAMES = 3 // 連続何回見失ったら guard off（ちらつき防止）
+const FACING_FRAMES = 2 // 向き（正面/横）の切り替えに必要な連続フレーム数
 
 // ポーズ解析パイプラインの状態。UI に出して「なぜ骨格が出ないか」を見えるようにする。
 export type CameraGuardStatus = 'loading' | 'ready' | 'error'
@@ -26,6 +28,8 @@ export function createCameraGuardSource(
   onLandmarks?: (lm: NormalizedLandmark[] | null, guarding: boolean) => void,
   // ワーカー/モデルの読み込み状態（loading → ready / error）。表示用。
   onStatus?: (status: CameraGuardStatus) => void,
+  // 体の向き（true = 横向き）。デバウンス後の変化時のみ呼ぶ。
+  onFacingSide?: (side: boolean) => void,
 ): InputSource {
   let running = false
   let rafId = 0
@@ -37,6 +41,9 @@ export function createCameraGuardSource(
   let hitStreak = 0
   let missStreak = 0
   let guarding = false
+  let facingStreak = 0 // 同じ向きを連続で見た回数
+  let lastFacing: BodyFacing | null = null
+  let facingSide = false
 
   const setGuard = (on: boolean) => {
     if (guarding === on) return
@@ -54,6 +61,23 @@ export function createCameraGuardSource(
       missStreak++
       hitStreak = 0
       if (missStreak >= OFF_FRAMES) setGuard(false)
+    }
+  }
+
+  // 向きのデバウンス。null（見失い・低可視性）は現状維持でストリークだけリセットする。
+  const onFacingResult = (facing: BodyFacing | null) => {
+    if (!facing) {
+      facingStreak = 0
+      lastFacing = null
+      return
+    }
+    facingStreak = facing === lastFacing ? facingStreak + 1 : 1
+    lastFacing = facing
+    if (facingStreak < FACING_FRAMES) return
+    const side = facing === 'side'
+    if (side !== facingSide) {
+      facingSide = side
+      onFacingSide?.(side)
     }
   }
 
@@ -106,9 +130,11 @@ export function createCameraGuardSource(
         } else if (msg.t === 'result') {
           busy = false
           onResult(msg.posed)
+          onFacingResult(msg.facing)
           onLandmarks?.(msg.landmarks, guarding)
         } else if (msg.t === 'error') {
           // モデル/WASM の取得失敗等。カメラガードは無効のまま継続（キーボードガードは生きている）
+          console.warn('[cameraGuard] pose init failed in worker:', msg.detail)
           onStatus?.('error')
         }
       }
@@ -123,6 +149,10 @@ export function createCameraGuardSource(
       running = false
       cancelAnimationFrame(rafId)
       setGuard(false) // ガードしっぱなしで抜けない
+      if (facingSide) {
+        facingSide = false
+        onFacingSide?.(false) // 「横向き」表示が残らないように戻す
+      }
       onLandmarks?.(null, false) // オーバーレイも消す
       worker?.terminate()
       worker = null

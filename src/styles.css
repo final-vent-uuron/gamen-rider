@@ -139,6 +139,21 @@ body,
   }
 }
 
+/* タイトル: スタートボタンのネオン鼓動 */
+@keyframes titlePulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 18px rgba(56, 189, 248, 0.45),
+      0 0 36px rgba(124, 58, 237, 0.25);
+  }
+  50% {
+    box-shadow:
+      0 0 30px rgba(56, 189, 248, 0.75),
+      0 0 60px rgba(124, 58, 237, 0.45);
+  }
+}
+
 /* リザルト: 電脳空間の星のまばたき */
 @keyframes starTwinkle {
   0%,
@@ -175,16 +190,6 @@ body,
   }
 }
 
-/* リザルト: 勝者の背後で回る後光 */
-@keyframes winnerRays {
-  from {
-    transform: translate(-50%, -50%) rotate(0deg);
-  }
-  to {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-}
-
 /* リザルト: 勝者アバターの緩い浮遊 */
 @keyframes winnerFloat {
   0%,
@@ -196,14 +201,12 @@ body,
   }
 }
 
-/* リザルト: 紙吹雪の落下 */
-@keyframes confettiFall {
-  0% {
-    transform: translateY(-15vh) rotate(0deg);
-    opacity: 1;
+/* リザルト: コードレイン（文字列が画面上端から降り続ける） */
+@keyframes codeRain {
+  from {
+    transform: translateY(-110%);
   }
-  100% {
-    transform: translateY(105vh) rotate(720deg);
-    opacity: 0.9;
+  to {
+    transform: translateY(105vh);
   }
 }

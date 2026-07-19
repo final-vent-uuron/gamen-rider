@@ -37,7 +37,10 @@ export type AvatarAction =
 	| "walk"
 	| "punch"
 	| "kick"
+	| "shot" // 波動弾の発射動作（固有技クリップの差し替え点）
+	| "turn" // 振り向き（facing 反転時に差し込む。ゲーム状態からは要求されない見た目専用）
 	| "hit"
+	| "hit-air" // 空中被弾（Final の打ち上げ等。吹き飛びリアクション）
 	| "down"
 	| "final"
 	| "jump"
@@ -61,7 +64,9 @@ export interface RiderModel {
 	height?: number; // 自動フィットの目標身長（ワールド単位。既定 1.9 ≒ box アバター）
 	yOffset?: number; // 接地の微調整（ワールド単位。自動接地に加算）
 	rotateY?: number; // 正面補正（renderer は rotation.y=0 で +x を向く前提）
-	clips?: Partial<Record<AvatarAction, string>>; // アクション → GLB 内クリップ名
+	// アクション → GLB 内クリップ名。配列で複数登録すると再生のたびにランダムに
+	// 選ばれる（左右パンチの打ち分け等。直前と同じ変種は続かないようにする）。
+	clips?: Partial<Record<AvatarAction, string | string[]>>;
 	// ルートモーション（腰の平行移動ドリフト）を除去してその場アニメ化するクリップ名。
 	// In Place でエクスポートされていない走り/歩きに使う（移動はゲーム側が行うため）。
 	stripRootMotion?: string[];
@@ -82,6 +87,10 @@ export interface RiderModel {
 	// 前後の傾き（走りの前傾等）・体の向き・ひねりは保たれ、横倒れだけが消える。
 	// 横倒れが本質のクリップ（kick・death 等）には使わないこと。
 	flattenLateralTilt?: string[];
+	// 腰の「向き（ヨー）」の変化を先頭キーで固定するクリップ名。
+	// 振り向き（Quick 180 Turn）等、体の回転が焼き込まれたクリップに使う。
+	// キャラの向きは renderer の振り向き補間が権威なので、クリップ側の回転は二重になる。
+	stripYaw?: string[];
 }
 
 // 全ライダー共通の既定モデル（/model-check・/battle-test で検証済み）。
@@ -107,6 +116,7 @@ export const DEFAULT_RIDER_MODEL: RiderModel = {
 		kick: "kick",
 		guard: "guard",
 		hit: "reaction",
+		"hit-air": "reaction", // 空中被弾も同じリアクション（専用クリップ無し）
 		thrown: "reaction",
 	},
 	stripRootMotion: ["kick"],
@@ -123,24 +133,41 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 	// swift / cpp は GLB 未用意のため未登録 → 共通モデル(python)にフォールバック。
 	python: DEFAULT_RIDER_MODEL,
 	arduino: {
-		url: modelUrl("gamen-rider-arduino-add-animation-fix.v2.glb"),
+		// モーション大量収録版（2026-07-19 R2 アップロード）。
+		// 収録: death / error-mode / grasp / grasp-attack / grasp-reaction / idle / jump /
+		//       jump.001 / large-reaction / left-kick / left-punch / right-kick /
+		//       right-punch / run / skill / small-reaction / special / turn
+		// 未使用: grasp（掴み構え。guard に使えそうだが用途未確定）。
+		// guard は未収録 → idle フォールバック。
+		// turn は焼き込みの 180°回転を stripYaw で殺し、facing 反転時の踏み替えとして使う。
+		url: modelUrl("arduino-add-animation.glb"),
 		height: 0.5,
 		rotateY: Math.PI / 2,
-		// guard / reaction は未収録 → guard・hit・thrown は idle フォールバック。
-		// jump クリップの綴りは GLB 側が "junp"。
 		clips: {
 			idle: "idle",
 			walk: "run",
 			down: "death",
-			jump: "junp",
-			punch: "punch",
-			kick: "kick",
+			jump: ["jump", "jump.001"], // 2 種をランダム（連続ジャンプの単調さ回避）
+			punch: ["left-punch", "right-punch"], // 左右を打ち分け（ランダム交互）
+			kick: ["left-kick", "right-kick"],
+			shot: "skill", // 波動弾＝固有技（skill）
+			turn: "turn", // 振り向き（Quick 180。回転は stripYaw 済み・踏み替えだけ使う）
+			hit: "small-reaction",
+			"hit-air": "large-reaction", // Final の打ち上げ等＝吹き飛びリアクション
+			thrown: "grasp-reaction", // 投げられ（掴まれてやられる）
+			throw: "grasp-attack", // 投げ（掴んで攻撃）
+			final: "special", // ファイナルベント＝必殺
+			abare: "error-mode", // 暴れ＝Arduino がエラーで暴走するイメージ
 		},
 		// python モデルと同じ Mixamo 系パイプラインのためルートモーション補正も同構成。
-		// run / punch に左右の傾きの焼き込みあり（実測。punch は胸で約9〜16°）→ 毎キー除去。
-		stripRootMotion: ["kick"],
-		freezeHipsTranslation: ["run", "junp"],
-		flattenLateralTilt: ["run", "punch"],
+		// キック・掴み攻撃・固有技は前進の焼き込みが入りやすい → その場化（位置はゲーム側が管理）。
+		stripRootMotion: ["left-kick", "right-kick", "grasp-attack", "skill"],
+		// large-reaction（Flying Back）は後方への移動が本体に焼き込まれている。吹き飛び距離は
+		// ゲーム側（knockback/launch）が権威なので腰の平行移動は殺し、のけぞりだけ使う。
+		// turn も同様に位置・回転ともゲーム側が権威 → 平行移動とヨーを殺す。
+		freezeHipsTranslation: ["run", "jump", "jump.001", "large-reaction", "turn"],
+		flattenLateralTilt: ["run", "left-punch", "right-punch"],
+		stripYaw: ["turn"],
 	},
 	flutter: {
 		url: modelUrl("flutter.glb"),
@@ -356,6 +383,42 @@ export function flattenLateralRotation(
 	}
 }
 
+// 腰(Hips)の「向き（ヨー＝縦軸まわりの回転）」の変化を先頭キーで固定する（stripYaw 用）。
+// Quick 180 Turn のような振り向きクリップは体の回転そのものが焼き込まれているが、
+// キャラの向きはゲーム側（renderer の root 振り向き補間）が権威なので二重回転になる。
+// ヨーだけを毎キー打ち消し、足の踏み替え・体の傾き・ひねりは残す。
+// クリップはキャッシュ経由で全アバター共有のため、二重適用を WeakSet で防ぐ。
+const yawStripped = new WeakSet<THREE.AnimationClip>();
+export function stripHipsYaw(
+	clip: THREE.AnimationClip,
+	ref: THREE.AnimationClip,
+) {
+	if (yawStripped.has(clip)) return;
+	yawStripped.add(clip);
+	const hips = findHipsQuaternionTrack(clip);
+	const refHips = findHipsQuaternionTrack(ref);
+	if (!hips || !refHips) return;
+	// idle 先頭（直立・正面向き）から「hips ボーン空間の正面」を逆算し、
+	// 各キーの正面ベクトルを水平面（HIPS_FORWARD / e2 平面）に落としてヨー角を測る。
+	const qRef0 = new THREE.Quaternion().fromArray(refHips.values, 0);
+	const fBone = HIPS_FORWARD.clone().applyQuaternion(qRef0.clone().invert());
+	const e2 = HIPS_UP.clone().cross(HIPS_FORWARD); // 水平面のもう1軸
+	const f = new THREE.Vector3();
+	const q = new THREE.Quaternion();
+	const fix = new THREE.Quaternion();
+	const yawOf = (quat: THREE.Quaternion) => {
+		f.copy(fBone).applyQuaternion(quat);
+		return Math.atan2(f.dot(e2), f.dot(HIPS_FORWARD));
+	};
+	const yaw0 = yawOf(q.fromArray(hips.values, 0));
+	for (let i = 0; i < hips.values.length; i += 4) {
+		q.fromArray(hips.values, i);
+		fix.setFromAxisAngle(HIPS_UP, yaw0 - yawOf(q));
+		q.premultiply(fix);
+		q.toArray(hips.values, i);
+	}
+}
+
 // Canvas 2D コンテキスト取得（テクスチャ生成用。取得失敗は環境異常なので即例外）。
 function ctx2d(c: HTMLCanvasElement): CanvasRenderingContext2D {
 	const ctx = c.getContext("2d");
@@ -408,13 +471,16 @@ function darken(hex: number, f: number): number {
 // プレイヤー状態 → アバターのアクション。
 function avatarAction(p: PlayerState, moving: boolean): AvatarAction {
 	if (p.hp <= 0) return "down";
-	if (p.action === "hit") return "hit";
+	// 空中で被弾（Final の打ち上げ・空中ヒット）は吹き飛びリアクション。クリップ未登録の
+	// モデルでは hit ではなく idle に落ちるため、クリップ側で hit-air を hit と同じにしておく。
+	if (p.action === "hit") return p.y > 0.001 ? "hit-air" : "hit";
 	if (p.action === "thrown") return "thrown";
 	if (p.action === "guard") return "guard";
 	if (p.action === "throw") return "throw";
 	if (p.action === "abare") return "abare";
 	if (p.action === "punch") return "punch";
 	if (p.action === "kick") return "kick";
+	if (p.action === "shot") return "shot";
 	if (p.action === "final") return "final";
 	if (p.y > 0.001) return "jump";
 	if (moving) return "walk";
@@ -430,12 +496,16 @@ const ONESHOT_DURATION: Partial<Record<AvatarAction, number>> = {
 	// クリップ本来の尺（punch 2.03s / kick 1.53s / jump 0.27s / reaction 1.47s）との差は
 	// setDuration の再生速度調整で吸収する（短ければ振り切り、長ければ早回し）。
 	punch: 0.8,
-	kick: 1.1,
-	throw: 0.9,
-	thrown: 0.9,
+	kick: 1.4, // = MOVES.kick 合計 1400ms（left/right-kick 素の尺 ~1.7s → 1.2倍速）
+	shot: 1.0, // = MOVES.shot 合計 1000ms（skill 素の尺 2.6s → 2.6倍速。0.53s だと 5倍速で不自然）
+	throw: 1.2, // = MOVES.throw 合計 1200ms（grasp-attack 素の尺 2.07s → 1.7倍速）
+	thrown: 1.2, // = MOVES.throw hitstun（grasp-reaction。投げた側と同時に起きる）
 	final: 1.2,
 	hit: 0.5,
-	jump: 1.0, // 滞空（約0.8s）＋着地のなじみ分
+	"hit-air": 0.9, // Final の打ち上げ hitstun(520ms)＋滞空のなじみ分
+	turn: 0.45, // renderer の振り向き補間(~0.25s)＋踏み替えの余韻（素の尺 0.93s → 2倍速）
+	jump: 1.2, // 滞空（約1.2s。ARENA の jumpVy/gravity 変更で浮遊感を出した）に合わせる
+	abare: 0.9, // 無敵(520ms)＋後隙(380ms) ≒ 発動〜復帰の実時間（state.ts ARENA 参照）
 	// down(death) は指定なし＝クリップ本来の速度で最後まで再生し、倒れたまま止める
 };
 
@@ -741,8 +811,13 @@ export function createArenaRenderer(
 				if (!guarding && g.mat.opacity < 0.03) {
 					removeGuardFx(p.id);
 				} else {
-					g.sprite.position.set(wx + p.facing * 0.8, 1.05, 0.5);
-					g.sprite.scale.setScalar(2.1 + Math.sin(t * 9) * 0.1);
+					// キャラの実寸（tag.topY = 頭の高さ）に比例させて配置する。
+					// 固定値だと box アバター(~1.9)基準になり、GLB(全高 0.5)ではシールドが
+					// キャラよりだいぶ前・上に浮いて見える。前方オフセットは付けず、
+					// キャラと同じ x（体の中心）・胸の高さに重ねる。
+					const h = tag.topY;
+					g.sprite.position.set(wx, p.y * JUMP_WORLD + h * 0.52, 0.5);
+					g.sprite.scale.setScalar(h * 1.25 + Math.sin(t * 9) * 0.05);
 				}
 			}
 		});
@@ -1100,22 +1175,28 @@ function createBoxAvatar(color: number): FighterAvatar {
 const ONE_SHOT = new Set<AvatarAction>([
 	"punch",
 	"kick",
+	"shot",
+	"turn",
 	"hit",
+	"hit-air",
 	"final",
 	"down",
 	"throw",
 	"thrown",
 	"jump",
+	"abare",
 ]);
 
 function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 	const root = new THREE.Group();
 
 	let mixer: THREE.AnimationMixer | null = null;
-	const clipActions = new Map<AvatarAction, THREE.AnimationAction>();
+	// アクション → 再生候補のクリップ群（複数登録時はランダムに選ぶ。左右パンチ等）
+	const clipActions = new Map<AvatarAction, THREE.AnimationAction[]>();
 	let current: THREE.AnimationAction | null = null;
 	let currentAct: AvatarAction | null = null; // current が表すアクション（idle 代用時は 'idle'）
 	let lastAct: AvatarAction | null = null; // ゲーム状態が要求している最新アクション
+	let prevFacing: 1 | -1 | 0 = 0; // 前フレームの向き（0 = 未観測。turn 差し込みの検出用）
 	let lastT = 0;
 	let loaded = false;
 	let disposed = false;
@@ -1123,11 +1204,18 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 	const isLow = (a: AvatarAction) => a === "idle" || a === "walk";
 
 	// act のクリップへクロスフェード。同じワンショットへの再要求（連打）は頭から打ち直す。
+	// 複数クリップが登録されたアクション（左右パンチ等）はランダムに選び、直前と同じ
+	// 変種が続かないようにする（連打で左右が交互に出る見た目になる）。
 	function switchTo(act: AvatarAction) {
-		const exact = clipActions.get(act) ?? null; // このアクション専用のクリップ
-		const next = exact ?? clipActions.get("idle") ?? null;
-		if (!next) return;
+		const exactList = clipActions.get(act) ?? null; // このアクション専用のクリップ群
+		const list = exactList ?? clipActions.get("idle") ?? null;
+		if (!list || list.length === 0) return;
+		const exact = !!exactList;
 		const dur = exact ? ONESHOT_DURATION[act] : undefined;
+		let next = list[Math.floor(Math.random() * list.length)];
+		if (list.length > 1 && next === current) {
+			next = list[(list.indexOf(next) + 1) % list.length];
+		}
 		if (next === current) {
 			if (exact && ONE_SHOT.has(act)) {
 				next.reset();
@@ -1187,9 +1275,11 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 
 			mixer = new THREE.AnimationMixer(obj);
 			const byName = new Map(gltf.animations.map((c) => [c.name, c]));
-			const idleClip = model.clips?.idle
-				? byName.get(model.clips.idle)
-				: undefined;
+			// idle は変種を持たない前提（複数指定されていても先頭を基準にする）
+			const idleName = Array.isArray(model.clips?.idle)
+				? model.clips.idle[0]
+				: model.clips?.idle;
+			const idleClip = idleName ? byName.get(idleName) : undefined;
 			// バインドポーズ対策: このモデル群のバインドポーズはうつ伏せ（地面向き）。
 			// mixer はクロスフェード中にアクションのウェイト合計が 1 を割ると、不足分を
 			// 「最初にバインドした時点のポーズ」で埋めるため、そのままだと出現直後や
@@ -1211,35 +1301,78 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 						target.position.fromArray(track.values, 0);
 					else if (prop === "scale") target.scale.fromArray(track.values, 0);
 				}
+
+				// 再センタリング: 上の原点合わせは「うつ伏せのバインドポーズ」の箱で行っている
+				// ため、idle で立ち上がると体が原点から前後にずれる（root 基準のシールド・
+				// タグ・当たり判定の見た目がずれて見える原因）。idle の立ち姿で測り直し、
+				// 位置だけ root 直下(inner)で補正する。スケールは合わせ込み済みなので触らない。
+				// x/z の基準は腰（Hips）ボーン＝体の芯。ボーン全体の箱の中心だと、idle で
+				// 前に出ている腕まで含まれて体が後ろへ寄りすぎる（補正しすぎになる）。
+				// ※ 計測は必ず「root ローカル」で行うこと。この時点で root には renderer が
+				//    プレイヤーのステージ座標（worldX 等）を入れていることがあり、ワールド値の
+				//    まま引くとその座標ぶんキャラが飛ぶ。root.matrixWorld の逆行列で戻す。
+				root.updateMatrixWorld(true);
+				const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+				let hipsBone: THREE.Object3D | null = null;
+				const standBox = new THREE.Box3();
+				let standBones = 0;
+				obj.traverse((o) => {
+					if ((o as THREE.Bone).isBone) {
+						standBones++;
+						standBox.expandByPoint(o.getWorldPosition(tmp).applyMatrix4(rootInv));
+						if (!hipsBone && /hips/i.test(o.name)) hipsBone = o;
+					}
+				});
+				if (standBones > 0 && Number.isFinite(standBox.min.y)) {
+					// 計測値は root ローカル（= inner の親空間）なので、そのまま引けば補正になる。
+					if (hipsBone) {
+						const hp = (hipsBone as THREE.Object3D)
+							.getWorldPosition(tmp)
+							.applyMatrix4(rootInv);
+						inner.position.x -= hp.x;
+						inner.position.z -= hp.z;
+					} else {
+						inner.position.x -= (standBox.min.x + standBox.max.x) / 2;
+						inner.position.z -= (standBox.min.z + standBox.max.z) / 2;
+					}
+					// 足元（立ち姿の箱の底＝足ボーン）を yOffset へ接地し直す
+					inner.position.y += (model.yOffset ?? 0) - standBox.min.y;
+				}
 			}
 			if (model.clips) {
-				for (const [act, name] of Object.entries(model.clips) as [
+				for (const [act, names] of Object.entries(model.clips) as [
 					AvatarAction,
-					string,
+					string | string[],
 				][]) {
-					const clip = byName.get(name);
-					if (!clip) continue;
-					if (model.stripRootMotion?.includes(name)) stripRootDrift(clip);
-					if (model.freezeHipsTranslation?.includes(name))
-						freezeHipsPosition(clip);
-					if (
-						idleClip &&
-						clip !== idleClip &&
-						model.alignHipsToIdle?.includes(name)
-					)
-						alignHipsRotation(clip, idleClip);
-					if (
-						idleClip &&
-						clip !== idleClip &&
-						model.flattenLateralTilt?.includes(name)
-					)
-						flattenLateralRotation(clip, idleClip);
-					const action = mixer.clipAction(clip);
-					if (ONE_SHOT.has(act)) {
-						action.setLoop(THREE.LoopOnce, 1);
-						action.clampWhenFinished = true;
+					const actions: THREE.AnimationAction[] = [];
+					for (const name of Array.isArray(names) ? names : [names]) {
+						const clip = byName.get(name);
+						if (!clip) continue;
+						if (model.stripRootMotion?.includes(name)) stripRootDrift(clip);
+						if (model.freezeHipsTranslation?.includes(name))
+							freezeHipsPosition(clip);
+						if (
+							idleClip &&
+							clip !== idleClip &&
+							model.alignHipsToIdle?.includes(name)
+						)
+							alignHipsRotation(clip, idleClip);
+						if (
+							idleClip &&
+							clip !== idleClip &&
+							model.flattenLateralTilt?.includes(name)
+						)
+							flattenLateralRotation(clip, idleClip);
+						if (idleClip && clip !== idleClip && model.stripYaw?.includes(name))
+							stripHipsYaw(clip, idleClip);
+						const action = mixer.clipAction(clip);
+						if (ONE_SHOT.has(act)) {
+							action.setLoop(THREE.LoopOnce, 1);
+							action.clampWhenFinished = true;
+						}
+						actions.push(action);
 					}
-					clipActions.set(act, action);
+					if (actions.length > 0) clipActions.set(act, actions);
 				}
 			}
 			// ワンショット完走時: 保留していた idle/walk へ遅れて戻る。
@@ -1262,6 +1395,21 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 			if (!loaded || !mixer) return; // ロード完了まで非表示（プレースホルダなし）
 			root.position.y = p.y * JUMP_WORLD;
 			const act = avatarAction(p, moving);
+			// 振り向き: facing が反転した瞬間、接地して通常状態（idle/走り）のときだけ
+			// turn クリップ（踏み替え）を差し込む。実際の回転は renderer の root 補間が行う。
+			// 技・被弾などの一回再生中は割り込まない（turn 自身の再要求は連続反転なので許可）。
+			if (prevFacing !== 0 && p.facing !== prevFacing) {
+				const busyOneShot =
+					!!current &&
+					!!currentAct &&
+					currentAct !== "turn" &&
+					ONE_SHOT.has(currentAct) &&
+					current.isRunning();
+				if (clipActions.has("turn") && isLow(act) && p.y <= 0.001 && !busyOneShot) {
+					switchTo("turn");
+				}
+			}
+			prevFacing = p.facing;
 			if (act !== lastAct) {
 				lastAct = act;
 				// ワンショット再生中に idle/walk へ戻る要求が来ても保留し、クリップを振り切らせる
