@@ -10,7 +10,7 @@ const ORB_FEATURES = 1500
 const ORB_SCALE_FACTOR = 1.2
 const ORB_LEVELS = 10
 // FAST コーナー検出のしきい値。低いほど薄い模様・遠くの画像でも点を拾える（=遠距離に有利）。
-const ORB_FAST_THRESHOLD = 12
+const ORB_FAST_THRESHOLD = 10
 // 参照画像・カメラフレームを処理する解像度（横px）。大きいほど遠くまで効くが重い。
 const REF_MAX_WIDTH = 600
 const PROCESS_WIDTH = 960
