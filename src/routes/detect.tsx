@@ -6,7 +6,7 @@ import bananaUrl from '#/assets/refs/banana.png'
 import grapeUrl from '#/assets/refs/grape.png'
 import agonekoUrl from '#/assets/refs/agoneko.png'
 import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../card'
-import type { CardMatch, CardMatcher, CardRef } from '../card'
+import type { CardMatch, CardMatcher, CardRef, MatchStats } from '../card'
 
 export const Route = createFileRoute('/detect')({ component: DetectPage })
 
@@ -32,6 +32,9 @@ function DetectPage() {
 
   const [status, setStatus] = useState<Status>('loading')
   const [match, setMatch] = useState<CardMatch | null>(null)
+  // しきい値調整用の内訳表示。毎フレーム setState すると重いので一定間隔だけ反映する。
+  const [stats, setStats] = useState<MatchStats | null>(null)
+  const lastStatsUiRef = useRef(0)
 
   // カードマッチャ（OpenCV ロード＋参照画像の特徴量事前計算）を用意する。
   useEffect(() => {
@@ -72,11 +75,18 @@ function DetectPage() {
     ctx.drawImage(video, 0, 0)
 
     // 検出は matcher が間引き＋安定化して「確定中のマッチ」を返す。
-    const current = matcher.detect(video, performance.now())
+    const now = performance.now()
+    const current = matcher.detect(video, now)
     const label = current?.label ?? null
     if (label !== overlayLabelRef.current) {
       overlayLabelRef.current = label
       setMatch(current)
+    }
+
+    // 内訳（sharpness / インライア数）を 200ms ごとに反映する。
+    if (now - lastStatsUiRef.current > 200) {
+      lastStatsUiRef.current = now
+      setStats(matcher.stats())
     }
 
     // 最後に確定したラベルを毎フレーム重ねる。
@@ -102,6 +112,7 @@ function DetectPage() {
       matcherRef.current?.reset()
       overlayLabelRef.current = null
       setMatch(null)
+      setStats(null)
       setStatus('running')
       rafRef.current = requestAnimationFrame(detect)
     } catch {
@@ -121,6 +132,7 @@ function DetectPage() {
     if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
     overlayLabelRef.current = null
     setMatch(null)
+    setStats(null)
     setStatus('ready')
   }
 
@@ -148,16 +160,18 @@ function DetectPage() {
           ← Back
         </Link>
         <h1 style={{ margin: 0, fontSize: '1.5rem' }}>画像検知</h1>
-        {status === 'running' && match && (
+        {status === 'running' && stats && (
           <span
             style={{
               marginLeft: 'auto',
-              color: '#4ade80',
+              color: stats.blurred ? '#fbbf24' : match ? '#4ade80' : '#9ca3af',
               fontSize: '0.85rem',
               fontFamily: 'monospace',
             }}
           >
-            {match.inliers} pts
+            {stats.blurred
+              ? `blurred (sharp ${stats.sharpness.toFixed(0)})`
+              : `sharp ${stats.sharpness.toFixed(0)} · ${stats.bestInliers}/${stats.secondInliers} pts`}
           </span>
         )}
       </div>
