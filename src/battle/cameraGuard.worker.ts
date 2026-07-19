@@ -5,7 +5,8 @@
 
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 import { createPoseLandmarker } from '../pose/landmarker'
-import { isBoxingGuard } from '../pose/poses'
+import { bodyFacing, isBoxingGuard } from '../pose/poses'
+import type { BodyFacing } from '../pose/poses'
 
 export interface FrameMsg {
   t: 'frame'
@@ -16,8 +17,14 @@ export interface FrameMsg {
 export type WorkerMsg =
   | { t: 'ready' } // モデルロード完了。メイン側はこれを待ってからフレームを送る
   // landmarks はプレビューの骨格オーバーレイ用（正規化座標の素の配列。未検出は null）
-  | { t: 'result'; posed: boolean; landmarks: NormalizedLandmark[] | null }
-  | { t: 'error' } // モデル取得失敗（オフライン等）。カメラガード無効のまま継続
+  // facing は体の向き（肩の左右関係。横向き・見失いは null = 判定保留）
+  | {
+      t: 'result'
+      posed: boolean
+      facing: BodyFacing | null
+      landmarks: NormalizedLandmark[] | null
+    }
+  | { t: 'error'; detail: string } // モデル/WASM 初期化失敗。カメラガード無効のまま継続
 
 let landmarker: PoseLandmarker | null = null
 
@@ -28,7 +35,11 @@ createPoseLandmarker('lite', 'CPU').then(
     landmarker = l
     postMessage({ t: 'ready' } satisfies WorkerMsg)
   },
-  () => postMessage({ t: 'error' } satisfies WorkerMsg),
+  (err) => {
+    // 失敗理由はページの console にも出す（原因調査用。UI には 'error' 状態だけ渡す）
+    console.error('[cameraGuard.worker] pose init failed:', err)
+    postMessage({ t: 'error', detail: String(err) } satisfies WorkerMsg)
+  },
 )
 
 self.onmessage = (ev: MessageEvent<FrameMsg>) => {
@@ -43,6 +54,7 @@ self.onmessage = (ev: MessageEvent<FrameMsg>) => {
     postMessage({
       t: 'result',
       posed: !!lm && isBoxingGuard(lm),
+      facing: lm ? bodyFacing(lm) : null,
       // 構造化クローンできる素のオブジェクト配列に落とす（クラスインスタンス対策）
       landmarks: lm
         ? lm.map(({ x, y, z, visibility }) => ({ x, y, z, visibility }))
@@ -50,7 +62,12 @@ self.onmessage = (ev: MessageEvent<FrameMsg>) => {
     } satisfies WorkerMsg)
   } catch {
     // 単発の検出失敗はスキップ扱い（busy 解除のため result は返す）
-    postMessage({ t: 'result', posed: false, landmarks: null } satisfies WorkerMsg)
+    postMessage({
+      t: 'result',
+      posed: false,
+      facing: null,
+      landmarks: null,
+    } satisfies WorkerMsg)
   } finally {
     bitmap.close()
   }

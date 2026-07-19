@@ -17,6 +17,7 @@ export type PlayerAction =
   | 'idle'
   | 'punch'
   | 'kick'
+  | 'shot' // 波動弾の発射動作（startMove が kind をそのまま action に入れる）
   | 'final'
   | 'hit'
   | 'down' // KO（HP0）で伏せる
@@ -88,10 +89,11 @@ export const ARENA = {
   reachKick: 0.075,
   reachFinal: 0.206,
   reachThrow: 0.026,
-  jumpVy: 5.6,
-  gravity: 13,
-  fallGravity: 20,
-  airControl: 1.5,
+  jumpVy: 7.0, // ジャンプ初速。上げるほど頂点が高くなる
+  gravity: 11, // 上昇中の重力。下げるほどふわっと高く上がる（滞空も伸びる）
+  fallGravity: 16, // 下降中の重力。下げるほど落下がゆっくり
+  // ↑ 現在の弾道: 頂点 ~2.2（正規化）・滞空 ~1.2s。以前(5.6/13/20)は頂点 1.2・滞空 0.78s
+  airControl: 1.125, // 空中の水平速度倍率（前方ジャンプ初速・空中制御の両方）。2.25 の半分＝飛距離半減
   maxHp: 100,
 
   // ダメージ
@@ -125,10 +127,11 @@ export const ARENA = {
   meterOnTake: 11,
   meterOnBlock: 3,
   meterFinalCost: 100, // Final は 5 ゲージ（満タン）
+  shotCost: 40, // 波動弾（I）は 2 ゲージ消費
 
-  // あばれ（バースト）: ゲージ1本で発動する切り返し。無敵で割り込み、両隣を突き放す。
+  // あばれ（エラーモード/バースト）: ゲージ3本で発動する切り返し。無敵で割り込み、両隣を突き放す。
   // 「2人に挟まれて延々殴られる（ハメ）」から抜けるための緊急脱出ボタン。
-  abareCost: 20, // = 1 ゲージ（meterPerStock と同じ）
+  abareCost: 60, // = 3 ゲージ
   abareRange: 0.17, // 左右それぞれの有効距離（表面間）
   abareKnockback: 0.12, // 突き放す強さ（間合いを作る）
   abareDamage: 6, // 軽いダメージ（主目的は脱出）
@@ -187,7 +190,7 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   kick: {
     startup: 120,
     active: 55,
-    recovery: 925, // 合計 1100ms = kick アニメ 1.1s
+    recovery: 1225, // 合計 1400ms = kick アニメ 1.4s（素の尺 ~1.7s。早回し感を抑えた尺）
     damage: ARENA.kickDamage,
     reach: ARENA.reachKick,
     knockback: ARENA.kickKnockback,
@@ -204,13 +207,13 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   throw: {
     startup: 55,
     active: 35,
-    recovery: 810, // 合計 900ms = throw アニメ 0.9s
-    recoveryOnHit: 810, // ヒット時もアニメ終端までロック（掴んだ瞬間からの残り尺）
+    recovery: 1110, // 合計 1200ms = throw(grasp-attack) アニメ 1.2s（早回し感を抑えた尺）
+    recoveryOnHit: 1110, // ヒット時もアニメ終端までロック（掴んだ瞬間からの残り尺）
     damage: ARENA.throwDamage,
     reach: ARENA.reachThrow,
     knockback: ARENA.throwKnockback,
     launch: 0,
-    hitstun: 900, // thrown アニメ 0.9s の間は倒れたまま（投げた側の再行動とほぼ同時に起きる）
+    hitstun: 1200, // thrown アニメ 1.2s の間は倒れたまま（投げた側の再行動とほぼ同時に起きる）
     blockstun: 0,
     hitstop: 110,
     cancelWindow: 0,
@@ -239,7 +242,7 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   shot: {
     startup: 140,
     active: 30, // このタイミングで弾を生成
-    recovery: 360,
+    recovery: 830, // 合計 1000ms = skill アニメ 1.0s（素の尺 2.6s。速すぎない程度に圧縮）
     damage: 0,
     reach: 0,
     knockback: 0,
@@ -508,7 +511,8 @@ function startMove(state: BattleState, id: string, kind: MoveKind, now: number):
 
   // Final はゲージ満タン必須。
   if (kind === 'final' && attacker.meter < ARENA.meterFinalCost) return state
-  // 波動弾は自分の弾が画面に無いときだけ（連射抑制＝ちゃんとした牽制技）。
+  // 波動弾は 2 ゲージ消費 ＋ 自分の弾が画面に無いときだけ（連射抑制＝ちゃんとした牽制技）。
+  if (kind === 'shot' && attacker.meter < ARENA.shotCost) return state
   if (kind === 'shot' && (state.projectiles ?? []).some((pr) => pr.owner === id)) return state
 
   const free = canActNow(attacker, now)
@@ -538,7 +542,11 @@ function startMove(state: BattleState, id: string, kind: MoveKind, now: number):
           actionUntil: recoveryTo,
           guarding: false,
           meter:
-            kind === 'final' ? clamp(p.meter - ARENA.meterFinalCost, 0, ARENA.meterMax) : p.meter,
+            kind === 'final'
+              ? clamp(p.meter - ARENA.meterFinalCost, 0, ARENA.meterMax)
+              : kind === 'shot'
+                ? clamp(p.meter - ARENA.shotCost, 0, ARENA.meterMax)
+                : p.meter,
         }
       : p,
   )
@@ -565,7 +573,7 @@ export function meterStocks(meter: number): number {
   return Math.floor(meter / ARENA.meterPerStock)
 }
 
-// あばれ（バースト）: ゲージ1本を消費し、無敵で割り込んで両隣を突き放す緊急脱出。
+// あばれ（エラーモード）: ゲージ3本を消費し、無敵で割り込んで両隣を突き放す緊急脱出。
 // 被弾・コンボ・硬直・ヒットストップの最中でも発動できる（＝ハメ回避）のが唯一の特徴。純粋関数。
 export function applyAbare(state: BattleState, playerId: string, now: number): BattleState {
   if (state.winnerId) return state
@@ -580,7 +588,7 @@ export function applyAbare(state: BattleState, playerId: string, now: number): B
 
   const invulnUntil = now + ARENA.abareInvuln
   const players = state.players.map((p) => {
-    // 発動者: ゲージを1本消費し、被弾/コンボ/硬直を振り切って無敵＋後隙へ移行する。
+    // 発動者: ゲージを消費し、被弾/コンボ/硬直を振り切って無敵＋後隙へ移行する。
     if (p.id === playerId) {
       return {
         ...p,

@@ -139,13 +139,54 @@ body,
   }
 }
 
-/* リザルト: 勝者の背後で回る後光 */
-@keyframes winnerRays {
+/* タイトル: スタートボタンのネオン鼓動 */
+@keyframes titlePulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 18px rgba(56, 189, 248, 0.45),
+      0 0 36px rgba(124, 58, 237, 0.25);
+  }
+  50% {
+    box-shadow:
+      0 0 30px rgba(56, 189, 248, 0.75),
+      0 0 60px rgba(124, 58, 237, 0.45);
+  }
+}
+
+/* リザルト: 電脳空間の星のまばたき */
+@keyframes starTwinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* リザルト: 漂うコード片（ゆっくり上下に浮遊） */
+@keyframes codeDrift {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateY(-14px);
+    opacity: 0.7;
+  }
+}
+
+/* リザルト: 敗者（倒れたライダー）のフェードイン（静かに現れる。勝者のポップとは対照的に） */
+@keyframes fallenIn {
   from {
-    transform: translate(-50%, -50%) rotate(0deg);
+    transform: translateY(14px);
+    opacity: 0;
   }
   to {
-    transform: translate(-50%, -50%) rotate(360deg);
+    transform: translateY(0);
+    opacity: 1;
   }
 }
 
@@ -160,14 +201,12 @@ body,
   }
 }
 
-/* リザルト: 紙吹雪の落下 */
-@keyframes confettiFall {
-  0% {
-    transform: translateY(-15vh) rotate(0deg);
-    opacity: 1;
+/* リザルト: コードレイン（文字列が画面上端から降り続ける） */
+@keyframes codeRain {
+  from {
+    transform: translateY(-110%);
   }
-  100% {
-    transform: translateY(105vh) rotate(720deg);
-    opacity: 0.9;
+  to {
+    transform: translateY(105vh);
   }
 }

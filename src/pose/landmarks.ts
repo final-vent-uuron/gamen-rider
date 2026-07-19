@@ -11,6 +11,8 @@ export const LM = {
   R_WRIST: 16,
   L_HIP: 23,
   R_HIP: 24,
+  L_ANKLE: 27,
+  R_ANKLE: 28,
 } as const
 
 export type Landmarks = NormalizedLandmark[]

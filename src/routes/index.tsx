@@ -1,43 +1,113 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 
+import { WEBWORLD_SKY, WebWorldBackdrop } from '../webworld-backdrop'
+import type { CodeFragment } from '../webworld-backdrop'
+
 export const Route = createFileRoute('/')({ component: Home })
 
+// タイトル画面のコード片（これから始まる戦いを匂わせるスニペット）。
+const TITLE_FRAGMENTS: CodeFragment[] = [
+  { text: 'await henshin(card);', top: '18%', left: '3%' },
+  { text: "on('punch', attack)", top: '34%', right: '4%' },
+  { text: 'final_vent --charge 5', top: '56%', left: '2%' },
+  { text: '<rider deck="ryuki" />', top: '12%', right: '24%' },
+  { text: 'battle.royale(4);', top: '48%', right: '8%' },
+]
+
 // 本番フロー（1本道）:
-//   [ゲームスタート] → /auth（カード認証 → ポーズ認証）→ /battle（対戦）→ /result（リザルト）
+//   [ゲームスタート] → /auth（カード認証 → ポーズ認証）→ /pairing → /battle → /result
 // 個別ページ（/pose 等）は各機能の単体検証用。開発時だけ使うので下部に小さくまとめる。
 function Home() {
   return (
     <div
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '100vh',
-        gap: '2.5rem',
+        overflow: 'hidden',
+        gap: '2.4rem',
         padding: '1.5rem',
+        color: '#fff',
+        background: WEBWORLD_SKY,
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem' }}>
-        <h1 style={{ fontSize: '3rem', margin: 0, letterSpacing: '0.04em' }}>Final Vent</h1>
-        <p style={{ margin: 0, color: '#9ca3af', fontSize: '0.95rem' }}>
+      {/* Webワールドの背景（電脳空間。リザルトと共通） */}
+      <WebWorldBackdrop fragments={TITLE_FRAGMENTS} />
+
+      {/* タイトルロゴ */}
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '0.6rem',
+          animation: 'winnerPop 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
+        }}
+      >
+        <span
+          style={{
+            fontFamily: 'monospace',
+            fontSize: 'clamp(0.7rem, 1.6vw, 0.9rem)',
+            letterSpacing: '0.5em',
+            color: 'rgba(56,189,248,0.75)',
+            textShadow: '0 0 12px rgba(56,189,248,0.5)',
+          }}
+        >
+          FINAL VENT PROJECT
+        </span>
+        <h1
+          style={{
+            margin: 0,
+            fontSize: 'clamp(3.2rem, 13vw, 7.5rem)',
+            fontWeight: 900,
+            fontStyle: 'italic',
+            letterSpacing: '0.02em',
+            lineHeight: 1.05,
+            transform: 'skewX(-6deg)',
+            whiteSpace: 'nowrap',
+            // 電脳メタリック（空色 → シアン → 紫）のグラデ文字＋ネオン発光
+            backgroundImage:
+              'linear-gradient(180deg, #e0f2fe 0%, #7dd3fc 38%, #38bdf8 58%, #a78bfa 100%)',
+            WebkitBackgroundClip: 'text',
+            backgroundClip: 'text',
+            color: 'transparent',
+            filter:
+              'drop-shadow(0 0 26px rgba(56,189,248,0.45)) drop-shadow(0 5px 0 rgba(0,0,0,0.45))',
+          }}
+        >
+          画面ライダー
+        </h1>
+        <span
+          style={{
+            fontSize: 'clamp(0.85rem, 2vw, 1rem)',
+            color: '#9ca3af',
+            letterSpacing: '0.08em',
+          }}
+        >
           カードで変身 → ライダーになって対戦する IoT バトル
-        </p>
+        </span>
       </div>
 
-      {/* 本番の入口。ここを押すと 認証 → バトル → リザルト まで一本道で進む。 */}
+      {/* 本番の入口。ここを押すと 認証 → ペアリング → バトル → リザルト まで一本道で進む。 */}
       <Link
         to="/auth"
         style={{
-          padding: '1.1rem 3.5rem',
-          background: 'linear-gradient(135deg, #a78bfa, #6366f1)',
+          position: 'relative',
+          padding: '1.05rem 3.6rem',
+          background: 'linear-gradient(90deg, #38bdf8, #7c3aed)',
           color: '#fff',
           textDecoration: 'none',
           borderRadius: '12px',
-          fontSize: '1.4rem',
-          fontWeight: 'bold',
-          letterSpacing: '0.05em',
-          boxShadow: '0 8px 24px rgba(99,102,241,0.5)',
+          fontSize: '1.35rem',
+          fontWeight: 900,
+          fontStyle: 'italic',
+          letterSpacing: '0.08em',
+          border: '1px solid rgba(255,255,255,0.35)',
+          animation: 'titlePulse 1.8s ease-in-out infinite',
         }}
       >
         ▶ ゲームスタート
@@ -46,35 +116,46 @@ function Home() {
       {/* 本番フローの流れを一目で示す（今どこを通るのか分かるように）。 */}
       <div
         style={{
+          position: 'relative',
           display: 'flex',
           alignItems: 'center',
           gap: '0.5rem',
-          color: '#6b7280',
+          color: '#64748b',
           fontSize: '0.85rem',
           flexWrap: 'wrap',
           justifyContent: 'center',
         }}
       >
-        {['カード認証', 'ポーズ認証', 'バトル', 'リザルト'].map((label, i, arr) => (
+        {['カード認証', 'ポーズ認証', 'ペアリング', 'バトル', 'リザルト'].map((label, i, arr) => (
           <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
             <span
               style={{
-                background: '#1f2937',
+                background: 'rgba(15,23,42,0.7)',
+                border: '1px solid rgba(56,189,248,0.3)',
                 borderRadius: '999px',
-                padding: '0.2rem 0.8rem',
+                padding: '0.2rem 0.85rem',
                 color: '#cbd5e1',
               }}
             >
               {label}
             </span>
-            {i < arr.length - 1 && <span>→</span>}
+            {i < arr.length - 1 && <span style={{ color: 'rgba(56,189,248,0.6)' }}>▸</span>}
           </span>
         ))}
       </div>
 
       {/* 開発用（個別テスト）。本番フローには含まれない単体検証ページ。 */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem', marginTop: '1rem' }}>
-        <span style={{ color: '#4b5563', fontSize: '0.75rem', letterSpacing: '0.1em' }}>
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '0.6rem',
+          marginTop: '0.6rem',
+        }}
+      >
+        <span style={{ color: '#475569', fontSize: '0.75rem', letterSpacing: '0.1em' }}>
           開発用（個別テスト）
         </span>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -84,6 +165,7 @@ function Home() {
               { to: '/pose', label: 'Pose 検知' },
               { to: '/detect', label: '画像検知' },
               { to: '/henshin', label: '変身フロー(旧)' },
+              { to: '/pairing', label: 'ペアリング単体' },
               { to: '/battle', label: 'バトル単体' },
               { to: '/battle-test', label: 'バトル検証' },
               { to: '/model-check', label: 'モデル検証' },
@@ -95,12 +177,12 @@ function Home() {
               to={l.to}
               style={{
                 padding: '0.35rem 0.9rem',
-                background: '#111827',
-                color: '#9ca3af',
+                background: 'rgba(15,23,42,0.6)',
+                color: '#94a3b8',
                 textDecoration: 'none',
                 borderRadius: '6px',
                 fontSize: '0.8rem',
-                border: '1px solid #1f2937',
+                border: '1px solid #1e293b',
               }}
             >
               {l.label}
