@@ -169,11 +169,11 @@ type MoveDef = {
 // 合わせてある。技中（アニメ再生中）は移動・ジャンプ・ガード・次の技がすべてロックされ、
 // 例外は「ヒット/ガード時のキャンセル窓」だけ（＝コンボ）。尺を変えるときは両方揃えること。
 export const MOVES: Record<MoveKind, MoveDef> = {
-  // 軽い先手。発生が速く、ヒットで大きなキャンセル窓 → コンボ始動。
+  // 軽い先手。当たりはモーションの半分（腕が伸びるあたり）に同期。
   punch: {
-    startup: 75,
+    startup: 400, // = 合計の 50%（モーションの伸び切りにダメージを同期）
     active: 45,
-    recovery: 680, // 合計 800ms = punch アニメ 0.8s
+    recovery: 355, // 合計 800ms = punch アニメ 0.8s
     damage: ARENA.punchDamage,
     reach: ARENA.reachPunch,
     knockback: ARENA.knockback,
@@ -188,9 +188,9 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   },
   // 重い主力。発生は遅いが痛い。Final へキャンセル可。
   kick: {
-    startup: 120,
+    startup: 700, // = 合計の 50%（足が伸びるあたりにダメージを同期）
     active: 55,
-    recovery: 1225, // 合計 1400ms = kick アニメ 1.4s（素の尺 ~1.7s。早回し感を抑えた尺）
+    recovery: 645, // 合計 1400ms = kick アニメ 1.4s（素の尺 ~1.7s。早回し感を抑えた尺）
     damage: ARENA.kickDamage,
     reach: ARENA.reachKick,
     knockback: ARENA.kickKnockback,
@@ -205,15 +205,15 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   },
   // 投げ。発生後の持続で掴む。ガード貫通・空振ると長い硬直（打撃で狩られる）。
   throw: {
-    startup: 55,
+    startup: 600, // = 合計の 50%（掴みかかるあたりにダメージを同期）
     active: 35,
-    recovery: 1110, // 合計 1200ms = throw(grasp-attack) アニメ 1.2s（早回し感を抑えた尺）
-    recoveryOnHit: 1110, // ヒット時もアニメ終端までロック（掴んだ瞬間からの残り尺）
+    recovery: 565, // 合計 1200ms = throw(grasp-attack) アニメ 1.2s（早回し感を抑えた尺）
+    recoveryOnHit: 600, // ヒット時もアニメ終端までロック（掴んだ瞬間 ~600ms からの残り尺）
     damage: ARENA.throwDamage,
     reach: ARENA.reachThrow,
     knockback: ARENA.throwKnockback,
     launch: 0,
-    hitstun: 1200, // thrown アニメ 1.2s の間は倒れたまま（投げた側の再行動とほぼ同時に起きる）
+    hitstun: 900, // thrown アニメ 0.9s。投げた側より約 0.3s 遅れて起きる（投げ側有利）
     blockstun: 0,
     hitstop: 110,
     cancelWindow: 0,
@@ -223,9 +223,9 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   },
   // 必殺（コンボの締め / 単発）。ゲージ満タンで解禁。広く・痛い・打ち上げ。
   final: {
-    startup: 90,
+    startup: 600, // = 合計の 50%（必殺モーションの見せ場にダメージを同期）
     active: 130,
-    recovery: 980, // 合計 1200ms = final アニメ 1.2s
+    recovery: 470, // 合計 1200ms = final アニメ 1.2s
     damage: ARENA.finalDamage,
     reach: ARENA.reachFinal,
     knockback: ARENA.finalKnockback,
@@ -240,9 +240,9 @@ export const MOVES: Record<MoveKind, MoveDef> = {
   },
   // 波動弾。発生後に前方へ弾を撃つ（当たり判定は弾側＝下の PROJECTILE）。
   shot: {
-    startup: 140,
+    startup: 500, // = 合計の 50%（固有技モーションの放つ瞬間に弾生成を同期）
     active: 30, // このタイミングで弾を生成
-    recovery: 830, // 合計 1000ms = skill アニメ 1.0s（素の尺 2.6s。速すぎない程度に圧縮）
+    recovery: 470, // 合計 1000ms = skill アニメ 1.0s（素の尺 2.6s。速すぎない程度に圧縮）
     damage: 0,
     reach: 0,
     knockback: 0,
@@ -515,14 +515,10 @@ function startMove(state: BattleState, id: string, kind: MoveKind, now: number):
   if (kind === 'shot' && attacker.meter < ARENA.shotCost) return state
   if (kind === 'shot' && (state.projectiles ?? []).some((pr) => pr.owner === id)) return state
 
-  const free = canActNow(attacker, now)
-  if (!free) {
-    // キャンセル: 直前の技がヒット/ガードでキャンセル窓が開いていて、kind がキャンセル先か。
-    const cur = attacker.move
-    const canCancel =
-      !!cur && now <= attacker.cancelUntil && MOVES[cur].cancelInto.includes(kind)
-    if (!canCancel) return state
-  }
+  // 技の最中（発生〜硬直が明けるまで）は他の技コマンドを一切受け付けない。
+  // 以前はヒット/ガード時のキャンセル窓（cancelInto）でコンボ接続を許していたが、
+  // 「技を出している間は他の技が打てない」仕様に変更して無効化した。
+  if (!canActNow(attacker, now)) return state
 
   const f = MOVES[kind]
   const activeFrom = now + f.startup

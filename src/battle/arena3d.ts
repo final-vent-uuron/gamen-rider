@@ -139,7 +139,7 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 		//       right-punch / run / skill / small-reaction / special / turn
 		// 未使用: grasp（掴み構え。guard に使えそうだが用途未確定）。
 		// guard は未収録 → idle フォールバック。
-		// turn は焼き込みの 180°回転を stripYaw で殺し、facing 反転時の踏み替えとして使う。
+		// turn は facing 反転時に差し込む。焼き込みの 180°回転がそのまま「回るモーション」になる。
 		url: modelUrl("arduino-add-animation.glb"),
 		height: 0.5,
 		rotateY: Math.PI / 2,
@@ -151,7 +151,7 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 			punch: ["left-punch", "right-punch"], // 左右を打ち分け（ランダム交互）
 			kick: ["left-kick", "right-kick"],
 			shot: "skill", // 波動弾＝固有技（skill）
-			turn: "turn", // 振り向き（Quick 180。回転は stripYaw 済み・踏み替えだけ使う）
+			turn: "turn", // 振り向き（Quick 180。焼き込み回転で回る。再生中 renderer は root yaw を停止）
 			hit: "small-reaction",
 			"hit-air": "large-reaction", // Final の打ち上げ等＝吹き飛びリアクション
 			thrown: "grasp-reaction", // 投げられ（掴まれてやられる）
@@ -164,10 +164,10 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 		stripRootMotion: ["left-kick", "right-kick", "grasp-attack", "skill"],
 		// large-reaction（Flying Back）は後方への移動が本体に焼き込まれている。吹き飛び距離は
 		// ゲーム側（knockback/launch）が権威なので腰の平行移動は殺し、のけぞりだけ使う。
-		// turn も同様に位置・回転ともゲーム側が権威 → 平行移動とヨーを殺す。
+		// turn は位置だけゲーム側が権威（平行移動は殺す）。回転は焼き込みをそのまま使い、
+		// 再生中は renderer が root の yaw 補間を止める（二重回転の回避）。
 		freezeHipsTranslation: ["run", "jump", "jump.001", "large-reaction", "turn"],
 		flattenLateralTilt: ["run", "left-punch", "right-punch"],
-		stripYaw: ["turn"],
 	},
 	flutter: {
 		url: modelUrl("flutter.glb"),
@@ -187,6 +187,14 @@ export interface FighterAvatar {
 	// 毎フレーム、プレイヤー状態に合わせて見た目を更新する。
 	update(p: PlayerState, tSec: number, moving: boolean): void;
 	dispose(): void;
+	// --- 振り向き（turn クリップ）連携。実装はクリップを持つ GLB アバターのみ ---
+	// facing 反転時に renderer から呼ぶ。turn クリップの再生を開始したら true。
+	// 再生中は renderer が root の yaw を止め、クリップの焼き込み回転に回転を任せる。
+	playTurn?(p: PlayerState, moving: boolean): boolean;
+	// turn クリップ再生中か（true の間、renderer は root の yaw を固定する）。
+	isTurning?(): boolean;
+	// turn がこのフレームで終わったか（一度だけ true。renderer は root yaw をスナップする）。
+	consumeTurnEnd?(): boolean;
 }
 
 const lerp = THREE.MathUtils.lerp;
@@ -499,7 +507,7 @@ const ONESHOT_DURATION: Partial<Record<AvatarAction, number>> = {
 	kick: 1.4, // = MOVES.kick 合計 1400ms（left/right-kick 素の尺 ~1.7s → 1.2倍速）
 	shot: 1.0, // = MOVES.shot 合計 1000ms（skill 素の尺 2.6s → 2.6倍速。0.53s だと 5倍速で不自然）
 	throw: 1.2, // = MOVES.throw 合計 1200ms（grasp-attack 素の尺 2.07s → 1.7倍速）
-	thrown: 1.2, // = MOVES.throw hitstun（grasp-reaction。投げた側と同時に起きる）
+	thrown: 0.9, // = MOVES.throw hitstun 900ms（grasp-reaction。投げ側より少し遅れて起きる）
 	final: 1.2,
 	hit: 0.5,
 	"hit-air": 0.9, // Final の打ち上げ hitstun(520ms)＋滞空のなじみ分
@@ -593,6 +601,7 @@ export function createArenaRenderer(
 	const avatars = new Map<string, FighterAvatar>();
 	const lastX = new Map<string, number>();
 	const yaws = new Map<string, number>(); // 現在の向き（振り向きをなめらかに回す）
+	const facings = new Map<string, 1 | -1>(); // 前フレームの facing（turn クリップ差し込みの検出用）
 	const worldX = (x: number) => (x - 0.5) * WORLD_W;
 
 	// プレイヤー番号タグ（キャラ頭上の「1P」「2P」…）。
@@ -720,6 +729,7 @@ export function createArenaRenderer(
 				avatars.delete(id);
 				lastX.delete(id);
 				yaws.delete(id);
+				facings.delete(id);
 				removeGuardFx(id);
 				removeTag(id);
 			}
@@ -731,18 +741,32 @@ export function createArenaRenderer(
 			const av = ensureAvatar(p, index);
 			const wx = worldX(p.x);
 			av.root.position.x = wx;
-			// 振り向き: facing の反転を即フリップせず、カメラ側（正面）を経由して
-			// なめらかに回す。目標を 0 / -π にすることで、中間の -π/2 が「カメラの方を
-			// 向く」経路になり、背中を見せずに振り向く。
-			const targetYaw = p.facing === 1 ? 0 : -Math.PI;
-			const prevYaw = yaws.get(p.id) ?? targetYaw;
-			const yaw = lerp(prevYaw, targetYaw, 0.16); // 約 0.2 秒で回りきる
-			yaws.set(p.id, yaw);
-			av.root.rotation.y = yaw;
 			const prev = lastX.get(p.id) ?? wx;
 			const moving = Math.abs(wx - prev) > 0.003;
 			lastX.set(p.id, wx);
+
+			// 振り向き。turn クリップを持つアバターは「クリップの焼き込み回転」に回転を任せ、
+			// その間 root の yaw は止める（両方回すと二重回転になる）。クリップが無い/使えない
+			// 状況では従来どおり root をカメラ側（正面）経由でなめらかに補間して回す。
+			const targetYaw = p.facing === 1 ? 0 : -Math.PI;
+			const prevYaw = yaws.get(p.id) ?? targetYaw;
+			const prevFacing = facings.get(p.id) ?? p.facing;
+			facings.set(p.id, p.facing);
+			let turning = av.isTurning?.() ?? false;
+			if (!turning && p.facing !== prevFacing) {
+				// 反転の瞬間に turn クリップの再生を試みる（接地・通常時のみ成功する）
+				turning = av.playTurn?.(p, moving) ?? false;
+			}
+			const yaw = turning ? prevYaw : lerp(prevYaw, targetYaw, 0.16); // 補間は約 0.2 秒で回りきる
+			yaws.set(p.id, yaw);
+			av.root.rotation.y = yaw;
 			av.update(p, t, moving);
+			// turn クリップがこのフレームで終わった場合、クリップの回転が消えるのと
+			// 同フレームで root を目標向きへスナップして繋ぐ（1フレームの向き抜けを防ぐ）。
+			if (av.consumeTurnEnd?.()) {
+				yaws.set(p.id, targetYaw);
+				av.root.rotation.y = targetYaw;
+			}
 
 			// 頭上のプレイヤー番号タグ（1P/2P…）。自分は色付きで「YOU」を併記。
 			let tag = playerTags.get(p.id);
@@ -1196,7 +1220,9 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 	let current: THREE.AnimationAction | null = null;
 	let currentAct: AvatarAction | null = null; // current が表すアクション（idle 代用時は 'idle'）
 	let lastAct: AvatarAction | null = null; // ゲーム状態が要求している最新アクション
-	let prevFacing: 1 | -1 | 0 = 0; // 前フレームの向き（0 = 未観測。turn 差し込みの検出用）
+	let turning = false; // turn クリップ再生中（renderer が root yaw を止める）
+	let turnEnded = false; // turn がこのフレームで終わった（renderer が yaw をスナップして消費）
+	let turnStartedAt = 0; // 開始時刻(s)。finished を取りこぼしても固まらないための保険
 	let lastT = 0;
 	let loaded = false;
 	let disposed = false;
@@ -1379,6 +1405,18 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 			// down(death) は clamp（倒れたまま）を維持するので何もしない。
 			mixer.addEventListener("finished", (e) => {
 				if (e.action !== current || currentAct === "down") return;
+				if (currentAct === "turn") {
+					// turn は焼き込み回転（180°回った姿勢）で終わるため、フェードで戻すと
+					// 巻き戻る回転が見えてしまう。ハードカットで即 idle/walk に切り替え、
+					// renderer が同フレームで root yaw を目標向きへスナップして辻褄を合わせる。
+					turning = false;
+					turnEnded = true;
+					current.stop();
+					current = null;
+					currentAct = null;
+					switchTo(lastAct ?? "idle");
+					return;
+				}
 				if (lastAct && lastAct !== currentAct) switchTo(lastAct);
 			});
 			loaded = true;
@@ -1395,21 +1433,16 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 			if (!loaded || !mixer) return; // ロード完了まで非表示（プレースホルダなし）
 			root.position.y = p.y * JUMP_WORLD;
 			const act = avatarAction(p, moving);
-			// 振り向き: facing が反転した瞬間、接地して通常状態（idle/走り）のときだけ
-			// turn クリップ（踏み替え）を差し込む。実際の回転は renderer の root 補間が行う。
-			// 技・被弾などの一回再生中は割り込まない（turn 自身の再要求は連続反転なので許可）。
-			if (prevFacing !== 0 && p.facing !== prevFacing) {
-				const busyOneShot =
-					!!current &&
-					!!currentAct &&
-					currentAct !== "turn" &&
-					ONE_SHOT.has(currentAct) &&
-					current.isRunning();
-				if (clipActions.has("turn") && isLow(act) && p.y <= 0.001 && !busyOneShot) {
-					switchTo("turn");
+			// turn 中に技・被弾など優先度の高いアクションが来たら turn を打ち切る
+			// （下の switchTo が割り込むので、renderer 側の yaw 固定だけ解除して繋ぐ）。
+			// finished の取りこぼし対策のタイムアウトも兼ねる。
+			if (turning) {
+				const timedOut = tSec - turnStartedAt > 1.0;
+				if ((act !== lastAct && !isLow(act)) || timedOut) {
+					turning = false;
+					turnEnded = true;
 				}
 			}
-			prevFacing = p.facing;
 			if (act !== lastAct) {
 				lastAct = act;
 				// ワンショット再生中に idle/walk へ戻る要求が来ても保留し、クリップを振り切らせる
@@ -1425,6 +1458,32 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 			const dt = lastT ? Math.min(tSec - lastT, 0.05) : 0;
 			lastT = tSec;
 			mixer.update(dt);
+		},
+		playTurn(p, moving) {
+			// 接地して通常状態（idle/走り）のときだけ。技・被弾の一回再生中は割り込まない。
+			if (!loaded || !mixer || !clipActions.has("turn")) return false;
+			if (p.y > 0.001) return false;
+			if (!isLow(avatarAction(p, moving))) return false;
+			const busyOneShot =
+				!!current &&
+				!!currentAct &&
+				currentAct !== "turn" &&
+				ONE_SHOT.has(currentAct) &&
+				current.isRunning();
+			if (busyOneShot) return false;
+			switchTo("turn");
+			turning = true;
+			turnEnded = false;
+			turnStartedAt = lastT;
+			return true;
+		},
+		isTurning() {
+			return turning;
+		},
+		consumeTurnEnd() {
+			const ended = turnEnded;
+			turnEnded = false;
+			return ended;
 		},
 		dispose() {
 			disposed = true;

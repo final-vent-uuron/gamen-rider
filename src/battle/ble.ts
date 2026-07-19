@@ -76,6 +76,44 @@ function bluetoothApi(): BluetoothApi | null {
   return (navigator as Navigator & { bluetooth?: BluetoothApi }).bluetooth ?? null
 }
 
+// ---- 部位別ペアリング状態 -------------------------------------------------
+// 右手/左手/右足/左足の加速度センサーが「このブラウザにペアリング（許可）済みか」。
+// バトル画面のステータス表示用。接続はせず、許可済みデバイスの名前を見るだけ。
+//
+// デバイス名 → 部位の対応（ハード側の命名が確定したらここを合わせる）:
+//   - 腕: PunchSensor（既存実機）。個体名 PunchSensor-L を左手、それ以外（無印含む）を右手扱い。
+//   - 足: KickSensor-L / KickSensor-*（未実装・命名は仮置き）。
+export type LimbKey = 'rightHand' | 'leftHand' | 'rightFoot' | 'leftFoot'
+
+const LIMB_MATCHERS: Record<LimbKey, (name: string) => boolean> = {
+  rightHand: (n) => n.startsWith('PunchSensor') && !n.startsWith('PunchSensor-L'),
+  leftHand: (n) => n.startsWith('PunchSensor-L'),
+  rightFoot: (n) => n.startsWith('KickSensor') && !n.startsWith('KickSensor-L'),
+  leftFoot: (n) => n.startsWith('KickSensor-L'),
+}
+
+export type PairedLimbs = Record<LimbKey, boolean>
+
+export async function getPairedLimbs(): Promise<PairedLimbs> {
+  const out: PairedLimbs = {
+    rightHand: false,
+    leftHand: false,
+    rightFoot: false,
+    leftFoot: false,
+  }
+  const bt = bluetoothApi()
+  if (!bt?.getDevices) return out // 非対応ブラウザは全部「未ペアリング」扱い
+  try {
+    const names = (await bt.getDevices()).map((d) => d.name ?? '')
+    for (const limb of Object.keys(LIMB_MATCHERS) as LimbKey[]) {
+      out[limb] = names.some((n) => LIMB_MATCHERS[limb](n))
+    }
+  } catch {
+    // getDevices 失敗（権限ポリシー等）も未ペアリング扱いのまま
+  }
+  return out
+}
+
 export function createBleSensorSource(
   onInput: InputHandler,
   opts: BleSensorOptions = {},
