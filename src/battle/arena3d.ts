@@ -166,7 +166,13 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 		// ゲーム側（knockback/launch）が権威なので腰の平行移動は殺し、のけぞりだけ使う。
 		// turn は位置だけゲーム側が権威（平行移動は殺す）。回転は焼き込みをそのまま使い、
 		// 再生中は renderer が root の yaw 補間を止める（二重回転の回避）。
-		freezeHipsTranslation: ["run", "jump", "jump.001", "large-reaction", "turn"],
+		freezeHipsTranslation: [
+			"run",
+			"jump",
+			"jump.001",
+			"large-reaction",
+			"turn",
+		],
 		flattenLateralTilt: ["run", "left-punch", "right-punch"],
 	},
 	flutter: {
@@ -1345,7 +1351,9 @@ function createGltfAvatar(model: RiderModel, _color: number): FighterAvatar {
 				obj.traverse((o) => {
 					if ((o as THREE.Bone).isBone) {
 						standBones++;
-						standBox.expandByPoint(o.getWorldPosition(tmp).applyMatrix4(rootInv));
+						standBox.expandByPoint(
+							o.getWorldPosition(tmp).applyMatrix4(rootInv),
+						);
 						if (!hipsBone && /hips/i.test(o.name)) hipsBone = o;
 					}
 				});
