@@ -181,14 +181,40 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 		flattenLateralTilt: ["run", "left-punch", "right-punch"],
 	},
 	flutter: {
-		url: modelUrl("flutter.glb"),
+		// モーション大量収録版（2026-07-20 R2 アップロード）。収録クリップ・補正は
+		// arduino（arduino-add-animation.glb）と同じモーションパック構成。
+		url: modelUrl("flutter-add-animation.glb"),
 		height: 0.5,
 		rotateY: Math.PI / 2,
-		// idle / death 系のみ収録 → 攻撃・移動などその他アクションは idle フォールバック。
 		clips: {
-			idle: "idle_rider",
-			down: "death_rider",
+			idle: "idle",
+			walk: "run",
+			down: "death",
+			jump: ["jump", "jump.001"],
+			punch: ["left-punch", "right-punch"],
+			kick: ["left-kick", "right-kick"],
+			guard: "guard",
+			shot: "skill",
+			turn: "turn",
+			hit: "small-reaction",
+			"hit-air": "large-reaction",
+			thrown: "grasp-reaction",
+			throw: "grasp",
+			"throw-hit": "grasp-attack",
+			final: "special",
+			abare: "error-mode",
 		},
+		stripRootMotion: ["left-kick", "right-kick", "grasp-attack", "skill"],
+		freezeHipsTranslation: [
+			"run",
+			"jump",
+			"jump.001",
+			"large-reaction",
+			"turn",
+			"guard",
+		],
+		alignHipsToIdle: ["left-punch", "right-punch"],
+		flattenLateralTilt: ["run", "left-punch", "right-punch"],
 	},
 };
 
