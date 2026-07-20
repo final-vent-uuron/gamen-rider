@@ -5,6 +5,7 @@ import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
 
 import { RIDER_ROUTINES } from "../pose";
 import { LM } from "../pose/landmarks";
+import { facingMetrics } from "../pose/poses";
 import { createSkeletonSmoother } from "../pose/skeleton";
 import {
 	ARENA,
@@ -12,6 +13,7 @@ import {
 	applyAttack,
 	applyJump,
 	applyThrow,
+	applyTurn,
 	battleCardsFor,
 	connectBattle,
 	createBgm,
@@ -73,6 +75,9 @@ const EMPTY_BATTLE: BattleState = {
 // 他プレイヤーの動きがカクつく。この時間だけ過去を描画時刻とし、その前後の受信
 // スナップショット間で位置を補間して滑らかにする。ローカル開発では相手がこの分だけ
 // 遅れて見えるだけで、体感はほぼ変わらない。
+// 時間軸は受信時刻ではなく「サーバー送信時刻(st)」を使う。受信時刻軸だと到着ジッタが
+// そのまま補間結果に乗り、120ms 遅らせてもカクつきが残るため。描画時刻(rt)は毎フレーム
+// 実時間で前進させつつ、最新 st - 遅延 へゆっくり寄せる（時計ドリフト・バースト到着を吸収）。
 const INTERP_DELAY_MS = 120;
 
 // 予測の見た目: 自分の技/ガードはサーバーが追いつく前でも即表示。被弾中はサーバー優先。
@@ -129,6 +134,13 @@ function BattlePage() {
 	// 加速度センサー（右手/左手/右足/左足）のペアリング有無。null = 確認中
 	const [pairedLimbs, setPairedLimbs] = useState<PairedLimbs | null>(null);
 	const [intruder, setIntruder] = useState<string | null>(null); // 乱入 WARNING（乱入者名。null = 非表示）
+	// カード技のカットイン（発動者名と種別。null = 非表示）
+	const [cutinShow, setCutinShow] = useState<{
+		kind: string;
+		name: string;
+	} | null>(null);
+	const cutinSeenRef = useRef(0); // 処理済みの cutin.until（同じ発動を1回だけ演出する）
+	const cutinTimerRef = useRef(0);
 
 	const battleRef = useRef(battle);
 	battleRef.current = battle;
@@ -159,7 +171,10 @@ function BattlePage() {
 	const guardRef = useRef(false); // 自分のガード入力
 	const lastPredTRef = useRef(0);
 	// 受信スナップショットの履歴（他プレイヤーの補間用。INTERP_DELAY_MS 参照）
-	const snapsRef = useRef<{ t: number; state: BattleState }[]>([]);
+	// st はサーバー送信時刻。到着ジッタを持ち込まないため受信時刻は使わない。
+	const snapsRef = useRef<{ st: number; state: BattleState }[]>([]);
+	const interpRtRef = useRef(0); // 補間の描画時刻（サーバー時計軸）
+	const lastLoopTRef = useRef(0); // rt を実時間で前進させるための前フレーム時刻
 
 	function flashFinal() {
 		setFinalActive(true);
@@ -324,6 +339,23 @@ function BattlePage() {
 					intrusionUntil - Date.now(),
 				);
 			}
+			// カード技のカットイン: 新しい cutin.until を一度だけ拾い、バナーを演出時間ぶん表示。
+			// カメラ寄せ・全員停止はサーバー状態＋レンダラ側（arena3d）が行う。
+			const cutin = next.cutin;
+			if (
+				cutin &&
+				cutin.until > Date.now() &&
+				cutin.until !== cutinSeenRef.current
+			) {
+				cutinSeenRef.current = cutin.until;
+				const who = next.players.find((p) => p.id === cutin.playerId);
+				setCutinShow({ kind: cutin.kind, name: who?.riderName ?? "" });
+				window.clearTimeout(cutinTimerRef.current);
+				cutinTimerRef.current = window.setTimeout(
+					() => setCutinShow(null),
+					cutin.until - Date.now(),
+				);
+			}
 			if (fresh.length) {
 				setPopups((ps) => [...ps, ...fresh]);
 				for (const pu of fresh) {
@@ -390,7 +422,7 @@ function BattlePage() {
 			riderId: routine.riderId,
 			riderName: routine.riderName,
 			onStatus: setStatus,
-			onState: (state, youId) => {
+			onState: (state, youId, st) => {
 				youIdRef.current = youId;
 				const prev = battleRef.current;
 				// isSelf は端末ごとに違う（youId と一致する人が自分）。ここで付け直す。
@@ -402,14 +434,14 @@ function BattlePage() {
 				processEvents(prev, next, youId);
 				reconcilePrediction(next, youId);
 				battleRef.current = next;
-				// 補間用の履歴に積む（描画に必要な直近 ~0.5 秒だけ残す）
-				const snapNow = performance.now();
-				snapsRef.current.push({ t: snapNow, state: next });
-				while (
-					snapsRef.current.length > 2 &&
-					snapsRef.current[0].t < snapNow - 500
-				) {
-					snapsRef.current.shift();
+				// 補間用の履歴に積む（描画に必要な直近 ~0.5 秒だけ残す）。
+				// 順不同・重複 st（再接続やバースト）は捨てて単調増加を保つ。
+				const snaps = snapsRef.current;
+				if (snaps.length === 0 || st > snaps[snaps.length - 1].st) {
+					snaps.push({ st, state: next });
+					while (snaps.length > 2 && snaps[0].st < st - 500) {
+						snaps.shift();
+					}
 				}
 				// サーバー配信は 60Hz だが、React の再レンダー（HP バー・ゲージ・カード等の UI）まで
 				// 60Hz で回すと three.js の描画ループとメインスレッドを取り合ってガタつく。
@@ -461,13 +493,13 @@ function BattlePage() {
 					applyPred((s) => applyJump(s, selfId, now));
 					break;
 				case "punch":
-					net.sendAttack("punch");
-					applyPred((s) => applyAttack(s, selfId, "punch", now));
+					net.sendAttack("punch", input.side);
+					applyPred((s) => applyAttack(s, selfId, "punch", now, input.side));
 					sfxRef.current?.whiff();
 					break;
 				case "kick":
-					net.sendAttack("kick");
-					applyPred((s) => applyAttack(s, selfId, "kick", now));
+					net.sendAttack("kick", input.side);
+					applyPred((s) => applyAttack(s, selfId, "kick", now, input.side));
 					sfxRef.current?.whiff();
 					break;
 				case "guard":
@@ -486,6 +518,10 @@ function BattlePage() {
 				case "abare":
 					net.sendAbare();
 					applyPred((s) => applyAbare(s, selfId, now));
+					break;
+				case "turn":
+					net.sendTurn();
+					applyPred((s) => applyTurn(s, selfId, now));
 					break;
 				case "final-vent":
 					net.sendAttack("final");
@@ -511,8 +547,15 @@ function BattlePage() {
 			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
-			// 体の向き（カメラに対して横向きか）
-			setCamSide,
+			// 体の向き（カメラに対して横向きか）。正面 → 横向きの瞬間に振り向く（facing 反転）。
+			// デバウンス済みの変化時のみ呼ばれるので、横向き 1 回につき 1 回だけ送られる。
+			(side) => {
+				setCamSide(side);
+				if (side) {
+					net.sendTurn();
+					applyPred((s) => applyTurn(s, youIdRef.current, Date.now()));
+				}
+			},
 		);
 		camSource.start();
 
@@ -525,6 +568,7 @@ function BattlePage() {
 			window.clearTimeout(finalTimerRef.current);
 			window.clearTimeout(comboTimerRef.current);
 			window.clearTimeout(intrusionTimerRef.current);
+			window.clearTimeout(cutinTimerRef.current);
 		};
 	}, [routine]);
 
@@ -536,18 +580,28 @@ function BattlePage() {
 
 			// --- 他プレイヤーの補間（INTERP_DELAY_MS 分の過去を、受信履歴の間で lerp）---
 			// 自分は下の予測で描くので対象外。履歴が rt を挟めない（受信直後・停滞中）は最新のまま。
+			// rt はサーバー時計軸。毎フレーム実時間で前進させ、目標（最新 st - 遅延）へ 5%/frame で
+			// 寄せることで、到着ジッタやバーストが動きに乗らないようにする。大きく外れたら
+			// （タブ非表示からの復帰・再接続など）追従し直す。
 			let players = server.players;
 			const snaps = snapsRef.current;
 			if (snaps.length >= 2) {
-				const rt = performance.now() - INTERP_DELAY_MS;
+				const nowP = performance.now();
+				const dt = lastLoopTRef.current ? nowP - lastLoopTRef.current : 16;
+				lastLoopTRef.current = nowP;
+				const target = snaps[snaps.length - 1].st - INTERP_DELAY_MS;
+				let rt = interpRtRef.current === 0 ? target : interpRtRef.current + dt;
+				rt += (target - rt) * 0.05;
+				if (Math.abs(target - rt) > 300) rt = target;
+				interpRtRef.current = rt;
 				let hi = snaps.length - 1;
-				while (hi > 0 && snaps[hi - 1].t > rt) hi--;
-				if (hi > 0 && snaps[hi].t > rt) {
+				while (hi > 0 && snaps[hi - 1].st > rt) hi--;
+				if (hi > 0 && snaps[hi].st > rt) {
 					const s0 = snaps[hi - 1];
 					const s1 = snaps[hi];
 					const f = Math.max(
 						0,
-						Math.min(1, (rt - s0.t) / Math.max(1, s1.t - s0.t)),
+						Math.min(1, (rt - s0.st) / Math.max(1, s1.st - s0.st)),
 					);
 					players = players.map((p) => {
 						if (p.id === selfId) return p;
@@ -599,6 +653,11 @@ function BattlePage() {
 										vy: ps.vy,
 										facing: ps.facing,
 										action: predAction(p, ps),
+										// 技の左右と開始時刻も予測側を使う（サーバー往復を待つと
+										// パンチの左右打ち分け・連打の再トリガが 1 テンポ遅れる）
+										move: ps.move,
+										moveSide: ps.moveSide,
+										moveActiveFrom: ps.moveActiveFrom,
 									}
 								: p,
 						),
@@ -677,12 +736,21 @@ function BattlePage() {
 	}, [battle.winnerId, navigate, routine.riderId, routine.riderName]);
 
 	// カードクリックをダミー入力として扱う（マウスでも技を出せる）。
+	// カード id = 対応モーション: skill（ストライクベント）/ error-mode（エラーベント）/
+	// final-vent（ファイナルベント）。
 	function handleCard(card: BattleCard) {
 		sfxRef.current?.resume();
-		if (card.kind === "final") netRef.current?.sendAttack("final");
-		else if (card.kind === "attack") {
-			netRef.current?.sendAttack("punch");
-			sfxRef.current?.whiff();
+		switch (card.id) {
+			case "skill":
+				netRef.current?.sendAttack("shot");
+				sfxRef.current?.whiff();
+				break;
+			case "error-mode":
+				netRef.current?.sendAbare();
+				break;
+			case "final-vent":
+				netRef.current?.sendAttack("final");
+				break;
 		}
 	}
 
@@ -879,8 +947,11 @@ function BattlePage() {
 			{/* 乱入 WARNING（サーバーが全員を停止させている間、中央に表示） */}
 			{intruder != null && <IntrusionWarning name={intruder} />}
 
-			{/* ファイナルベント演出 */}
-			{finalActive && <FinalVentBanner />}
+			{/* カード技発動のカットイン（カメラ寄せ＋全員停止中の「発動!!」バナー） */}
+			{cutinShow && <CutinBanner kind={cutinShow.kind} name={cutinShow.name} />}
+
+			{/* ファイナルベント演出（発動カットイン中は重複するので出さない） */}
+			{finalActive && !cutinShow && <FinalVentBanner />}
 
 			{/* 決着スプラッシュ（この直後に /result へ遷移する） */}
 			{winner && <GameSetBanner mine={!!winner.isSelf} />}
@@ -1383,14 +1454,16 @@ function ControlsHelp() {
 	const rows: [string, string][] = [
 		["← → / A D", "移動"],
 		["W / ↑ / Space", "ジャンプ"],
-		["J", "パンチ(軽・発生早)"],
-		["K", "キック(重・主力)"],
+		["J / K", "左パンチ / 右パンチ(軽・発生早)"],
+		["N / M", "左キック / 右キック(重・主力)"],
 		["Shift / S / ↓", "ガード(押しっぱ・前後OK)"],
 		["📷 構え", "カメラにボクシングの構え(両拳を顔の前)でガード"],
-		["U", "投げ(ガード崩し)"],
-		["I", "波動弾(2ゲージ・飛び道具・1発ずつ)"],
-		["E", "エラーモード(3ゲージ・割り込み脱出)"],
-		["L / F", "ファイナル(5ゲージ)"],
+		["U", "掴み(グラスプ・当たれば掴み攻撃・ガード崩し)"],
+		["T", "振り向き"],
+		["📷 横向き", "カメラに体を横に向けても振り向き"],
+		["I", "ストライクベント(2ゲージ・飛び道具・1発ずつ)"],
+		["E", "エラーベント(3ゲージ・割り込み脱出)"],
+		["L / F", "ファイナルベント(5ゲージ)"],
 	];
 	return (
 		<div
@@ -1714,6 +1787,18 @@ function CamStatusBar({
 				>
 					{!lm ? "--" : side ? "横向き" : "正面"}
 				</span>
+				{/* しきい値調整用の生値: 肩幅/胴長の比と左右（肩・腰）の可視性 */}
+				{(() => {
+					const m = lm ? facingMetrics(lm) : null;
+					return (
+						m && (
+							<span style={{ color: "#6b7280" }}>
+								比{m.ratio.toFixed(2)} 角{Math.round(m.yawDeg)} L
+								{m.leftVis.toFixed(2)} R{m.rightVis.toFixed(2)}
+							</span>
+						)
+					);
+				})()}
 			</span>
 		</div>
 	);
@@ -1918,6 +2003,56 @@ function FinalVentCam({
 }
 
 // ---- 演出オーバーレイ ----------------------------------------------------
+
+// カード技発動のカットインバナー。サーバーが cutin で全員を停止し、カメラが発動者へ
+// 寄っている間（~0.9s）、中央に「◯◯ 発動!!」を出す。色はカードと対応。
+const CUTIN_LABELS: Record<string, { label: string; color: string }> = {
+	shot: { label: "ストライクベント", color: "#f87171" },
+	abare: { label: "エラーベント", color: "#fbbf24" },
+	final: { label: "ファイナルベント", color: "#a78bfa" },
+};
+
+function CutinBanner({ kind, name }: { kind: string; name: string }) {
+	const c = CUTIN_LABELS[kind] ?? CUTIN_LABELS.final;
+	return (
+		<div
+			style={{
+				position: "fixed",
+				inset: 0,
+				display: "flex",
+				flexDirection: "column",
+				alignItems: "center",
+				justifyContent: "center",
+				gap: "0.3rem",
+				pointerEvents: "none",
+				zIndex: 40,
+			}}
+		>
+			<span
+				style={{
+					fontSize: "1rem",
+					fontWeight: 700,
+					color: "#e5e7eb",
+					textShadow: "0 0 12px rgba(0,0,0,0.9)",
+					letterSpacing: "0.15em",
+				}}
+			>
+				{name}
+			</span>
+			<span
+				style={{
+					fontSize: "2.6rem",
+					fontWeight: 900,
+					color: "#fff",
+					textShadow: `0 0 20px ${c.color}, 0 0 44px ${c.color}`,
+					letterSpacing: "0.1em",
+				}}
+			>
+				{c.label} 発動!!
+			</span>
+		</div>
+	);
+}
 
 function FinalVentBanner() {
 	return (

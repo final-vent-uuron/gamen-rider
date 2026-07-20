@@ -21,10 +21,10 @@ const THRUST_SIDE_MAX = 0.8 // 突き出し手首が横へ開きすぎない上�
 // バトル中の実用入力なので認証ポーズよりだいぶ緩い（「肘を曲げて両手を上げていれば」成立）。
 // lite モデル＋CPU 推論は z がノイジーで、厳しくすると構えているのに通らない。
 const GUARD_MIN_VIS = 0.2 // ガード専用の可視性下限（拳がカメラに近く画面端でも判定できるよう緩め）
-const GUARD_ELBOW_BEND_MAX_DEG = 150 // 肘が伸び切っていなければよい（パンチ/Tポーズの除外だけ）
-const GUARD_WRIST_ABOVE_ELBOW = -0.15 // 手首は肘よりこの分（肩幅比）下がるまで許容（負 = 肘より下も可）
-const GUARD_WRIST_DROP_TOL = 0.75 // 手首が肩より下がってよい量（肩幅比）。拳は顔〜みぞおちの高さ。
-const GUARD_WRIST_SIDE_MAX = 1.4 // 手首が体の中心から横へ開きすぎない上限（肩幅比）
+const GUARD_ELBOW_BEND_MAX_DEG = 130 // 肘がしっかり曲がっていること（伸ばし気味の腕は不成立）
+const GUARD_WRIST_ABOVE_ELBOW = 0 // 手首は肘と同じ高さ以上（下がっていたら不成立）
+const GUARD_WRIST_DROP_TOL = 0.5 // 手首が肩より下がってよい量（肩幅比）。拳は顔〜胸の高さ。
+const GUARD_WRIST_SIDE_MAX = 1.0 // 手首が体の中心から横へ開きすぎない上限（肩幅比）
 
 const ARM_IDS = [
   LM.L_SHOULDER,
@@ -131,24 +131,54 @@ export function isBoxingGuard(lm: Lm): boolean {
 // 正面では肩幅が広く写り、横を向くほど肩幅が潰れて写る。胴の縦の長さ（肩中点→腰中点）は
 // 体のヨー回転でほぼ変わらないので、スケールの基準に使う（カメラとの距離にも影響されない）。
 export type BodyFacing = 'front' | 'side'
-const FACING_MIN_VIS = 0.4 // 肩・腰がこの可視性未満なら判定しない（見失いは null = 現状維持）
-const FACING_SIDE_RATIO = 0.45 // 肩幅 / 胴長 がこれ未満なら横向き（正面はおおむね 0.7 前後）
+const FACING_MIN_VIS = 0.4 // 手前側（よく見えている方）の肩に要求する可視性。これ未満は判定しない
+const FACING_HIDDEN_VIS = 0.3 // 奥側の肩がこれ未満 = 体に隠れている ＝ それ自体が横向きの証拠
+const FACING_SIDE_RATIO = 0.5 // 肩幅 / 胴長 がこれ未満なら横向き（正面はおおむね 0.7 前後）
+const FACING_SIDE_YAW_DEG = 50 // 肩の z 差から出すヨー角がこれ以上なら横向き（正面 ~0-30°）
 
-export function bodyFacing(lm: Lm): BodyFacing | null {
+// 向き判定に使う生の計測値。UI のデバッグ表示・しきい値調整用に公開する。
+export interface FacingMetrics {
+  ratio: number // 見かけの肩幅 / 胴長。正面 ~0.7、横向きほど小さい
+  yawDeg: number // 肩の z 差から出す体のヨー角（度）。正面 ~0、真横 ~90
+  leftVis: number // 左肩の可視性
+  rightVis: number // 右肩の可視性
+}
+
+export function facingMetrics(lm: Lm): FacingMetrics | null {
   const ls = lm[LM.L_SHOULDER]
   const rs = lm[LM.R_SHOULDER]
   const lh = lm[LM.L_HIP]
   const rh = lm[LM.R_HIP]
   if (!ls || !rs || !lh || !rh) return null
-  for (const p of [ls, rs, lh, rh]) {
-    if ((p.visibility ?? 1) < FACING_MIN_VIS) return null
-  }
   const torso = Math.hypot(
     (ls.x + rs.x) / 2 - (lh.x + rh.x) / 2,
     (ls.y + rs.y) / 2 - (lh.y + rh.y) / 2,
   )
   if (torso < 1e-3) return null
-  return Math.abs(ls.x - rs.x) / torso < FACING_SIDE_RATIO ? 'side' : 'front'
+  const vis = (p: NormalizedLandmark) => p.visibility ?? 1
+  return {
+    // 腰は上半身だけ映る画角だと可視性がほぼ 0 になるため、可視性は肩だけで見る。
+    // 腰の「位置」はフレーム外でもモデルが推定するので、胴長（比の分母）にはそのまま使える。
+    ratio: Math.abs(ls.x - rs.x) / torso,
+    // 横を向くと片方の肩がカメラに近づき z の差が開く。x の見かけ幅より浅い回転にも反応する。
+    yawDeg:
+      (Math.atan2(Math.abs(ls.z - rs.z), Math.abs(ls.x - rs.x)) * 180) /
+      Math.PI,
+    leftVis: vis(ls),
+    rightVis: vis(rs),
+  }
+}
+
+export function bodyFacing(lm: Lm): BodyFacing | null {
+  const m = facingMetrics(lm)
+  if (!m) return null
+  // 横向きでは奥側の肩・腰が体に隠れて可視性が落ちるため、「4点全部見えている」を
+  // 要求すると横向きほど判定不能(null)になる。左右を分けて、手前側だけ可視性を要求し、
+  // 奥側の可視性低下はむしろ横向きの証拠として使う。
+  if (Math.max(m.leftVis, m.rightVis) < FACING_MIN_VIS) return null // 体ごと見失い → 現状維持
+  if (Math.min(m.leftVis, m.rightVis) < FACING_HIDDEN_VIS) return 'side' // 片側が隠れている
+  if (m.yawDeg >= FACING_SIDE_YAW_DEG) return 'side' // 肩の奥行き差が大きい（浅い横向きも拾う）
+  return m.ratio < FACING_SIDE_RATIO ? 'side' : 'front'
 }
 
 // 幾何ルールで定義済みのポーズ一覧。ポーズ作成 UI でステップとして選べる。
