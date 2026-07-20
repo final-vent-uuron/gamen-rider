@@ -44,7 +44,7 @@ type ClientMsg =
   | { t: 'join'; riderId?: unknown; riderName?: unknown }
   | { t: 'move'; dir?: unknown }
   | { t: 'jump' }
-  | { t: 'attack'; kind?: unknown }
+  | { t: 'attack'; kind?: unknown; side?: unknown } // side = パンチ/キックの左右（省略可）
   | { t: 'guard'; on?: unknown }
   | { t: 'turn' } // 振り向き（カメラの体の向き検出: 正面 → 横向き）
   | { t: 'throw' }
@@ -130,7 +130,8 @@ export class BattleRoom extends DurableObject {
           msg.kind === 'final' ||
           msg.kind === 'shot'
         ) {
-          this.battle = applyAttack(this.battle, conn.id, msg.kind, Date.now())
+          const side = msg.side === 'left' || msg.side === 'right' ? msg.side : undefined
+          this.battle = applyAttack(this.battle, conn.id, msg.kind, Date.now(), side)
         }
         break
       case 'guard':

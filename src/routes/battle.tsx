@@ -134,6 +134,13 @@ function BattlePage() {
 	// 加速度センサー（右手/左手/右足/左足）のペアリング有無。null = 確認中
 	const [pairedLimbs, setPairedLimbs] = useState<PairedLimbs | null>(null);
 	const [intruder, setIntruder] = useState<string | null>(null); // 乱入 WARNING（乱入者名。null = 非表示）
+	// カード技のカットイン（発動者名と種別。null = 非表示）
+	const [cutinShow, setCutinShow] = useState<{
+		kind: string;
+		name: string;
+	} | null>(null);
+	const cutinSeenRef = useRef(0); // 処理済みの cutin.until（同じ発動を1回だけ演出する）
+	const cutinTimerRef = useRef(0);
 
 	const battleRef = useRef(battle);
 	battleRef.current = battle;
@@ -332,6 +339,23 @@ function BattlePage() {
 					intrusionUntil - Date.now(),
 				);
 			}
+			// カード技のカットイン: 新しい cutin.until を一度だけ拾い、バナーを演出時間ぶん表示。
+			// カメラ寄せ・全員停止はサーバー状態＋レンダラ側（arena3d）が行う。
+			const cutin = next.cutin;
+			if (
+				cutin &&
+				cutin.until > Date.now() &&
+				cutin.until !== cutinSeenRef.current
+			) {
+				cutinSeenRef.current = cutin.until;
+				const who = next.players.find((p) => p.id === cutin.playerId);
+				setCutinShow({ kind: cutin.kind, name: who?.riderName ?? "" });
+				window.clearTimeout(cutinTimerRef.current);
+				cutinTimerRef.current = window.setTimeout(
+					() => setCutinShow(null),
+					cutin.until - Date.now(),
+				);
+			}
 			if (fresh.length) {
 				setPopups((ps) => [...ps, ...fresh]);
 				for (const pu of fresh) {
@@ -469,13 +493,13 @@ function BattlePage() {
 					applyPred((s) => applyJump(s, selfId, now));
 					break;
 				case "punch":
-					net.sendAttack("punch");
-					applyPred((s) => applyAttack(s, selfId, "punch", now));
+					net.sendAttack("punch", input.side);
+					applyPred((s) => applyAttack(s, selfId, "punch", now, input.side));
 					sfxRef.current?.whiff();
 					break;
 				case "kick":
-					net.sendAttack("kick");
-					applyPred((s) => applyAttack(s, selfId, "kick", now));
+					net.sendAttack("kick", input.side);
+					applyPred((s) => applyAttack(s, selfId, "kick", now, input.side));
 					sfxRef.current?.whiff();
 					break;
 				case "guard":
@@ -494,6 +518,10 @@ function BattlePage() {
 				case "abare":
 					net.sendAbare();
 					applyPred((s) => applyAbare(s, selfId, now));
+					break;
+				case "turn":
+					net.sendTurn();
+					applyPred((s) => applyTurn(s, selfId, now));
 					break;
 				case "final-vent":
 					net.sendAttack("final");
@@ -540,6 +568,7 @@ function BattlePage() {
 			window.clearTimeout(finalTimerRef.current);
 			window.clearTimeout(comboTimerRef.current);
 			window.clearTimeout(intrusionTimerRef.current);
+			window.clearTimeout(cutinTimerRef.current);
 		};
 	}, [routine]);
 
@@ -624,6 +653,11 @@ function BattlePage() {
 										vy: ps.vy,
 										facing: ps.facing,
 										action: predAction(p, ps),
+										// 技の左右と開始時刻も予測側を使う（サーバー往復を待つと
+										// パンチの左右打ち分け・連打の再トリガが 1 テンポ遅れる）
+										move: ps.move,
+										moveSide: ps.moveSide,
+										moveActiveFrom: ps.moveActiveFrom,
 									}
 								: p,
 						),
@@ -702,12 +736,21 @@ function BattlePage() {
 	}, [battle.winnerId, navigate, routine.riderId, routine.riderName]);
 
 	// カードクリックをダミー入力として扱う（マウスでも技を出せる）。
+	// カード id = 対応モーション: skill（ストライクベント）/ error-mode（エラーベント）/
+	// final-vent（ファイナルベント）。
 	function handleCard(card: BattleCard) {
 		sfxRef.current?.resume();
-		if (card.kind === "final") netRef.current?.sendAttack("final");
-		else if (card.kind === "attack") {
-			netRef.current?.sendAttack("punch");
-			sfxRef.current?.whiff();
+		switch (card.id) {
+			case "skill":
+				netRef.current?.sendAttack("shot");
+				sfxRef.current?.whiff();
+				break;
+			case "error-mode":
+				netRef.current?.sendAbare();
+				break;
+			case "final-vent":
+				netRef.current?.sendAttack("final");
+				break;
 		}
 	}
 
@@ -904,8 +947,11 @@ function BattlePage() {
 			{/* 乱入 WARNING（サーバーが全員を停止させている間、中央に表示） */}
 			{intruder != null && <IntrusionWarning name={intruder} />}
 
-			{/* ファイナルベント演出 */}
-			{finalActive && <FinalVentBanner />}
+			{/* カード技発動のカットイン（カメラ寄せ＋全員停止中の「発動!!」バナー） */}
+			{cutinShow && <CutinBanner kind={cutinShow.kind} name={cutinShow.name} />}
+
+			{/* ファイナルベント演出（発動カットイン中は重複するので出さない） */}
+			{finalActive && !cutinShow && <FinalVentBanner />}
 
 			{/* 決着スプラッシュ（この直後に /result へ遷移する） */}
 			{winner && <GameSetBanner mine={!!winner.isSelf} />}
@@ -1408,14 +1454,16 @@ function ControlsHelp() {
 	const rows: [string, string][] = [
 		["← → / A D", "移動"],
 		["W / ↑ / Space", "ジャンプ"],
-		["J", "パンチ(軽・発生早)"],
-		["K", "キック(重・主力)"],
+		["J / K", "左パンチ / 右パンチ(軽・発生早)"],
+		["N / M", "左キック / 右キック(重・主力)"],
 		["Shift / S / ↓", "ガード(押しっぱ・前後OK)"],
 		["📷 構え", "カメラにボクシングの構え(両拳を顔の前)でガード"],
-		["U", "投げ(ガード崩し)"],
-		["I", "波動弾(2ゲージ・飛び道具・1発ずつ)"],
-		["E", "エラーモード(3ゲージ・割り込み脱出)"],
-		["L / F", "ファイナル(5ゲージ)"],
+		["U", "掴み(グラスプ・当たれば掴み攻撃・ガード崩し)"],
+		["T", "振り向き"],
+		["📷 横向き", "カメラに体を横に向けても振り向き"],
+		["I", "ストライクベント(2ゲージ・飛び道具・1発ずつ)"],
+		["E", "エラーベント(3ゲージ・割り込み脱出)"],
+		["L / F", "ファイナルベント(5ゲージ)"],
 	];
 	return (
 		<div
@@ -1955,6 +2003,56 @@ function FinalVentCam({
 }
 
 // ---- 演出オーバーレイ ----------------------------------------------------
+
+// カード技発動のカットインバナー。サーバーが cutin で全員を停止し、カメラが発動者へ
+// 寄っている間（~0.9s）、中央に「◯◯ 発動!!」を出す。色はカードと対応。
+const CUTIN_LABELS: Record<string, { label: string; color: string }> = {
+	shot: { label: "ストライクベント", color: "#f87171" },
+	abare: { label: "エラーベント", color: "#fbbf24" },
+	final: { label: "ファイナルベント", color: "#a78bfa" },
+};
+
+function CutinBanner({ kind, name }: { kind: string; name: string }) {
+	const c = CUTIN_LABELS[kind] ?? CUTIN_LABELS.final;
+	return (
+		<div
+			style={{
+				position: "fixed",
+				inset: 0,
+				display: "flex",
+				flexDirection: "column",
+				alignItems: "center",
+				justifyContent: "center",
+				gap: "0.3rem",
+				pointerEvents: "none",
+				zIndex: 40,
+			}}
+		>
+			<span
+				style={{
+					fontSize: "1rem",
+					fontWeight: 700,
+					color: "#e5e7eb",
+					textShadow: "0 0 12px rgba(0,0,0,0.9)",
+					letterSpacing: "0.15em",
+				}}
+			>
+				{name}
+			</span>
+			<span
+				style={{
+					fontSize: "2.6rem",
+					fontWeight: 900,
+					color: "#fff",
+					textShadow: `0 0 20px ${c.color}, 0 0 44px ${c.color}`,
+					letterSpacing: "0.1em",
+				}}
+			>
+				{c.label} 発動!!
+			</span>
+		</div>
+	);
+}
 
 function FinalVentBanner() {
 	return (

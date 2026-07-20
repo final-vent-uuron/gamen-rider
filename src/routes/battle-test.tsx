@@ -6,6 +6,7 @@ import {
   applyAttack,
   applyJump,
   applyThrow,
+  applyTurn,
   createBattle,
   createBleSensorSource,
   createKeyboardSource,
@@ -85,10 +86,10 @@ function BattleTestPage() {
           stateRef.current = applyJump(s, YOU, now)
           break
         case 'punch':
-          stateRef.current = applyAttack(s, YOU, 'punch', now)
+          stateRef.current = applyAttack(s, YOU, 'punch', now, input.side)
           break
         case 'kick':
-          stateRef.current = applyAttack(s, YOU, 'kick', now)
+          stateRef.current = applyAttack(s, YOU, 'kick', now, input.side)
           break
         case 'shot':
           stateRef.current = applyAttack(s, YOU, 'shot', now)
@@ -101,6 +102,9 @@ function BattleTestPage() {
           break
         case 'abare':
           stateRef.current = applyAbare(s, YOU, now)
+          break
+        case 'turn':
+          stateRef.current = applyTurn(s, YOU, now)
           break
         case 'guard':
           guardRef.current = input.on
@@ -270,8 +274,9 @@ function BattleTestPage() {
       </div>
 
       <div style={{ fontSize: '0.85rem', color: '#cbd5e1', lineHeight: 1.8 }}>
-        <strong>操作:</strong> ← → 移動 / W ジャンプ / J パンチ / K キック / I 波動弾 / U 投げ /
-        E 暴れ / L ファイナル / Shift ガード（パンチは BLE センサーからも発動）
+        <strong>操作:</strong> ← → 移動 / W ジャンプ / J K 左右パンチ / N M 左右キック /
+        I ストライクベント / U 掴み / E エラーベント / T 振り向き / L ファイナルベント /
+        Shift ガード（パンチは BLE センサーからも発動）
         <br />
         <span style={{ color: '#9ca3af' }}>
           チェック項目: サイズ感・向き・接地 / idle↔技の切り替わり / 技の尺（振り切って戻るか）/

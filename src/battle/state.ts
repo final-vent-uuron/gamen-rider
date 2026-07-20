@@ -22,7 +22,8 @@ export type PlayerAction =
   | 'hit'
   | 'down' // KO（HP0）で伏せる
   | 'guard' // ガード構え中
-  | 'throw' // 投げ動作中
+  | 'throw' // 掴みかかり中（grasp モーション。まだ当たっていない）
+  | 'throw-hit' // 掴み成立（grasp-attack モーション。持続が当たった後の攻撃演出＋硬直）
   | 'thrown' // 投げられてダウン（生存）
   | 'abare' // あばれ（ゲージ1本の割り込み。無敵で両隣を突き放す）
 export type AttackKind = 'punch' | 'kick' | 'final' | 'shot'
@@ -56,13 +57,19 @@ export interface PlayerState {
   guarding: boolean
   stunUntil: number // 被弾/ブロック硬直の終了時刻。この間は行動不可
   freezeUntil: number // ヒットストップ終了時刻。この間は位置・時間が完全停止
-  invulnUntil: number // 無敵の終了時刻（あばれ中はこの間ダメージを受けない）
+  invulnUntil: number // 無敵の終了時刻（あばれ・ストライクベント・ファイナルベントのモーション中）
   comboCount: number // いま受けている連続ヒット数（0 = 非コンボ）
   comboBy: string | null // 誰にコンボされているか（攻撃者 id）
   comboUntil: number // この時刻を過ぎたら comboCount をリセット
   meter: number // 逆転ゲージ 0..ARENA.meterMax（満タンで Final 解禁）
   // --- 技のフレーム状態 ---
   move: MoveKind | null // 実行中の技（null = 素の状態）
+  moveSide?: 'left' | 'right' | null // パンチ/キックの左右（GLB クリップの打ち分け。null = ランダム）
+  // --- 掴み（遅延ダメージ）---
+  throwVictimId?: string | null // 掴んでいる相手（throw-hit 中のみ。ダメージ適用で解除）
+  throwDamageAt?: number // 掴みダメージの適用時刻（grasp-attack の中間）
+  // --- あばれ（遅延ヒット）---
+  abareHitAt?: number // 突き放し（ダメージ）の適用時刻（error-mode モーションの終わりぎわ。0 = 無し）
   moveActiveFrom: number // 持続フレーム開始時刻（= 発生の終わり）
   moveActiveTo: number // 持続フレーム終了時刻
   moveHasHit: boolean // この技が既に当たった（多段防止）
@@ -76,6 +83,10 @@ export interface BattleState {
   // 乱入演出の終了時刻(ms)。3人目以降が参戦した瞬間にサーバーが設定し、
   // この時刻まで全員の時間が完全停止する（クライアントは WARNING を表示する）。
   intrusionUntil?: number
+  // カード技（ストライクベント/エラーベント/ファイナルベント）発動のカットイン演出。
+  // until まで全員完全停止し、クライアントは発動者へカメラを寄せてバナーを出す。
+  // 技のタイムラインは停止ぶん後ろへずらしてあるので、停止明けからモーションが動き出す。
+  cutin?: { playerId: string; kind: 'shot' | 'abare' | 'final'; until: number } | null
 }
 
 // バランス・当たり判定パラメータ。ここだけ触れば挙動が変わる。
@@ -136,13 +147,17 @@ export const ARENA = {
   abareKnockback: 0.12, // 突き放す強さ（間合いを作る）
   abareDamage: 6, // 軽いダメージ（主目的は脱出）
   abareStun: 300, // 突き放した相手の硬直（すぐ殴り返せない）
-  abareInvuln: 520, // 発動者の無敵時間
-  abareRecovery: 380, // 発動者の後隙
+  abareInvuln: 1800, // 発動者の無敵時間（= モーション全体。error-mode をゆっくり再生する尺）
+  abareRecovery: 1800, // 発動〜復帰の実時間（= error-mode モーションの尺。arena3d と対）
+  abareHitDelay: 1400, // 発動 → 突き放し（ダメージ）適用までの遅延。モーションの終わりぎわ
   abareHitstop: 80,
 
   // 乱入（3人目以降の途中参戦）: 全員の時間を止めて WARNING を出す演出時間。
   // クライアントの Intrusion-bgm / WARNING 表示もこの長さに合わせる。
   intrusionFreezeMs: 4000,
+
+  // カード技発動のカットイン演出（全員停止＋カメラ寄せ＋バナー）の時間。
+  cutinMs: 1800,
 } as const
 
 // 技のフレームデータ（ミリ秒）。startup=発生, active=持続, recovery=硬直。
@@ -152,6 +167,7 @@ type MoveDef = {
   active: number
   recovery: number
   recoveryOnHit?: number // ヒット時に硬直を短縮（有利）— 投げ用
+  hitDelay?: number // 掴み成立からダメージ適用までの遅延（投げ用。grasp-attack の中間で入れる）
   damage: number
   reach: number
   knockback: number
@@ -204,16 +220,19 @@ export const MOVES: Record<MoveKind, MoveDef> = {
     isThrow: false,
   },
   // 投げ。発生後の持続で掴む。ガード貫通・空振ると長い硬直（打撃で狩られる）。
+  // 2 段階: 掴みかかり（grasp。ダメージ無し）→ 当たったら grasp-attack（action: throw-hit）へ
+  // 切り替え、その中間（hitDelay 後）でダメージが入る。それまで相手は掴まれて動けない。
   throw: {
-    startup: 600, // = 合計の 50%（掴みかかるあたりにダメージを同期）
+    startup: 600, // = 合計の 50%（掴みかかるあたりに判定を同期）
     active: 35,
-    recovery: 565, // 合計 1200ms = throw(grasp-attack) アニメ 1.2s（早回し感を抑えた尺）
-    recoveryOnHit: 600, // ヒット時もアニメ終端までロック（掴んだ瞬間 ~600ms からの残り尺）
+    recovery: 565, // 合計 1200ms = 空振り時 throw(grasp) アニメ 1.2s
+    recoveryOnHit: 1800, // 掴んだ瞬間から grasp-attack アニメ 1.8s ぶんロック
+    hitDelay: 900, // 掴み成立 → grasp-attack の中間でダメージ適用
     damage: ARENA.throwDamage,
     reach: ARENA.reachThrow,
     knockback: ARENA.throwKnockback,
     launch: 0,
-    hitstun: 900, // thrown アニメ 0.9s。投げた側より約 0.3s 遅れて起きる（投げ側有利）
+    hitstun: 1200, // ダメージ適用時点から。投げ側（残り 900ms）より約 0.3s 遅れて起きる（投げ側有利）
     blockstun: 0,
     hitstop: 110,
     cancelWindow: 0,
@@ -313,6 +332,10 @@ function freshPlayer(init: PlayerInit, x: number, facing: 1 | -1): PlayerState {
     comboUntil: 0,
     meter: 0,
     move: null,
+    moveSide: null,
+    throwVictimId: null,
+    throwDamageAt: 0,
+    abareHitAt: 0,
     moveActiveFrom: 0,
     moveActiveTo: 0,
     moveHasHit: false,
@@ -388,6 +411,8 @@ export function stepBattle(
   if (state.winnerId) return state
   // 乱入演出中は全員（弾・物理も含めて）完全停止。時刻ベースなので明け際の tick で自然に再開する。
   if (now < (state.intrusionUntil ?? 0)) return state
+  // カード技のカットイン演出中も同様に完全停止（カメラ寄せ＋バナーの間）。
+  if (now < (state.cutin?.until ?? 0)) return state
   const dt = Math.min(dtMs, 50) / 1000
   const moved = state.players.map((p) => {
     if (p.hp <= 0)
@@ -457,8 +482,42 @@ export function stepBattle(
 
   const resolved = resolveBodies(moved)
   const afterHits = resolveActiveHits(resolved, now) // 近接技の持続フレーム当たり判定
-  const proj = stepProjectiles(afterHits, state.projectiles ?? [], now, dt) // 波動弾の生成・飛翔・衝突
+  const afterThrows = resolvePendingThrows(afterHits, now) // 掴みの遅延ダメージ（grasp-attack 中間）
+  const afterAbare = resolvePendingAbare(afterThrows, now) // あばれの遅延ヒット（モーション終わりぎわ）
+  const proj = stepProjectiles(afterAbare, state.projectiles ?? [], now, dt) // 波動弾の生成・飛翔・衝突
   return checkWinner({ ...state, players: proj.players, projectiles: proj.projectiles })
+}
+
+// 掴みの遅延ダメージ。掴み成立（throw-hit）から hitDelay 経過した時点で、
+// grasp-attack の中間に同期してダメージ・投げ飛ばしを入れる。
+// 掴んだ側が途中で潰されて throw-hit でなくなっていたら不発＝掴み解放（ダメージ無し）。
+function resolvePendingThrows(players: PlayerState[], now: number): PlayerState[] {
+  let out = players
+  for (const a of players) {
+    if (!a.throwVictimId || now < (a.throwDamageAt ?? 0)) continue
+    const f = MOVES.throw
+    const live = a.action === 'throw-hit'
+    out = out.map((p) => {
+      if (p.id === a.id) return { ...p, throwVictimId: null }
+      if (!live || p.id !== a.throwVictimId || p.hp <= 0) return p
+      const hp = Math.max(0, p.hp - f.damage)
+      return {
+        ...p,
+        hp,
+        x: clamp(p.x + a.facing * f.knockback, ARENA.minX, ARENA.maxX),
+        guarding: false,
+        action: hp <= 0 ? ('down' as const) : ('thrown' as const),
+        move: null,
+        actionUntil: now + f.hitstun,
+        stunUntil: now + f.hitstun,
+        freezeUntil: now + f.hitstop,
+        comboCount: 0,
+        comboBy: null,
+        meter: clamp(p.meter + ARENA.meterOnTake, 0, ARENA.meterMax),
+      }
+    })
+  }
+  return out
 }
 
 function resolveBodies(players: PlayerState[]): PlayerState[] {
@@ -503,9 +562,16 @@ function canActNow(p: PlayerState, now: number): boolean {
 
 // 技を“開始”する（当たり判定はしない）。行動可能、またはキャンセル窓内なら発動。
 // applyAttack/applyThrow の共通実装。
-function startMove(state: BattleState, id: string, kind: MoveKind, now: number): BattleState {
+function startMove(
+  state: BattleState,
+  id: string,
+  kind: MoveKind,
+  now: number,
+  side?: 'left' | 'right',
+): BattleState {
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
+  if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
   const attacker = state.players.find((p) => p.id === id)
   if (!attacker || attacker.hp <= 0) return state
 
@@ -521,7 +587,10 @@ function startMove(state: BattleState, id: string, kind: MoveKind, now: number):
   if (!canActNow(attacker, now)) return state
 
   const f = MOVES[kind]
-  const activeFrom = now + f.startup
+  // カード技（shot/final）はカットイン演出（cutinMs の全員停止）を挟むため、
+  // 技のタイムラインを停止ぶん後ろへずらす（停止明けからモーションが動き出す）。
+  const cutinDelay = kind === 'shot' || kind === 'final' ? ARENA.cutinMs : 0
+  const activeFrom = now + cutinDelay + f.startup
   const activeTo = activeFrom + f.active
   const recoveryTo = activeTo + f.recovery
 
@@ -531,6 +600,13 @@ function startMove(state: BattleState, id: string, kind: MoveKind, now: number):
           ...p,
           action: kind === 'throw' ? ('throw' as const) : (kind as PlayerAction),
           move: kind,
+          moveSide: side ?? null,
+          // ストライクベント（shot）/ ファイナルベント（final）はモーション中無敵
+          // （あばれ = エラーモードも発動時に全編無敵。カード技は潰されない）。
+          invulnUntil:
+            kind === 'shot' || kind === 'final'
+              ? Math.max(p.invulnUntil, recoveryTo)
+              : p.invulnUntil,
           moveActiveFrom: activeFrom,
           moveActiveTo: activeTo,
           moveHasHit: false,
@@ -546,7 +622,13 @@ function startMove(state: BattleState, id: string, kind: MoveKind, now: number):
         }
       : p,
   )
-  return { ...state, players }
+  return {
+    ...state,
+    players,
+    cutin: cutinDelay
+      ? { playerId: id, kind: kind as 'shot' | 'final', until: now + cutinDelay }
+      : state.cutin,
+  }
 }
 
 // 打撃/必殺を開始（worker の 'attack' / クライアント予測から）。
@@ -555,8 +637,9 @@ export function applyAttack(
   attackerId: string,
   kind: AttackKind,
   now: number,
+  side?: 'left' | 'right', // パンチ/キックの左右（GLB クリップの打ち分け）
 ): BattleState {
-  return startMove(state, attackerId, kind, now)
+  return startMove(state, attackerId, kind, now, side)
 }
 
 // 投げを開始。
@@ -569,11 +652,14 @@ export function meterStocks(meter: number): number {
   return Math.floor(meter / ARENA.meterPerStock)
 }
 
-// あばれ（エラーモード）: ゲージ3本を消費し、無敵で割り込んで両隣を突き放す緊急脱出。
-// 被弾・コンボ・硬直・ヒットストップの最中でも発動できる（＝ハメ回避）のが唯一の特徴。純粋関数。
+// あばれ（エラーモード）: ゲージ3本を消費し、無敵で割り込む緊急脱出。
+// 被弾・コンボ・硬直・ヒットストップの最中でも発動できる（＝ハメ回避）のが唯一の特徴。
+// 発動時は無敵化のみで、突き放し（ダメージ）は error-mode モーションの終わりぎわ
+// （abareHitDelay 後、resolvePendingAbare）に入る。純粋関数。
 export function applyAbare(state: BattleState, playerId: string, now: number): BattleState {
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
+  if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
   const self = state.players.find((p) => p.id === playerId)
   if (!self || self.hp <= 0) return state
   if (self.meter < ARENA.abareCost) return state
@@ -582,49 +668,68 @@ export function applyAbare(state: BattleState, playerId: string, now: number): B
   // 技をキャンセルする使い方はさせない（技中ロックの例外にしない）。
   if (self.move !== null && now < self.actionUntil) return state
 
-  const invulnUntil = now + ARENA.abareInvuln
-  const players = state.players.map((p) => {
-    // 発動者: ゲージを消費し、被弾/コンボ/硬直を振り切って無敵＋後隙へ移行する。
-    if (p.id === playerId) {
+  // 発動者: ゲージを消費し、被弾/コンボ/硬直を振り切って無敵へ移行する。
+  // カットイン演出（cutinMs の全員停止）を挟むため、タイムラインは停止ぶん後ろへずらす。
+  const cd = ARENA.cutinMs
+  const players = state.players.map((p) =>
+    p.id === playerId
+      ? {
+          ...p,
+          meter: clamp(p.meter - ARENA.abareCost, 0, ARENA.meterMax),
+          action: 'abare' as const,
+          move: null,
+          moveHasHit: false,
+          cancelUntil: 0,
+          guarding: false,
+          stunUntil: 0,
+          freezeUntil: 0,
+          actionUntil: now + cd + ARENA.abareRecovery,
+          invulnUntil: now + cd + ARENA.abareInvuln,
+          abareHitAt: now + cd + ARENA.abareHitDelay,
+          comboCount: 0,
+          comboBy: null,
+        }
+      : p,
+  )
+  return {
+    ...state,
+    players,
+    cutin: { playerId, kind: 'abare' as const, until: now + cd },
+  }
+}
+
+// あばれの遅延ヒット。発動から abareHitDelay 経過した時点（モーションの終わりぎわ）で、
+// 周囲の生存者（無敵でない）を左右へ突き放し、軽ダメージ＋硬直を与えて間合いを作る。
+function resolvePendingAbare(players: PlayerState[], now: number): PlayerState[] {
+  let out = players
+  for (const a of players) {
+    if (!a.abareHitAt || now < a.abareHitAt) continue
+    const live = a.action === 'abare' && a.hp > 0
+    out = out.map((p) => {
+      if (p.id === a.id) return { ...p, abareHitAt: 0 }
+      if (!live || p.hp <= 0 || now < p.invulnUntil || !vertOverlap(a, p)) return p
+      const dx = p.x - a.x
+      if (Math.abs(dx) - 2 * ARENA.bodyHalf > ARENA.abareRange) return p
+      const dir: 1 | -1 = dx >= 0 ? 1 : -1
+      const hp = Math.max(0, p.hp - ARENA.abareDamage)
       return {
         ...p,
-        meter: clamp(p.meter - ARENA.abareCost, 0, ARENA.meterMax),
-        action: 'abare' as const,
+        hp,
+        x: clamp(p.x + dir * ARENA.abareKnockback, ARENA.minX, ARENA.maxX),
+        guarding: false,
+        action: hp <= 0 ? ('down' as const) : ('hit' as const),
         move: null,
         moveHasHit: false,
-        cancelUntil: 0,
-        guarding: false,
-        stunUntil: 0,
-        freezeUntil: 0,
-        actionUntil: now + ARENA.abareRecovery,
-        invulnUntil,
+        stunUntil: now + ARENA.abareStun,
+        actionUntil: now + ARENA.abareStun,
+        freezeUntil: now + ARENA.abareHitstop,
         comboCount: 0,
         comboBy: null,
+        meter: clamp(p.meter + ARENA.meterOnTake, 0, ARENA.meterMax),
       }
-    }
-    // 周囲の生存者（無敵でない）を左右へ突き放し、軽ダメージ＋硬直を与えて間合いを作る。
-    if (p.hp <= 0 || now < p.invulnUntil || !vertOverlap(self, p)) return p
-    const dx = p.x - self.x
-    if (Math.abs(dx) - 2 * ARENA.bodyHalf > ARENA.abareRange) return p
-    const dir: 1 | -1 = dx >= 0 ? 1 : -1
-    const hp = Math.max(0, p.hp - ARENA.abareDamage)
-    return {
-      ...p,
-      hp,
-      x: clamp(p.x + dir * ARENA.abareKnockback, ARENA.minX, ARENA.maxX),
-      guarding: false,
-      action: hp <= 0 ? ('down' as const) : ('hit' as const),
-      move: null,
-      moveHasHit: false,
-      stunUntil: now + ARENA.abareStun,
-      actionUntil: now + ARENA.abareStun,
-      freezeUntil: now + ARENA.abareHitstop,
-      comboCount: 0,
-      comboBy: null,
-      meter: clamp(p.meter + ARENA.meterOnTake, 0, ARENA.meterMax),
-    }
-  })
-  return checkWinner({ ...state, players })
+    })
+  }
+  return out
 }
 
 // 持続フレームに入った技の命中を適用する。1 技 1 ヒット（final は範囲全員）。
@@ -668,23 +773,18 @@ function applyMoveHit(
   const next = players.map((p) => {
     if (!targets.has(p.id)) return p
 
-    // 投げ: ガード貫通・確定ダウン。
+    // 投げ: ガード貫通。掴み成立の時点ではダメージ無し＝拘束のみ。
+    // ダメージ・投げ飛ばしは grasp-attack の中間（hitDelay 後、resolvePendingThrows）で入る。
     if (f.isThrow) {
-      const hp = Math.max(0, p.hp - f.damage)
-      const x = clamp(p.x + attacker.facing * f.knockback, ARENA.minX, ARENA.maxX)
+      const holdUntil = now + (f.hitDelay ?? 0) + 150 // ダメージ適用まで＋余裕（適用時に上書き）
       return {
         ...p,
-        hp,
-        x,
         guarding: false,
-        action: hp <= 0 ? ('down' as const) : ('thrown' as const),
+        action: 'hit' as const, // 掴まれリアクション（small-reaction）
         move: null,
-        actionUntil: now + f.hitstun,
-        stunUntil: now + f.hitstun,
+        actionUntil: holdUntil,
+        stunUntil: holdUntil,
         freezeUntil: now + f.hitstop,
-        comboCount: 0,
-        comboBy: null,
-        meter: clamp(p.meter + ARENA.meterOnTake, 0, ARENA.meterMax),
       }
     }
 
@@ -694,12 +794,18 @@ function applyMoveHit(
     return r.p
   })
 
-  // 攻撃者側を確定: ヒット確定 → ヒットストップ・キャンセル窓・ゲージ・（投げは硬直短縮）。
+  // 攻撃者側を確定: ヒット確定 → ヒットストップ・キャンセル窓・ゲージ。
+  // 掴みは 2 段階目へ: grasp（掴みかかり）が当たったので grasp-attack（throw-hit）に切り替え、
+  // recoveryOnHit ぶん（= grasp-attack アニメの尺）ロックする。
   const withAttacker = next.map((p) => {
     if (p.id !== attackerId) return p
     const recoveryOnHit = f.recoveryOnHit ? now + f.recoveryOnHit : p.actionUntil
     return {
       ...p,
+      action: f.isThrow ? ('throw-hit' as const) : p.action,
+      // 掴み成立: 相手と適用時刻を覚え、resolvePendingThrows が遅延ダメージを入れる
+      throwVictimId: f.isThrow ? nearestId : (p.throwVictimId ?? null),
+      throwDamageAt: f.isThrow ? now + (f.hitDelay ?? 0) : (p.throwDamageAt ?? 0),
       moveHasHit: true,
       cancelUntil: f.cancelWindow > 0 ? now + f.cancelWindow : 0,
       freezeUntil: now + f.hitstop,
@@ -864,6 +970,7 @@ function stepProjectiles(
 export function applyJump(state: BattleState, playerId: string, now: number): BattleState {
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
+  if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
   let changed = false
   const players = state.players.map((p) => {
     if (p.id !== playerId) return p
@@ -885,6 +992,7 @@ export function applyJump(state: BattleState, playerId: string, now: number): Ba
 export function applyTurn(state: BattleState, playerId: string, now: number): BattleState {
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
+  if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
   let changed = false
   const players = state.players.map((p) => {
     if (p.id !== playerId) return p

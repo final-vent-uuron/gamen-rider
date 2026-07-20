@@ -30,7 +30,8 @@ export interface ConnectBattleOptions {
 export interface BattleNet {
   sendMove(dir: -1 | 0 | 1): void
   sendJump(): void
-  sendAttack(kind: AttackKind): void
+  // side はパンチ/キックの左右（GLB クリップの打ち分け。省略可）
+  sendAttack(kind: AttackKind, side?: 'left' | 'right'): void
   sendGuard(on: boolean): void
   sendTurn(): void
   sendThrow(): void
@@ -124,7 +125,7 @@ export function connectBattle(opts: ConnectBattleOptions): BattleNet {
   return {
     sendMove: (dir) => send({ t: 'move', dir }),
     sendJump: () => send({ t: 'jump' }),
-    sendAttack: (kind) => send({ t: 'attack', kind }),
+    sendAttack: (kind, side) => send({ t: 'attack', kind, side }),
     sendGuard: (on) => send({ t: 'guard', on }),
     sendTurn: () => send({ t: 'turn' }),
     sendThrow: () => send({ t: 'throw' }),

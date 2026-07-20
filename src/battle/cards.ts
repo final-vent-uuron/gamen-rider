@@ -1,21 +1,21 @@
-// バトル中に表示するカード（プレースホルダ）。
-// 龍騎世界のカード名を仮置き。実カード・効果・アイコンが決まったらここを差し替える。
-// kind は演出やアクション対応付けのヒント（attack→パンチ相当 / final→ファイナルベント）。
+// バトル中に表示するカード。
+// id は対応する技（＝GLB モーション名ベース）: ストライクベント=skill /
+// エラーベント=error-mode / ファイナルベント=final-vent（クリップは special）。
+// kind は表示チップと解禁条件（final はゲージ満タンのみ）のヒント。
 
-export type BattleCardKind = 'attack' | 'guard' | 'special' | 'final'
+export type BattleCardKind = 'attack' | 'special' | 'final'
 
 export interface BattleCard {
-  id: string
+  id: 'skill' | 'error-mode' | 'final-vent'
   label: string
   kind: BattleCardKind
   color: string
 }
 
 export const DEFAULT_BATTLE_CARDS: BattleCard[] = [
-  { id: 'strike', label: 'ストライクベント', kind: 'attack', color: '#f87171' },
-  { id: 'sword', label: 'ソードベント', kind: 'attack', color: '#fbbf24' },
-  { id: 'guard', label: 'ガードベント', kind: 'guard', color: '#60a5fa' },
-  { id: 'final', label: 'ファイナルベント', kind: 'final', color: '#a78bfa' },
+  { id: 'skill', label: 'ストライクベント', kind: 'attack', color: '#f87171' },
+  { id: 'error-mode', label: 'エラーベント', kind: 'special', color: '#fbbf24' },
+  { id: 'final-vent', label: 'ファイナルベント', kind: 'final', color: '#a78bfa' },
 ]
 
 // ライダーごとのカード。今は共通のプレースホルダを返す。
