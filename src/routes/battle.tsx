@@ -94,7 +94,8 @@ function predAction(
 	if (
 		serverP.action === "hit" ||
 		serverP.action === "thrown" ||
-		serverP.action === "down"
+		serverP.action === "down" ||
+		serverP.action === "shield-break"
 	) {
 		return serverP.action;
 	}
@@ -270,6 +271,13 @@ function BattlePage() {
 				}
 				const pp = prev.players.find((p) => p.id === np.id);
 				if (!pp) continue;
+				// ガード割れ: シールド消滅＋長硬直の入り。
+				if (np.action === "shield-break" && pp.action !== "shield-break") {
+					sfx?.burst();
+					r?.hitSpark(np.x, np.y, 0xfbbf24, true);
+					r?.shake(0.55);
+					r?.punch(1.1);
+				}
 				const dmg = pp.hp - np.hp;
 				const thrown = np.action === "thrown" && pp.action !== "thrown";
 				const ko = pp.hp > 0 && np.hp <= 0;
@@ -732,6 +740,7 @@ function BattlePage() {
 										vy: ps.vy,
 										facing: ps.facing,
 										action: predAction(p, ps),
+										shield: ps.shield,
 										// 技の左右と開始時刻も予測側を使う（サーバー往復を待つと
 										// パンチの左右打ち分け・連打の再トリガが 1 テンポ遅れる）
 										move: ps.move,
@@ -1571,7 +1580,7 @@ function ControlsHelp() {
 		["W / ↑ / Space", "ジャンプ"],
 		["J / K", "左パンチ / 右パンチ(軽・発生早)"],
 		["N / M", "左キック / 右キック(重・主力)"],
-		["Shift / S / ↓", "ガード(押しっぱ・前後OK)"],
+		["Shift / S / ↓", "ガード(押しっぱ・耐久あり。持ちすぎ/被弾で割れる)"],
 		["📷 構え", "カメラにボクシングの構え(両拳を顔の前)でガード"],
 		["U", "掴み(グラスプ・当たれば掴み攻撃・ガード崩し)"],
 		["T", "振り向き"],
