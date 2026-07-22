@@ -1,10 +1,6 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 
-import appleUrl from '#/assets/refs/apple.png'
-import bananaUrl from '#/assets/refs/banana.png'
-import grapeUrl from '#/assets/refs/grape.png'
-import agonekoUrl from '#/assets/refs/agoneko.png'
 import { CAMERA_HEIGHT, CAMERA_WIDTH, THRESHOLDS, createCardMatcher } from '../card'
 import type { CardMatch, CardMatcher, CardRef, MatchStats, RefStat } from '../card'
 import { listRiders } from '../rider-registry'
@@ -13,14 +9,6 @@ import type { RegisteredRiderWithImage } from '../rider-registry'
 export const Route = createFileRoute('/detect')({ component: DetectPage })
 
 type Status = 'loading' | 'ready' | 'running' | 'error'
-
-// プレースホルダの参照画像。登録済みライダー（/auth/register）はこの後ろに合流する。
-const PLACEHOLDERS: CardRef[] = [
-  { id: 'apple', label: 'リンゴ', url: appleUrl },
-  { id: 'banana', label: 'バナナ', url: bananaUrl },
-  { id: 'grape', label: 'ブドウ', url: grapeUrl },
-  { id: 'agoneko', label: 'あごねこ', url: agonekoUrl },
-]
 
 // 落ちた理由の表示名。engine の RejectReason に対応する。
 const REASON_LABEL: Record<RefStat['reason'], string> = {
@@ -55,11 +43,11 @@ function DetectPage() {
   const [status, setStatus] = useState<Status>('loading')
   const [match, setMatch] = useState<CardMatch | null>(null)
   const [stats, setStats] = useState<MatchStats | null>(null)
-  const [refs, setRefs] = useState<CardRef[]>(PLACEHOLDERS)
+  const [refs, setRefs] = useState<CardRef[]>([])
   const [showPoints, setShowPoints] = useState(true)
   const lastStatsUiRef = useRef(0)
 
-  // 登録済みライダーを参照画像に合流させたうえでマッチャを用意する（debug 有効）。
+  // 登録済みライダーの参照画像でマッチャを用意する（debug 有効）。
   useEffect(() => {
     let cancelled = false
     let matcher: CardMatcher | null = null
@@ -73,10 +61,11 @@ function DetectPage() {
       }
       if (cancelled) return
 
-      const all: CardRef[] = [
-        ...PLACEHOLDERS,
-        ...registered.map((r) => ({ id: r.id, label: r.name, url: r.imageDataUrl })),
-      ]
+      const all: CardRef[] = registered.map((r) => ({
+        id: r.id,
+        label: r.name,
+        url: r.imageDataUrl,
+      }))
       setRefs(all)
       matcher = createCardMatcher(all, { debug: true })
       matcherRef.current = matcher

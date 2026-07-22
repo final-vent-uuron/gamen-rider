@@ -2,15 +2,13 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
-import appleUrl from '#/assets/refs/apple.png'
-import bananaUrl from '#/assets/refs/banana.png'
-import grapeUrl from '#/assets/refs/grape.png'
-import agonekoUrl from '#/assets/refs/agoneko.png'
 import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../card'
 import type { CardMatch, CardMatcher, CardRef } from '../card'
-import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner } from '../pose'
-import type { MediaPipeModules, RoutineRunner, RunnerState } from '../pose'
+import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner, customToRoutine } from '../pose'
+import type { HenshinRoutine, MediaPipeModules, RoutineRunner, RunnerState } from '../pose'
 import { cardToRiderId, emitHenshin } from '../henshin'
+import { listRiders } from '../rider-registry'
+import type { RegisteredRiderWithImage } from '../rider-registry'
 
 export const Route = createFileRoute('/henshin')({ component: HenshinPage })
 
@@ -18,15 +16,6 @@ type Status = 'loading' | 'ready' | 'running' | 'error'
 // card: カードをかざす / pose: 認証したライダーの変身ポーズ / done: 変身成立
 type Phase = 'card' | 'pose' | 'done'
 type Rider = { id: string; name: string }
-
-// カード認証に使う参照画像（detect.tsx と同じ果物プレースホルダを当面流用）。
-// 実カード確定時は src/assets/refs/ の差し替え＋ src/henshin/cards.ts の対応更新で対応する。
-const REFERENCES: CardRef[] = [
-  { id: 'apple', label: 'リンゴ', url: appleUrl },
-  { id: 'banana', label: 'バナナ', url: bananaUrl },
-  { id: 'grape', label: 'ブドウ', url: grapeUrl },
-  { id: 'agoneko', label: 'あごねこ', url: agonekoUrl },
-]
 
 function HenshinPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -43,8 +32,12 @@ function HenshinPage() {
   const doneHandledRef = useRef(false)
   const lastUiRef = useRef(0)
   const lastCardIdRef = useRef<string | null>(null)
+  // 登録ライダー（/auth/register）から作った変身手順。参照画像と対で読み込む。
+  const routinesRef = useRef<HenshinRoutine[]>(RIDER_ROUTINES)
 
   const [status, setStatus] = useState<Status>('loading')
+  // かざせるカードのヒント表示用。読み込み後に確定するので state で持つ。
+  const [refs, setRefs] = useState<CardRef[]>([])
   const [phase, setPhase] = useState<Phase>('card')
   const [card, setCard] = useState<CardMatch | null>(null)
   const [rider, setRider] = useState<Rider | null>(null)
@@ -63,14 +56,37 @@ function HenshinPage() {
     return () => clearTimeout(t)
   }, [phase, rider, status, navigate])
 
-  // カードマッチャと PoseLandmarker を並行ロード。両方そろったら ready。
+  // 登録ライダーの参照画像＋変身手順を読み、カードマッチャと PoseLandmarker を並行ロードする。
   useEffect(() => {
-    const matcher = createCardMatcher(REFERENCES)
-    matcherRef.current = matcher
     let cancelled = false
+    let matcher: CardMatcher | null = null
 
     async function init() {
       try {
+        // 登録済みライダー（/auth/register で作成）が参照画像と変身手順の供給源。
+        let registered: RegisteredRiderWithImage[] = []
+        try {
+          registered = await listRiders()
+        } catch {
+          registered = [] // 読み込み失敗時（デプロイ先など）はカード認証なしで続行する
+        }
+        if (cancelled) return
+
+        const cardRefs: CardRef[] = registered.map((r) => ({
+          id: r.id,
+          label: r.name,
+          url: r.imageDataUrl,
+        }))
+        routinesRef.current = [
+          ...RIDER_ROUTINES,
+          ...registered.map((r) =>
+            customToRoutine({ riderId: r.id, riderName: r.name, steps: r.steps }),
+          ),
+        ]
+        setRefs(cardRefs)
+        matcher = createCardMatcher(cardRefs)
+        matcherRef.current = matcher
+
         const [, { mp, landmarker }] = await Promise.all([matcher.ready, createPoseLandmarker()])
         if (cancelled) {
           landmarker.close()
@@ -89,7 +105,7 @@ function HenshinPage() {
       cancelled = true
       isRunningRef.current = false
       cancelAnimationFrame(rafRef.current)
-      matcher.dispose()
+      matcher?.dispose()
       matcherRef.current = null
       landmarkerRef.current?.close()
     }
@@ -97,12 +113,14 @@ function HenshinPage() {
 
   // カード確定 → そのライダーのポーズ認証へ遷移
   function enterPose(cardId: string) {
-    const riderId = cardToRiderId(cardId)
-    if (!riderId) return // 対応するライダーが無いカード（果物の他種など）は無視
-    const routine = RIDER_ROUTINES.find((r) => r.riderId === riderId)
+    const routines = routinesRef.current
+    // 登録ライダーはカードid＝riderId。それ以外は対応表で変換する。
+    const riderId = routines.some((r) => r.riderId === cardId) ? cardId : cardToRiderId(cardId)
+    if (!riderId) return // 対応するライダーが無いカードは無視
+    const routine = routines.find((r) => r.riderId === riderId)
     const r: Rider = { id: riderId, name: routine?.riderName ?? riderId }
     riderRef.current = r
-    runnerRef.current = createRoutineRunner(RIDER_ROUTINES, riderId)
+    runnerRef.current = createRoutineRunner(routines, riderId)
     phaseRef.current = 'pose'
     setRider(r)
     setUiState(runnerRef.current.getState())
@@ -250,20 +268,20 @@ function HenshinPage() {
 
   // カード id → そのライダー名（対応が無ければ null）。表示と分岐判定に使う。
   function riderNameForCard(cardId: string): string | null {
-    const rid = cardToRiderId(cardId)
+    const routines = routinesRef.current
+    const rid = routines.some((r) => r.riderId === cardId) ? cardId : cardToRiderId(cardId)
     if (!rid) return null
-    return RIDER_ROUTINES.find((r) => r.riderId === rid)?.riderName ?? rid
+    return routines.find((r) => r.riderId === rid)?.riderName ?? rid
   }
 
   // 対応ライダーが設定済みの「使えるカード」一覧（かざすべきカードのヒント表示用）。
-  const supportedCards = REFERENCES.map((r) => ({
-    label: r.label,
-    rider: riderNameForCard(r.id),
-  })).filter((c) => c.rider)
+  const supportedCards = refs
+    .map((r) => ({ label: r.label, rider: riderNameForCard(r.id) }))
+    .filter((c) => c.rider)
 
   const cardRider = card ? riderNameForCard(card.id) : null
   const step = uiState?.steps[0] ?? null
-  const routine = rider ? RIDER_ROUTINES.find((r) => r.riderId === rider.id) : null
+  const routine = rider ? routinesRef.current.find((r) => r.riderId === rider.id) : null
 
   return (
     <div

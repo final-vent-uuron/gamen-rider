@@ -40,7 +40,7 @@ const MIN_SHARPNESS = 25
 // 射影した参照画像の四隅がこの面積（処理px²）未満なら退化した変形として捨てる。
 const MIN_QUAD_AREA = 256
 // 同じ結果がこの回数連続したら確定（チラつき防止）。
-const STABLE_FRAMES = 4
+const STABLE_FRAMES = 2
 // 検出を回す最小間隔(ms)。表示は毎フレーム描くのでプレビューは滑らかなまま、検出だけ間引く。
 const DETECT_INTERVAL_MS = 110
 

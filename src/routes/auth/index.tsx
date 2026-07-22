@@ -2,10 +2,6 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
-import appleUrl from '#/assets/refs/apple.png'
-import bananaUrl from '#/assets/refs/banana.png'
-import grapeUrl from '#/assets/refs/grape.png'
-import agonekoUrl from '#/assets/refs/agoneko.png'
 import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../../card'
 import type { CardMatcher, CardRef, MatchStats } from '../../card'
 import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner, customToRoutine } from '../../pose'
@@ -20,15 +16,6 @@ type Status = 'loading' | 'running' | 'error'
 // card: カードをかざす / pose: 認証したライダーの変身ポーズ / done: 認証成功
 type Phase = 'card' | 'pose' | 'done'
 type Rider = { id: string; name: string }
-
-// カード認証に使う参照画像（henshin.tsx と同じ果物プレースホルダを当面流用）。
-// 実カード確定時は src/assets/refs/ の差し替え＋ src/henshin/cards.ts の対応更新で対応する。
-const REFERENCES: CardRef[] = [
-  { id: 'apple', label: 'リンゴ', url: appleUrl },
-  { id: 'banana', label: 'バナナ', url: bananaUrl },
-  { id: 'grape', label: 'ブドウ', url: grapeUrl },
-  { id: 'agoneko', label: 'あごねこ', url: agonekoUrl },
-]
 
 function AuthPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -92,10 +79,11 @@ function AuthPage() {
         }
         if (cancelled) return
 
-        const refs: CardRef[] = [
-          ...REFERENCES,
-          ...registered.map((r) => ({ id: r.id, label: r.name, url: r.imageDataUrl })),
-        ]
+        const refs: CardRef[] = registered.map((r) => ({
+          id: r.id,
+          label: r.name,
+          url: r.imageDataUrl,
+        }))
         routinesRef.current = [
           ...RIDER_ROUTINES,
           ...registered.map((r) =>
