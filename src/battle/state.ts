@@ -22,6 +22,7 @@ export type PlayerAction =
   | 'hit'
   | 'down' // KO（HP0）で伏せる
   | 'guard' // ガード構え中
+  | 'shield-break' // ガード割れ硬直（攻撃を受けるか時間経過まで行動不可）
   | 'throw' // 掴みかかり中（grasp モーション。まだ当たっていない）
   | 'throw-hit' // 掴み成立（grasp-attack モーション。持続が当たった後の攻撃演出＋硬直）
   | 'thrown' // 投げられてダウン（生存）
@@ -55,6 +56,8 @@ export interface PlayerState {
   isSelf: boolean // この端末で操作するローカルプレイヤーか
   // --- ガード / 被弾 / コンボ / ゲージ ---
   guarding: boolean
+  shield: number // ガード耐久 0..ARENA.shieldMax（スマブラ式。0 で割れる）
+  shieldRegenAt: number // この時刻以降、非ガード時に耐久が自然回復する
   stunUntil: number // 被弾/ブロック硬直の終了時刻。この間は行動不可
   freezeUntil: number // ヒットストップ終了時刻。この間は位置・時間が完全停止
   invulnUntil: number // 無敵の終了時刻（あばれ・ストライクベント・ファイナルベントのモーション中）
@@ -129,6 +132,16 @@ export const ARENA = {
   throwKnockback: 0.09,
   guardPushback: 0.018,
   finalLaunch: 3.0, // Final だけ打ち上げ（締め）。地上コンボ重視なので他は打ち上げ無し
+
+  // ガード耐久（スマブラ式シールド）
+  shieldMax: 60, // 満タン耐久。フル保持で約 5 秒で割れ
+  shieldDrainPerSec: 12, // 構え続けているあいだの自然減少
+  shieldRegenPerSec: 10, // 構えていないときの自然回復
+  shieldRegenDelayMs: 500, // ガード解除後、回復開始までの待ち
+  shieldHitMul: 1.15, // 被ガード時の耐久減少 = 技ダメージ × この倍率
+  shieldMinToRaise: 8, // これ未満だと構えられない（割れ直後の即ガード防止）
+  shieldBreakStunMs: 3200, // 割れ硬直。攻撃を受けるか、この時間が経つまで行動不可
+  shieldBreakLaunch: 2.2, // 割れ時に軽く浮かせる（スマブラの割れ演出に寄せる）
 
   // コンボ補正
   comboScaling: 0.82,
@@ -320,6 +333,41 @@ function comboScale(n: number): number {
   return Math.max(ARENA.comboMinScale, Math.pow(ARENA.comboScaling, n))
 }
 
+// ガード割れ: 耐久 0 で長硬直。攻撃を受ける（通常ヒットで上書き）か、時間が経つまで行動不可。
+function breakShield(
+  p: PlayerState,
+  now: number,
+): Pick<
+  PlayerState,
+  | 'shield'
+  | 'shieldRegenAt'
+  | 'guarding'
+  | 'action'
+  | 'move'
+  | 'stunUntil'
+  | 'actionUntil'
+  | 'freezeUntil'
+  | 'y'
+  | 'vy'
+  | 'vx'
+> {
+  const stun = now + ARENA.shieldBreakStunMs
+  const grounded = p.y <= 0.001
+  return {
+    shield: 0,
+    shieldRegenAt: stun, // 硬直明けから回復開始
+    guarding: false,
+    action: 'shield-break',
+    move: null,
+    stunUntil: stun,
+    actionUntil: stun,
+    freezeUntil: now + 80,
+    y: p.y,
+    vy: grounded ? ARENA.shieldBreakLaunch : p.vy,
+    vx: 0,
+  }
+}
+
 function freshPlayer(init: PlayerInit, x: number, facing: 1 | -1): PlayerState {
   return {
     id: init.id,
@@ -336,6 +384,8 @@ function freshPlayer(init: PlayerInit, x: number, facing: 1 | -1): PlayerState {
     actionUntil: 0,
     isSelf: init.isSelf ?? false,
     guarding: false,
+    shield: ARENA.shieldMax,
+    shieldRegenAt: 0,
     stunUntil: 0,
     freezeUntil: 0,
     invulnUntil: 0,
@@ -444,10 +494,17 @@ export function stepBattle(
     const inRecovery = now < p.actionUntil
     const grounded = p.y <= 0.001 && p.vy === 0
     const canAct = !inStun && !inRecovery
+    const shieldBroken = p.action === 'shield-break' && inStun
 
-    const guarding = (guardIntent[p.id] ?? false) && grounded && canAct
+    // ガード開始は行動可能かつ耐久が最低値以上のときだけ。
+    // 一度構えたらブロック硬直中も押しっぱで維持し、耐久は 0（割れ）まで減らせる。
+    const holdIntent = (guardIntent[p.id] ?? false) && grounded && !shieldBroken
+    const canKeepGuard = p.action === 'guard' || p.guarding
+    const guarding =
+      holdIntent &&
+      ((canKeepGuard && p.shield > 0) || (canAct && p.shield >= ARENA.shieldMinToRaise))
 
-    let { x, facing, y, vy, vx } = p
+    let { x, facing, y, vy, vx, shield, shieldRegenAt } = p
     // 上昇開始直後（y はまだ 0 だが vy > 0）も空中扱いにする。接地ブランチは入力なしで
     // vx を 0 に戻すため、ここを接地扱いにするとジャンプの前方初速が離陸前に消えてしまう。
     const airborne = p.y > 0.001 || p.vy > 0
@@ -486,15 +543,54 @@ export function stepBattle(
       comboBy = null
     }
 
-    // 技/アクションの畳み: 硬直・被弾が明けたら idle（またはガード）へ、技を解除。
     let action = p.action
     let move = p.move
-    if (canAct) {
+    if (guarding) {
+      shield = Math.max(0, shield - ARENA.shieldDrainPerSec * dt)
+      shieldRegenAt = now + ARENA.shieldRegenDelayMs
+      if (shield <= 0) {
+        const broken = breakShield(p, now)
+        return {
+          ...p,
+          ...broken,
+          x,
+          facing,
+          y: broken.y ?? y,
+          vy: broken.vy ?? vy,
+          vx: 0,
+          comboCount,
+          comboBy,
+        }
+      }
+    } else if (!shieldBroken && now >= shieldRegenAt) {
+      shield = Math.min(ARENA.shieldMax, shield + ARENA.shieldRegenPerSec * dt)
+    }
+
+    // 技/アクションの畳み: 硬直・被弾が明けたら idle（またはガード）へ、技を解除。
+    // 割れ硬直中は action を shield-break のまま維持（攻撃を受けるか時間経過で解除）。
+    if (shieldBroken) {
+      action = 'shield-break'
+      move = null
+    } else if (canAct) {
       action = guarding ? 'guard' : 'idle'
       move = null
     }
 
-    return { ...p, x, facing, y, vy, vx, guarding, action, move, comboCount, comboBy }
+    return {
+      ...p,
+      x,
+      facing,
+      y,
+      vy,
+      vx,
+      guarding,
+      shield,
+      shieldRegenAt,
+      action,
+      move,
+      comboCount,
+      comboBy,
+    }
   })
 
   const resolved = resolveBodies(moved)
@@ -868,13 +964,45 @@ function strikeTarget(
 ): { p: PlayerState; attackerMeter: number } {
   const blocked = def.blockable && p.guarding // 前後どちらを向いていてもガード成立
   if (blocked) {
+    // 被ガードでシールド耐久を削る。0 以下なら割れ硬直（チップダメージは入れる）。
+    const cost = Math.max(1, Math.round(def.damage * ARENA.shieldHitMul))
+    const nextShield = p.shield - cost
     const hp = Math.max(0, p.hp - ARENA.chipDamage)
+    if (nextShield <= 0 || hp <= 0) {
+      if (hp <= 0) {
+        return {
+          p: {
+            ...p,
+            hp: 0,
+            shield: 0,
+            guarding: false,
+            action: 'down',
+            move: null,
+            stunUntil: 0,
+            actionUntil: 0,
+          },
+          attackerMeter: 0,
+        }
+      }
+      const broken = breakShield(p, now)
+      return {
+        p: {
+          ...p,
+          ...broken,
+          hp,
+          x: clamp(p.x + fromDir * ARENA.guardPushback, ARENA.minX, ARENA.maxX),
+        },
+        attackerMeter: 0,
+      }
+    }
     const x = clamp(p.x + fromDir * ARENA.guardPushback, ARENA.minX, ARENA.maxX)
     return {
       p: {
         ...p,
         hp,
         x,
+        shield: nextShield,
+        shieldRegenAt: now + ARENA.shieldRegenDelayMs,
         action: 'guard',
         move: null,
         stunUntil: now + def.blockstun,
@@ -886,6 +1014,7 @@ function strikeTarget(
     }
   }
   // カウンター: 相手の発生/持続中（技を振っている最中）に潰した。
+  // ガード割れ硬直中に殴られた場合もここへ来る → 割れ硬直がヒットで上書きされ行動再開のきっかけになる。
   const counter = p.move !== null && now <= p.moveActiveTo
   const dmg = Math.round(def.damage * comboScale(p.comboCount) * (counter ? ARENA.counterDamageMul : 1))
   const hp = Math.max(0, p.hp - dmg)

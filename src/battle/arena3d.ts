@@ -13,6 +13,7 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { modelUrl } from "../model-assets";
 import type { BattleState, PlayerState } from "./state";
+import { ARENA } from "./state";
 
 // プレイヤー表示色（battle.tsx の PLAYER_COLORS と対応）。
 const PLAYER_COLORS = [0xa78bfa, 0xf87171, 0x34d399, 0xfbbf24, 0x38bdf8];
@@ -519,7 +520,8 @@ function avatarAction(p: PlayerState, moving: boolean): AvatarAction {
 	if (p.hp <= 0) return "down";
 	// 空中で被弾（Final の打ち上げ・空中ヒット）は吹き飛びリアクション。クリップ未登録の
 	// モデルでは hit ではなく idle に落ちるため、クリップ側で hit-air を hit と同じにしておく。
-	if (p.action === "hit") return p.y > 0.001 ? "hit-air" : "hit";
+	if (p.action === "hit" || p.action === "shield-break")
+		return p.y > 0.001 ? "hit-air" : "hit";
 	if (p.action === "thrown") return "thrown";
 	if (p.action === "guard") return "guard";
 	if (p.action === "throw") return "throw";
@@ -880,8 +882,12 @@ export function createArenaRenderer(
 			tag.mat.opacity = p.hp <= 0 ? 0.3 : 0.95; // KO したら薄く
 
 			// ガードシールド: ガード中はフェードインして正面に維持、解除でフェードアウト。
-			// guard クリップ（構え）に加えて出す。ブロック成立が一目で分かる演出として残す。
+			// 耐久に応じて大きさ・色が変わる（満タン＝大きく青、削れると小さく赤く＝割れ間近）。
 			const guarding = p.action === "guard" && p.hp > 0;
+			const shieldRatio = Math.max(
+				0,
+				Math.min(1, p.shield / ARENA.shieldMax),
+			);
 			let g = guardFx.get(p.id);
 			if (guarding && !g) {
 				const mat = new THREE.SpriteMaterial({
@@ -898,7 +904,7 @@ export function createArenaRenderer(
 				guardFx.set(p.id, g);
 			}
 			if (g) {
-				g.mat.opacity = lerp(g.mat.opacity, guarding ? 0.85 : 0, 0.25);
+				g.mat.opacity = lerp(g.mat.opacity, guarding ? 0.55 + shieldRatio * 0.35 : 0, 0.25);
 				if (!guarding && g.mat.opacity < 0.03) {
 					removeGuardFx(p.id);
 				} else {
@@ -907,8 +913,17 @@ export function createArenaRenderer(
 					// キャラよりだいぶ前・上に浮いて見える。前方オフセットは付けず、
 					// キャラと同じ x（体の中心）・胸の高さに重ねる。
 					const h = tag.topY;
+					const size = h * (0.85 + shieldRatio * 0.45);
 					g.sprite.position.set(wx, p.y * JUMP_WORLD + h * 0.52, 0.5);
-					g.sprite.scale.setScalar(h * 1.25 + Math.sin(t * 9) * 0.05);
+					g.sprite.scale.setScalar(size + Math.sin(t * 9) * 0.04);
+					// 耐久低下: シアン → 黄 → 赤
+					const c =
+						shieldRatio > 0.45
+							? 0x38bdf8
+							: shieldRatio > 0.2
+								? 0xfbbf24
+								: 0xf87171;
+					g.mat.color.setHex(c);
 				}
 			}
 		});
@@ -1230,6 +1245,14 @@ function createBoxAvatar(color: number): FighterAvatar {
 				tilt = -0.1;
 				glow = 0.55;
 				glowColor = 0x38bdf8; // 青いガード光
+			} else if (p.action === "shield-break") {
+				armF = -0.85;
+				armB = -0.85;
+				legF = 0.2;
+				legB = -0.15;
+				tilt = Math.sin(tSec * 18) * 0.25; // 割れ硬直のふらつき
+				glow = 0.7;
+				glowColor = 0xfbbf24;
 			} else if (p.action === "abare") {
 				armF = -1.0; // 両腕を大きく振り開いて弾き飛ばす
 				armB = -1.0;

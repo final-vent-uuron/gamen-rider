@@ -13,6 +13,7 @@ import * as THREE from 'three'
 import { createAvatar } from './arena3d'
 import type { FighterAvatar } from './arena3d'
 import type { PlayerAction, PlayerState } from './state'
+import { ARENA } from './state'
 
 export interface WinnerPresenterOptions {
   riderId: string
@@ -50,6 +51,8 @@ function standPose(riderId: string, action: PlayerAction): PlayerState {
     actionUntil: 0,
     isSelf: false,
     guarding: false,
+    shield: ARENA.shieldMax,
+    shieldRegenAt: 0,
     stunUntil: 0,
     freezeUntil: 0,
     invulnUntil: 0,
