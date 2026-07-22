@@ -17,7 +17,7 @@
 //   - 別 PC へ持ち替えるときは release()（切断＋許可の破棄）で手放す。これをしないと
 //     このページが開いている限り自動再接続がセンサーを取り合う。
 
-import type { InputHandler, InputSource } from './input'
+import type { BattleInput, InputHandler, InputSource } from './input'
 
 export const PUNCH_SERVICE_UUID = '12345678-1234-1234-1234-1234567890ab'
 export const PUNCH_CHAR_UUID = 'abcdefab-1234-5678-1234-abcdefabcdef'
@@ -112,6 +112,336 @@ export async function getPairedLimbs(): Promise<PairedLimbs> {
     // getDevices 失敗（権限ポリシー等）も未ペアリング扱いのまま
   }
   return out
+}
+
+// ===========================================================================
+// 5部位（両手・両足・ベルト）マルチデバイス版
+// ===========================================================================
+// 上の createBleSensorSource は「1本の PunchSensor だけ」を扱う旧 API（battle-test 用に残す）。
+// こちらは右手/左手/右足/左足/ベルトの計5デバイスを同時に扱い、部位ごとにバトル入力へ
+// マッピングする。各リングは BLE 名で部位を判別するため、ファーム書き込み時に部位ごとの
+// 名前を付ける必要がある（下表）。UUID は当面すべて PunchSensor と同じ想定（同ファーム流用）。
+//
+//   部位     BLE 名             バトル入力
+//   右手     PunchSensor        パンチ（右）
+//   左手     PunchSensor-L      パンチ（左）
+//   右足     KickSensor         キック（右）
+//   左足     KickSensor-L       キック（左）
+//   ベルト   BeltSensor         （未割当。変身/ファイナルベント検出用に予約）
+//
+// ※ ハード/動作は未確定（CLAUDE.md）。入力の割り当ては SENSOR_PARTS の emit 1 か所で変えられる。
+
+export type SensorPartKey = 'rightHand' | 'leftHand' | 'rightFoot' | 'leftFoot' | 'belt'
+
+export interface SensorPartDef {
+  key: SensorPartKey
+  label: string // 表示名（右手 等）
+  emoji: string // タイル用アイコン
+  namePrefix: string // BLE 名の前方一致
+  excludePrefix?: string // 同名衝突の除外（右手=PunchSensor は PunchSensor-L を除外）
+  serviceUuid: string
+  charUuid: string
+  // PUNCH 通知 → バトル入力（null = 入力にしない・ペアリング/表示のみ）。
+  // 入力の割り当てを変えたいときはここだけ触ればよい。
+  emit: ((impact: number) => BattleInput) | null
+}
+
+export const SENSOR_PARTS: SensorPartDef[] = [
+  {
+    key: 'rightHand',
+    label: '右手',
+    emoji: '🤜',
+    namePrefix: 'PunchSensor',
+    excludePrefix: 'PunchSensor-L',
+    serviceUuid: PUNCH_SERVICE_UUID,
+    charUuid: PUNCH_CHAR_UUID,
+    emit: () => ({ kind: 'punch', side: 'right' }),
+  },
+  {
+    key: 'leftHand',
+    label: '左手',
+    emoji: '🤛',
+    namePrefix: 'PunchSensor-L',
+    serviceUuid: PUNCH_SERVICE_UUID,
+    charUuid: PUNCH_CHAR_UUID,
+    emit: () => ({ kind: 'punch', side: 'left' }),
+  },
+  {
+    key: 'rightFoot',
+    label: '右足',
+    emoji: '🦵',
+    namePrefix: 'KickSensor',
+    excludePrefix: 'KickSensor-L',
+    serviceUuid: PUNCH_SERVICE_UUID,
+    charUuid: PUNCH_CHAR_UUID,
+    emit: () => ({ kind: 'kick', side: 'right' }),
+  },
+  {
+    key: 'leftFoot',
+    label: '左足',
+    emoji: '🦶',
+    namePrefix: 'KickSensor-L',
+    serviceUuid: PUNCH_SERVICE_UUID,
+    charUuid: PUNCH_CHAR_UUID,
+    emit: () => ({ kind: 'kick', side: 'left' }),
+  },
+  {
+    key: 'belt',
+    label: 'ベルト',
+    emoji: '🔶',
+    namePrefix: 'BeltSensor',
+    serviceUuid: PUNCH_SERVICE_UUID,
+    charUuid: PUNCH_CHAR_UUID,
+    emit: null, // 変身/ファイナルベント検出用に予約（バトル入力は未割当）
+  },
+]
+
+export type PairedParts = Record<SensorPartKey, boolean>
+
+function emptyPaired(): PairedParts {
+  return { rightHand: false, leftHand: false, rightFoot: false, leftFoot: false, belt: false }
+}
+
+// BLE 名 → 部位定義。前方一致（＋除外）で判別する。順不同（excludePrefix で衝突回避）。
+function partForName(name: string): SensorPartDef | null {
+  for (const p of SENSOR_PARTS) {
+    if (!name.startsWith(p.namePrefix)) continue
+    if (p.excludePrefix && name.startsWith(p.excludePrefix)) continue
+    return p
+  }
+  return null
+}
+
+function partDef(key: SensorPartKey): SensorPartDef {
+  const d = SENSOR_PARTS.find((p) => p.key === key)
+  if (!d) throw new Error(`unknown sensor part: ${key}`)
+  return d
+}
+
+// 5部位それぞれの「ペアリング（許可）済みか」。接続はせず、許可済みデバイスの名前を見るだけ。
+export async function getPairedParts(): Promise<PairedParts> {
+  const out = emptyPaired()
+  const bt = bluetoothApi()
+  if (!bt?.getDevices) return out
+  try {
+    for (const d of await bt.getDevices()) {
+      const def = partForName(d.name ?? '')
+      if (def) out[def.key] = true
+    }
+  } catch {
+    // getDevices 失敗（権限ポリシー等）は未ペアリング扱いのまま
+  }
+  return out
+}
+
+export interface SensorHubOptions {
+  onStatus?: (key: SensorPartKey, status: BleStatus) => void
+  // 生のインパクト値（メーター用）。hit=true はパンチ/キック検出時。
+  onImpact?: (key: SensorPartKey, impact: number, hit: boolean) => void
+}
+
+// 5部位を同時に扱うセンサーハブ。部位ごとに GATT 接続を保持し、届いた PUNCH 通知を
+// SENSOR_PARTS.emit でバトル入力へ変換して onInput へ流す（キーボードと同じ InputHandler）。
+export interface SensorHub extends InputSource {
+  // 特定部位を接続（初回のみ必要・ユーザー操作から）。選ばれた実機の名前で部位を自動振り分け。
+  connect(key: SensorPartKey): Promise<void>
+  // どの部位でもよいので1台追加（バトル HUD 用。選択した実機の名前で部位へ振り分ける）。
+  connectAny(): Promise<void>
+  release(key: SensorPartKey): void
+  releaseAll(): void
+}
+
+export function createSensorHub(
+  onInput: InputHandler,
+  opts: SensorHubOptions = {},
+): SensorHub {
+  let active = false
+  const decoder = new TextDecoder()
+
+  interface Conn {
+    def: SensorPartDef
+    device: BleDevice | null
+    characteristic: BleCharacteristic | null
+    attaching: boolean
+    retryTimer: number
+    onValue: (e: Event) => void
+    onDisconnected: () => void
+  }
+  const conns = new Map<SensorPartKey, Conn>()
+  const setStatus = (key: SensorPartKey, s: BleStatus) => opts.onStatus?.(key, s)
+
+  const makeConn = (def: SensorPartDef): Conn => {
+    const c: Conn = {
+      def,
+      device: null,
+      characteristic: null,
+      attaching: false,
+      retryTimer: 0,
+      onValue: () => {},
+      onDisconnected: () => {},
+    }
+    c.onValue = (e) => {
+      const dv = (e.target as BleCharacteristic).value
+      if (!dv) return
+      const text = decoder.decode(dv).trim()
+      if (text.startsWith('PUNCH')) {
+        const raw = Number.parseFloat(text.split(',')[1] ?? '')
+        const impact = Number.isFinite(raw) ? raw : 0
+        opts.onImpact?.(def.key, impact, true)
+        if (active && def.emit) onInput(def.emit(impact))
+      } else {
+        const impact = Number.parseFloat(text)
+        if (Number.isFinite(impact)) opts.onImpact?.(def.key, impact, false)
+      }
+    }
+    c.onDisconnected = () => {
+      c.characteristic = null
+      setStatus(def.key, 'disconnected')
+      scheduleRetry(c)
+    }
+    return c
+  }
+  const getConn = (key: SensorPartKey): Conn => {
+    let c = conns.get(key)
+    if (!c) {
+      c = makeConn(partDef(key))
+      conns.set(key, c)
+    }
+    return c
+  }
+
+  const attach = async (c: Conn): Promise<boolean> => {
+    if (!c.device?.gatt || c.attaching) return false
+    c.attaching = true
+    try {
+      setStatus(c.def.key, 'connecting')
+      const server = await c.device.gatt.connect()
+      const service = await server.getPrimaryService(c.def.serviceUuid)
+      c.characteristic = await service.getCharacteristic(c.def.charUuid)
+      c.characteristic.addEventListener('characteristicvaluechanged', c.onValue)
+      await c.characteristic.startNotifications()
+      setStatus(c.def.key, 'connected')
+      return true
+    } catch (err) {
+      console.warn(`[ble] attach failed (${c.def.key}):`, err)
+      setStatus(c.def.key, 'disconnected')
+      return false
+    } finally {
+      c.attaching = false
+    }
+  }
+  const scheduleRetry = (c: Conn) => {
+    if (!active || !c.device) return
+    window.clearTimeout(c.retryTimer)
+    c.retryTimer = window.setTimeout(async () => {
+      if (!active || !c.device || c.device.gatt?.connected) return
+      const ok = await attach(c)
+      if (!ok) scheduleRetry(c)
+    }, RETRY_MS)
+  }
+  const adopt = (c: Conn, d: BleDevice) => {
+    c.device = d
+    d.addEventListener('gattserverdisconnected', c.onDisconnected)
+  }
+  const dropConn = (c: Conn) => {
+    window.clearTimeout(c.retryTimer)
+    c.characteristic?.removeEventListener('characteristicvaluechanged', c.onValue)
+    c.characteristic = null
+    if (c.device) {
+      c.device.removeEventListener('gattserverdisconnected', c.onDisconnected)
+      c.device.gatt?.disconnect()
+      c.device = null
+    }
+  }
+
+  // 選ばれた（または許可済みの）デバイスを名前で部位へ振り分けて接続する。
+  const adoptAndAttach = async (d: BleDevice) => {
+    const def = partForName(d.name ?? '')
+    if (!def) return
+    const c = getConn(def.key)
+    if (c.device && c.device !== d) dropConn(c)
+    adopt(c, d)
+    const ok = await attach(c)
+    if (!ok) scheduleRetry(c)
+  }
+
+  // 許可済みデバイスをダイアログ無しで自動再接続（ページを開くだけで復元）。
+  const autoConnectAll = async () => {
+    const bt = bluetoothApi()
+    if (!bt?.getDevices) return
+    try {
+      for (const d of await bt.getDevices()) {
+        if (!active) return
+        const def = partForName(d.name ?? '')
+        if (!def || getConn(def.key).device) continue
+        await adoptAndAttach(d)
+      }
+    } catch (err) {
+      console.warn('[ble] autoConnectAll failed:', err)
+    }
+  }
+
+  const requestAndAttach = async (
+    key: SensorPartKey | null,
+    filters: ({ services: string[] } | { namePrefix: string })[],
+    services: string[],
+  ) => {
+    const bt = bluetoothApi()
+    if (!bt) {
+      if (key) setStatus(key, 'unsupported')
+      return
+    }
+    try {
+      if (key) setStatus(key, 'connecting')
+      const d = await bt.requestDevice({ filters, optionalServices: services })
+      await adoptAndAttach(d)
+      // 選ばれた実機が別部位だった場合、押した部位のステータスは idle に戻す。
+      if (key && partForName(d.name ?? '')?.key !== key) setStatus(key, 'idle')
+    } catch (err) {
+      console.warn(`[ble] request failed (${key ?? 'any'}):`, err)
+      if (key) setStatus(key, conns.get(key)?.device ? 'disconnected' : 'idle')
+    }
+  }
+
+  const releaseKey = (key: SensorPartKey) => {
+    const c = conns.get(key)
+    if (!c) return
+    const d = c.device
+    dropConn(c)
+    d?.forget?.().catch(() => {}) // 許可も破棄（自動接続の取り合い防止）。非対応なら無視
+    setStatus(key, 'idle')
+  }
+
+  return {
+    connect(key) {
+      const def = partDef(key)
+      return requestAndAttach(
+        key,
+        [{ services: [def.serviceUuid] }, { namePrefix: def.namePrefix }],
+        [def.serviceUuid],
+      )
+    },
+    connectAny() {
+      const services = [...new Set(SENSOR_PARTS.map((p) => p.serviceUuid))]
+      return requestAndAttach(
+        null,
+        SENSOR_PARTS.map((p) => ({ namePrefix: p.namePrefix })),
+        services,
+      )
+    },
+    release: releaseKey,
+    releaseAll() {
+      for (const key of conns.keys()) releaseKey(key)
+    },
+    start() {
+      active = true
+      void autoConnectAll()
+    },
+    stop() {
+      active = false
+      for (const c of conns.values()) dropConn(c)
+    },
+  }
 }
 
 export function createBleSensorSource(

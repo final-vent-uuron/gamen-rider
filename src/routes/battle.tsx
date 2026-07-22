@@ -14,6 +14,7 @@ import {
 	applyJump,
 	applyThrow,
 	applyTurn,
+	SENSOR_PARTS,
 	battleCardsFor,
 	beginFinalVent,
 	connectBattle,
@@ -21,25 +22,29 @@ import {
 	createCameraGuardSource,
 	createFinalVentController,
 	createKeyboardSource,
+	createSensorHub,
 	createSfx,
 	endFinalVent,
-	getPairedLimbs,
+	getPairedParts,
 	loadFinalVentPose,
 	meterStocks,
 	stepBattle,
 } from "../battle";
 import type {
 	BattleCard,
+	BattleInput,
 	BattleNet,
 	BattleState,
+	BleStatus,
 	Bgm,
 	CameraGuardStatus,
 	FinalVentPhase,
 	FinalVentPoseProgress,
-	LimbKey,
 	NetStatus,
-	PairedLimbs,
+	PairedParts,
 	PlayerState,
+	SensorHub,
+	SensorPartKey,
 	Sfx,
 } from "../battle";
 import type { ArenaRenderer } from "../battle/arena3d";
@@ -85,6 +90,15 @@ const EMPTY_BATTLE: BattleState = {
 // そのまま補間結果に乗り、120ms 遅らせてもカクつきが残るため。描画時刻(rt)は毎フレーム
 // 実時間で前進させつつ、最新 st - 遅延 へゆっくり寄せる（時計ドリフト・バースト到着を吸収）。
 const INTERP_DELAY_MS = 120;
+
+// 止め（最後の1人になる直前の撃墜）の演出タイミング。
+// スロー再生で倒れ切るのに実時間がかかるので、GAME SET と /result 遷移をそこへ合わせる。
+//   0ms            : 撃墜 → スローモーション開始（死亡モーションをゆっくり再生）
+//   GAME_SET_DELAY : 倒れ切ったあたりで GAME SET バナーを出す
+//   RESULT_DELAY   : GAME SET の余韻を見せてから /result へ遷移
+const SLOWMO_MS = 1400; // アバターのスロー再生時間（arena3d の slowmo へ渡す）
+const GAME_SET_DELAY_MS = 2000; // 倒れ切るタイミングに合わせて GAME SET を出す
+const RESULT_DELAY_MS = 3400; // GAME SET を ~1.4s 見せてから遷移
 
 // 予測の見た目: 自分の技/ガードはサーバーが追いつく前でも即表示。被弾中はサーバー優先。
 function predAction(
@@ -135,6 +149,7 @@ function BattlePage() {
 	const [popups, setPopups] = useState<DamagePopup[]>([]); // 被弾ダメージ数字
 	const [combo, setCombo] = useState<number | null>(null); // 進行中の最大コンボ数
 	const [koFlash, setKoFlash] = useState(false); // KO の一瞬フラッシュ
+	const [showGameSet, setShowGameSet] = useState(false); // GAME SET バナー（倒れ切ってから出す）
 	const [camGuard, setCamGuard] = useState(false); // カメラがガードポーズを認識中か（表示用）
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
 	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
@@ -142,8 +157,18 @@ function BattlePage() {
 	const [fvPoseProgress, setFvPoseProgress] = useState<FinalVentPoseProgress | null>(
 		null,
 	);
-	// 加速度センサー（右手/左手/右足/左足）のペアリング有無。null = 確認中
-	const [pairedLimbs, setPairedLimbs] = useState<PairedLimbs | null>(null);
+	// 5部位（右手/左手/右足/左足/ベルト）のペアリング有無。null = 確認中
+	const [pairedParts, setPairedParts] = useState<PairedParts | null>(null);
+	// バトル中の各部位の BLE 接続状態（自動再接続・接続ボタンの結果を反映）
+	const [sensorStatuses, setSensorStatuses] = useState<
+		Record<SensorPartKey, BleStatus>
+	>(() => ({
+		rightHand: "idle",
+		leftHand: "idle",
+		rightFoot: "idle",
+		leftFoot: "idle",
+		belt: "idle",
+	}));
 	const [intruder, setIntruder] = useState<string | null>(null); // 乱入 WARNING（乱入者名。null = 非表示）
 	// カード技のカットイン（発動者名と種別。null = 非表示）
 	const [cutinShow, setCutinShow] = useState<{
@@ -163,6 +188,7 @@ function BattlePage() {
 	const rendererRef = useRef<ArenaRenderer | null>(null);
 	const finalActiveRef = useRef(false); // rAF ループから読む finalActive のミラー
 	const netRef = useRef<BattleNet | null>(null);
+	const hubRef = useRef<SensorHub | null>(null); // バトル中の 5部位センサーハブ（接続ボタンから connectAny() を呼ぶ）
 	const sfxRef = useRef<Sfx | null>(null); // 効果音（WebAudio 合成）
 	const bgmRef = useRef<Bgm | null>(null); // BGM（public/bgm/ の mp3）
 	const intrusionSeenRef = useRef(0); // 処理済みの intrusionUntil（同じ乱入を1回だけ演出する）
@@ -214,8 +240,8 @@ function BattlePage() {
 	useEffect(() => {
 		let alive = true;
 		const check = async () => {
-			const limbs = await getPairedLimbs();
-			if (alive) setPairedLimbs(limbs);
+			const parts = await getPairedParts();
+			if (alive) setPairedParts(parts);
 		};
 		check();
 		const id = window.setInterval(check, 3000);
@@ -323,6 +349,16 @@ function BattlePage() {
 				}
 			}
 
+			// 止め（最後の1人になる直前の撃墜）: スローモーションで締める。
+			// 生存者が 2 人以上 → 1 人以下へ落ちた瞬間だけ拾う（決着済みフレームでは再発火しない）。
+			const aliveBefore = prev.players.filter((p) => p.hp > 0).length;
+			const aliveAfter = next.players.filter((p) => p.hp > 0).length;
+			if (!prev.winnerId && aliveBefore >= 2 && aliveAfter <= 1) {
+				r?.slowmo(SLOWMO_MS, 0.26);
+				r?.shake(0.9);
+				r?.punch(2.0);
+			}
+
 			// 新しく飛んだ波動弾に発射音＋火花。
 			const prevProj = new Set(prev.projectiles.map((pr) => pr.id));
 			for (const pr of next.projectiles) {
@@ -352,6 +388,10 @@ function BattlePage() {
 					prev.players.length >= 2 ? newcomer?.riderName ?? null : null;
 				setIntruder(name ?? "???");
 				bgmRef.current?.intrusion(intrusionUntil - Date.now());
+				// 乱入の瞬間に一発ジュース（登場のインパクト）。カメラ寄せ・赤演出・全員停止は
+				// レンダラ側（arena3d が intruderId で乱入者へドリーイン）が受け持つ。
+				r?.shake(0.7);
+				r?.punch(1.2);
 				window.clearTimeout(intrusionTimerRef.current);
 				intrusionTimerRef.current = window.setTimeout(
 					() => setIntruder(null),
@@ -502,7 +542,9 @@ function BattlePage() {
 				net.sendGuard(merged);
 			}
 		};
-		const source = createKeyboardSource((input) => {
+		// キーボード（デモ用ダミー入力）と BLE 加速度センサー（実機）を同じ処理へ流す。
+		// センサーの punch などもキーと同じく「サーバー送信＋ローカル予測」を通る。
+		const handleInput = (input: BattleInput) => {
 			sfxRef.current?.resume();
 			const now = Date.now();
 			const selfId = youIdRef.current;
@@ -551,7 +593,8 @@ function BattlePage() {
 					applyPred((s) => applyAttack(s, selfId, "final", now));
 					break;
 			}
-		});
+		};
+		const source = createKeyboardSource(handleInput);
 		source.start();
 
 		// ファイナルベント: メーター満タン時に右下カメラでカード→ポーズ→発動。
@@ -602,6 +645,16 @@ function BattlePage() {
 			fv.setMeterFull((me?.meter ?? 0) >= ARENA.meterFinalCost);
 		}
 
+		// BLE 加速度センサー（5部位）。ペアリング画面で許可済みなら getDevices で
+		// ダイアログ無しに自動再接続する。非対応環境・未許可のときは HUD の「センサー追加」
+		// ボタン（hubRef.connectAny()）から手動で繋ぐ。届いた入力はキーボードと同じ handleInput へ。
+		const hub = createSensorHub(handleInput, {
+			onStatus: (key, s) =>
+				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
+		});
+		hub.start();
+		hubRef.current = hub;
+
 		// カメラガード: 右下カメラの映像で「ボクシングの構え」を認識している間、強制的にガード。
 		// 骨格オーバーレイは smoother 経由（検出 ~15fps → 表示 60fps 補間でぬるぬる動く）。
 		// 色: 通常は MediaPipe 風の緑、ガード認識中はシアン（ひと目で状態がわかる）。
@@ -646,6 +699,8 @@ function BattlePage() {
 
 		return () => {
 			source.stop();
+			hub.stop(); // 切断のみ（許可は保持）。次の画面/再入場で自動再接続できる
+			hubRef.current = null;
 			camSource.stop();
 			fv.stop();
 			fvRef.current = null;
@@ -792,6 +847,8 @@ function BattlePage() {
 	useEffect(() => {
 		if (!battle.winnerId) return;
 		bgmRef.current?.fadeOutMain(); // リザルトの win-bgm へ繋ぐ（main はここで終了）
+		// GAME SET は撃墜と同時ではなく、スローで倒れ切ったあたりで出す。
+		const gs = window.setTimeout(() => setShowGameSet(true), GAME_SET_DELAY_MS);
 		const t = window.setTimeout(() => {
 			const st = battleRef.current;
 			const order: string[] = [];
@@ -819,8 +876,11 @@ function BattlePage() {
 				to: "/result",
 				search: { players, rider: routine.riderId, name: routine.riderName },
 			});
-		}, 1600);
-		return () => window.clearTimeout(t);
+		}, RESULT_DELAY_MS);
+		return () => {
+			window.clearTimeout(gs);
+			window.clearTimeout(t);
+		};
 	}, [battle.winnerId, navigate, routine.riderId, routine.riderName]);
 
 	// カードクリックをダミー入力として扱う（マウスでも技を出せる）。
@@ -870,6 +930,18 @@ function BattlePage() {
 			isSelf: v.playerId === youIdRef.current,
 		};
 	})();
+
+	// HUD の部位表示。バトル中に BLE センサーが実際に繋がったら、許可済み判定
+	//（getPairedParts）を待たずにその部位を「接続済み」として反映する（未ペアリング表示を消す）。
+	const liveConnected = (key: SensorPartKey) =>
+		sensorStatuses[key] === "connected";
+	const effectivePaired: PairedParts = {
+		rightHand: !!pairedParts?.rightHand || liveConnected("rightHand"),
+		leftHand: !!pairedParts?.leftHand || liveConnected("leftHand"),
+		rightFoot: !!pairedParts?.rightFoot || liveConnected("rightFoot"),
+		leftFoot: !!pairedParts?.leftFoot || liveConnected("leftFoot"),
+		belt: !!pairedParts?.belt || liveConnected("belt"),
+	};
 
 	return (
 		<div
@@ -1024,12 +1096,21 @@ function BattlePage() {
 				</div> */}
 
 				{/* 左: 部位ステータス（顔=カメラ可視ゲージ、手足=センサーのペアリング＋カメラ可視） */}
-				<CamStatusBar
-					lmRef={camLmRef}
-					side={camSide}
-					pose={camPose}
-					paired={pairedLimbs}
-				/>
+				<div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
+					<CamStatusBar
+						lmRef={camLmRef}
+						side={camSide}
+						pose={camPose}
+						paired={effectivePaired}
+					/>
+					<SensorHudPanel
+						statuses={sensorStatuses}
+						onAdd={() => {
+							sfxRef.current?.resume();
+							hubRef.current?.connectAny();
+						}}
+					/>
+				</div>
 
 				{/* 中央: HP ゲージ（全プレイヤー・スマブラ風。余った幅を全部使う） */}
 				<div style={{ flex: 1, minWidth: 0 }}>
@@ -1077,8 +1158,8 @@ function BattlePage() {
 			{/* ファイナルベント演出（発動カットイン中／溜め中は重複するので出さない） */}
 			{finalActive && !cutinShow && !ventWatch && <FinalVentBanner />}
 
-			{/* 決着スプラッシュ（この直後に /result へ遷移する） */}
-			{winner && <GameSetBanner mine={!!winner.isSelf} />}
+			{/* 決着スプラッシュ（倒れ切ってから出し、この後 /result へ遷移する） */}
+			{winner && showGameSet && <GameSetBanner mine={!!winner.isSelf} />}
 		</div>
 	);
 }
@@ -1116,6 +1197,84 @@ export function ConnBadge({ status }: { status: NetStatus }) {
 			/>
 			{label}
 		</span>
+	);
+}
+
+// バトル中の 5部位センサー状態＋接続ボタン（HUD 左）。各部位を絵文字ドットで状態表示し、
+// 未接続があれば「センサー追加」で connectAny（選んだ実機を名前から部位へ自動振り分け）。
+// ペアリング画面で許可済みなら自動再接続するので、通常このボタンは押さなくてよい。
+function SensorHudPanel({
+	statuses,
+	onAdd,
+}: {
+	statuses: Record<SensorPartKey, BleStatus>;
+	onAdd: () => void;
+}) {
+	const connected = SENSOR_PARTS.filter(
+		(p) => statuses[p.key] === "connected",
+	).length;
+	const anyConnecting = SENSOR_PARTS.some(
+		(p) => statuses[p.key] === "connecting",
+	);
+	const unsupported = SENSOR_PARTS.every(
+		(p) => statuses[p.key] === "unsupported",
+	);
+	const allConnected = connected === SENSOR_PARTS.length;
+	const dotColor = (s: BleStatus) =>
+		s === "connected"
+			? "#34d399"
+			: s === "connecting" || s === "disconnected"
+				? "#fbbf24"
+				: "#4b5563";
+	return (
+		<div
+			style={{
+				display: "flex",
+				alignItems: "center",
+				gap: "0.4rem",
+				flexShrink: 0,
+			}}
+		>
+			<div style={{ display: "flex", gap: "2px" }}>
+				{SENSOR_PARTS.map((p) => {
+					const s = statuses[p.key];
+					return (
+						<span
+							key={p.key}
+							title={`${p.label}: ${s}`}
+							style={{
+								fontSize: "0.72rem",
+								color: dotColor(s),
+								opacity: s === "connected" ? 1 : 0.55,
+								filter: s === "connected" ? "none" : "grayscale(0.5)",
+							}}
+						>
+							{p.emoji}
+						</span>
+					);
+				})}
+			</div>
+			{!allConnected && !unsupported && (
+				<button
+					type="button"
+					onClick={onAdd}
+					disabled={anyConnecting}
+					style={{
+						padding: "3px 9px",
+						borderRadius: "999px",
+						border: "1px solid #a78bfa",
+						background: "transparent",
+						color: anyConnecting ? "#6b7280" : "#a78bfa",
+						fontSize: "0.68rem",
+						fontWeight: 700,
+						whiteSpace: "nowrap",
+						cursor: anyConnecting ? "default" : "pointer",
+					}}
+				>
+					{anyConnecting ? "接続中…" : "📡 センサー追加"}
+				</button>
+			)}
+		</div>
 	);
 }
 
@@ -1748,7 +1907,7 @@ function IntrusionWarning({ name }: { name: string }) {
 // ref を読んで自分だけ再レンダーする（BattlePage 全体を 15fps で再レンダーさせない）。
 
 // [表示名, カメラのランドマーク index, 対応するセンサー部位（null = センサー無し・カメラのみ）]
-const STATUS_PARTS: [string, number, LimbKey | null][] = [
+const STATUS_PARTS: [string, number, SensorPartKey | null][] = [
 	["顔", LM.NOSE, null],
 	["右手", LM.R_WRIST, "rightHand"],
 	["左手", LM.L_WRIST, "leftHand"],
@@ -1765,7 +1924,7 @@ function CamStatusBar({
 	lmRef: React.RefObject<NormalizedLandmark[] | null>;
 	side: boolean;
 	pose: CameraGuardStatus;
-	paired: PairedLimbs | null; // 加速度センサーのペアリング有無（null = 確認中）
+	paired: PairedParts | null; // 加速度センサーのペアリング有無（null = 確認中）
 }) {
 	const [, setTick] = useState(0);
 	useEffect(() => {
