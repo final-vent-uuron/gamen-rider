@@ -19,7 +19,9 @@ import {
   applyJump,
   applyThrow,
   applyTurn,
+  beginFinalVent,
   createBattle,
+  endFinalVent,
   removePlayer,
   stepBattle,
 } from '../src/battle/state.ts'
@@ -49,6 +51,7 @@ type ClientMsg =
   | { t: 'turn' } // 振り向き（カメラの体の向き検出: 正面 → 横向き）
   | { t: 'throw' }
   | { t: 'abare' }
+  | { t: 'final-vent'; on?: unknown; phase?: unknown } // SA3 風溜め開始/更新/解除
   | { t: 'reset' }
   | { t: 'ping' } // ハートビート（生存確認のみ。ゲームへの影響なし）
 
@@ -146,6 +149,15 @@ export class BattleRoom extends DurableObject {
       case 'abare':
         this.battle = applyAbare(this.battle, conn.id, Date.now())
         break
+      case 'final-vent': {
+        const phase = msg.phase === 'pose' ? 'pose' : 'card'
+        if (msg.on === false) {
+          this.battle = endFinalVent(this.battle, conn.id)
+        } else {
+          this.battle = beginFinalVent(this.battle, conn.id, phase, Date.now())
+        }
+        break
+      }
       case 'reset':
         this.resetRoom()
         break
@@ -171,6 +183,7 @@ export class BattleRoom extends DurableObject {
   private onClose(ws: WebSocket) {
     const conn = this.sockets.get(ws)
     if (!conn) return
+    this.battle = endFinalVent(this.battle, conn.id)
     this.battle = removePlayer(this.battle, conn.id)
     delete this.moveIntent[conn.id]
     delete this.guardIntent[conn.id]

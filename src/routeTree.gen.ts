@@ -15,6 +15,7 @@ import { Route as PoseRouteImport } from './routes/pose'
 import { Route as PairingRouteImport } from './routes/pairing'
 import { Route as ModelCheckRouteImport } from './routes/model-check'
 import { Route as HenshinRouteImport } from './routes/henshin'
+import { Route as FinalVentPoseRouteImport } from './routes/final-vent-pose'
 import { Route as DetectRouteImport } from './routes/detect'
 import { Route as BattleTestRouteImport } from './routes/battle-test'
 import { Route as BattleRouteImport } from './routes/battle'
@@ -50,6 +51,11 @@ const ModelCheckRoute = ModelCheckRouteImport.update({
 const HenshinRoute = HenshinRouteImport.update({
   id: '/henshin',
   path: '/henshin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FinalVentPoseRoute = FinalVentPoseRouteImport.update({
+  id: '/final-vent-pose',
+  path: '/final-vent-pose',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DetectRoute = DetectRouteImport.update({
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/battle': typeof BattleRoute
   '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
+  '/final-vent-pose': typeof FinalVentPoseRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
   '/pairing': typeof PairingRoute
@@ -102,6 +109,7 @@ export interface FileRoutesByTo {
   '/battle': typeof BattleRoute
   '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
+  '/final-vent-pose': typeof FinalVentPoseRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
   '/pairing': typeof PairingRoute
@@ -117,6 +125,7 @@ export interface FileRoutesById {
   '/battle': typeof BattleRoute
   '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
+  '/final-vent-pose': typeof FinalVentPoseRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
   '/pairing': typeof PairingRoute
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
     | '/battle'
     | '/battle-test'
     | '/detect'
+    | '/final-vent-pose'
     | '/henshin'
     | '/model-check'
     | '/pairing'
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/battle'
     | '/battle-test'
     | '/detect'
+    | '/final-vent-pose'
     | '/henshin'
     | '/model-check'
     | '/pairing'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/battle'
     | '/battle-test'
     | '/detect'
+    | '/final-vent-pose'
     | '/henshin'
     | '/model-check'
     | '/pairing'
@@ -176,6 +188,7 @@ export interface RootRouteChildren {
   BattleRoute: typeof BattleRoute
   BattleTestRoute: typeof BattleTestRoute
   DetectRoute: typeof DetectRoute
+  FinalVentPoseRoute: typeof FinalVentPoseRoute
   HenshinRoute: typeof HenshinRoute
   ModelCheckRoute: typeof ModelCheckRoute
   PairingRoute: typeof PairingRoute
@@ -230,6 +243,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HenshinRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/final-vent-pose': {
+      id: '/final-vent-pose'
+      path: '/final-vent-pose'
+      fullPath: '/final-vent-pose'
+      preLoaderRoute: typeof FinalVentPoseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/detect': {
       id: '/detect'
       path: '/detect'
@@ -280,6 +300,7 @@ const rootRouteChildren: RootRouteChildren = {
   BattleRoute: BattleRoute,
   BattleTestRoute: BattleTestRoute,
   DetectRoute: DetectRoute,
+  FinalVentPoseRoute: FinalVentPoseRoute,
   HenshinRoute: HenshinRoute,
   ModelCheckRoute: ModelCheckRoute,
   PairingRoute: PairingRoute,

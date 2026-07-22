@@ -36,6 +36,8 @@ export interface BattleNet {
   sendTurn(): void
   sendThrow(): void
   sendAbare(): void
+  // ファイナルベント溜め（SA3 風）。on=false で解除。phase は card|pose
+  sendFinalVent(on: boolean, phase?: 'card' | 'pose'): void
   sendReset(): void
   close(): void
 }
@@ -130,6 +132,8 @@ export function connectBattle(opts: ConnectBattleOptions): BattleNet {
     sendTurn: () => send({ t: 'turn' }),
     sendThrow: () => send({ t: 'throw' }),
     sendAbare: () => send({ t: 'abare' }),
+    sendFinalVent: (on, phase) =>
+      send({ t: 'final-vent', on, phase: phase ?? 'card' }),
     sendReset: () => send({ t: 'reset' }),
     close: () => {
       closedByUser = true

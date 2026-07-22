@@ -170,6 +170,7 @@ function Home() {
               { to: '/battle-test', label: 'バトル検証' },
               { to: '/model-check', label: 'モデル検証' },
               { to: '/auth/register', label: 'ライダー登録' },
+              { to: '/final-vent-pose', label: 'FVポーズ登録' },
             ] as const
           ).map((l) => (
             <Link
