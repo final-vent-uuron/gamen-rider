@@ -15,12 +15,16 @@ import {
 	applyThrow,
 	applyTurn,
 	battleCardsFor,
+	beginFinalVent,
 	connectBattle,
 	createBgm,
 	createCameraGuardSource,
+	createFinalVentController,
 	createKeyboardSource,
 	createSfx,
+	endFinalVent,
 	getPairedLimbs,
+	loadFinalVentPose,
 	meterStocks,
 	stepBattle,
 } from "../battle";
@@ -30,6 +34,8 @@ import type {
 	BattleState,
 	Bgm,
 	CameraGuardStatus,
+	FinalVentPhase,
+	FinalVentPoseProgress,
 	LimbKey,
 	NetStatus,
 	PairedLimbs,
@@ -131,6 +137,10 @@ function BattlePage() {
 	const [camGuard, setCamGuard] = useState(false); // カメラがガードポーズを認識中か（表示用）
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
 	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
+	const [fvPhase, setFvPhase] = useState<FinalVentPhase>("idle"); // 右下カメラの FV シーケンス
+	const [fvPoseProgress, setFvPoseProgress] = useState<FinalVentPoseProgress | null>(
+		null,
+	);
 	// 加速度センサー（右手/左手/右足/左足）のペアリング有無。null = 確認中
 	const [pairedLimbs, setPairedLimbs] = useState<PairedLimbs | null>(null);
 	const [intruder, setIntruder] = useState<string | null>(null); // 乱入 WARNING（乱入者名。null = 非表示）
@@ -159,6 +169,7 @@ function BattlePage() {
 	const ventVideoRef = useRef<HTMLVideoElement>(null); // 右下カメラの <video>（ポーズ解析と共有）
 	const ventCanvasRef = useRef<HTMLCanvasElement>(null); // 右下カメラの骨格オーバーレイ
 	const camLmRef = useRef<NormalizedLandmark[] | null>(null); // 最新の検出ランドマーク（画面下ステータス用）
+	const fvRef = useRef<ReturnType<typeof createFinalVentController> | null>(null);
 	const comboTimerRef = useRef(0);
 	const popupKeyRef = useRef(0);
 	const koOrderRef = useRef<string[]>([]); // 撃墜された順（順位付け用。先頭＝最初に落ちた＝下位）
@@ -387,6 +398,8 @@ function BattlePage() {
 					projectiles: [],
 					winnerId: null,
 					intrusionUntil: next.intrusionUntil,
+					cutin: next.cutin,
+					finalVent: next.finalVent,
 				};
 				return;
 			}
@@ -415,6 +428,8 @@ function BattlePage() {
 				projectiles: predRef.current?.projectiles ?? [],
 				winnerId: null,
 				intrusionUntil: next.intrusionUntil, // 予測ループ(stepBattle)も乱入停止に従わせる
+				cutin: next.cutin,
+				finalVent: next.finalVent,
 			};
 		};
 
@@ -531,25 +546,87 @@ function BattlePage() {
 		});
 		source.start();
 
+		// ファイナルベント: メーター満タン時に右下カメラでカード→ポーズ→発動。
+		// キーボード L/F とカード UI は開発用バイパスとして残す。
+		const fireFinal = () => {
+			const now = Date.now();
+			const selfId = youIdRef.current;
+			net.sendAttack("final");
+			applyPred((s) => applyAttack(s, selfId, "final", now));
+		};
+		let lastCamGuarding = false; // mute 解除時にワーカー側の最新ガードを復元するため
+		const fv = createFinalVentController({
+			getVideo: () => ventVideoRef.current,
+			riderId: routine.riderId,
+			riderName: routine.riderName,
+			onPhase: (p) => {
+				setFvPhase(p);
+				const selfId = youIdRef.current;
+				const now = Date.now();
+				// SA3 風: 溜め開始で全員凍結をサーバーへ通知（＋ローカル予測）
+				if (p === "card" || p === "pose") {
+					net.sendFinalVent(true, p);
+					applyPred((s) => beginFinalVent(s, selfId, p, now));
+				} else if (p === "idle") {
+					// キャンセル／タイムアウト／発動後の復帰。発動時は attack 側で既に消えていることが多い
+					net.sendFinalVent(false);
+					applyPred((s) => endFinalVent(s, selfId));
+				}
+				// カード／ポーズ相に入ったら cam ガードを即オフ（次の landmark まで残らないように）
+				if (p === "card" || p === "pose" || p === "fire") {
+					setGuardPart("cam", false);
+					setCamGuard(false);
+					setCamSide(false);
+				} else if (p === "idle") {
+					// mute 中にワーカーは on のまま変化しないことがあるので、解除時に最新値を戻す
+					setGuardPart("cam", lastCamGuarding);
+					setCamGuard(lastCamGuarding);
+				}
+			},
+			onPoseProgress: setFvPoseProgress,
+			onFire: fireFinal,
+		});
+		fvRef.current = fv;
+		fv.start();
+		// 接続時点ですでに満タンなら即アーム（meter useEffect より先に作られる場合がある）
+		{
+			const me = battleRef.current.players.find((p) => p.id === youIdRef.current);
+			fv.setMeterFull((me?.meter ?? 0) >= ARENA.meterFinalCost);
+		}
+
 		// カメラガード: 右下カメラの映像で「ボクシングの構え」を認識している間、強制的にガード。
 		// 骨格オーバーレイは smoother 経由（検出 ~15fps → 表示 60fps 補間でぬるぬる動く）。
 		// 色: 通常は MediaPipe 風の緑、ガード認識中はシアン（ひと目で状態がわかる）。
+		// FV のカード／ポーズ相では cam ガードを mute（カードが顔を隠す・突き出しと衝突するため）。
 		const skeleton = createSkeletonSmoother(() => ventCanvasRef.current);
 		const camSource = createCameraGuardSource(
 			() => ventVideoRef.current,
 			(on) => {
+				lastCamGuarding = on;
+				if (fv.isCamMuted()) {
+					setGuardPart("cam", false);
+					setCamGuard(false);
+					return;
+				}
 				setGuardPart("cam", on);
 				setCamGuard(on);
 			},
 			(lm, guarding) => {
 				camLmRef.current = lm; // 画面下ステータス（部位の生値）用。React は通さない
-				skeleton.push(lm, guarding ? "#7fdfff" : "#4ade80");
+				lastCamGuarding = guarding;
+				fv.onLandmarks(lm, performance.now());
+				const muted = fv.isCamMuted();
+				skeleton.push(lm, muted ? "#a78bfa" : guarding ? "#7fdfff" : "#4ade80");
 			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
 			// 体の向き（カメラに対して横向きか）。正面 → 横向きの瞬間に振り向く（facing 反転）。
 			// デバウンス済みの変化時のみ呼ばれるので、横向き 1 回につき 1 回だけ送られる。
 			(side) => {
+				if (fv.isCamMuted()) {
+					setCamSide(false);
+					return;
+				}
 				setCamSide(side);
 				if (side) {
 					net.sendTurn();
@@ -562,6 +639,8 @@ function BattlePage() {
 		return () => {
 			source.stop();
 			camSource.stop();
+			fv.stop();
+			fvRef.current = null;
 			skeleton.stop();
 			net.close();
 			netRef.current = null;
@@ -759,6 +838,30 @@ function BattlePage() {
 		? battle.players.find((p) => p.id === battle.winnerId) ?? null
 		: null;
 
+	// メーター満タンで FV シーケンスをアーム（OpenCV もここで lazy load）。
+	// 他プレイヤーが溜め中なら自分はアームしない（SA3 は同時に1人だけ）。
+	useEffect(() => {
+		const vent = battle.finalVent;
+		const ventingOther =
+			vent &&
+			Date.now() < vent.until &&
+			vent.playerId !== youIdRef.current;
+		const full =
+			!ventingOther && (self?.meter ?? 0) >= ARENA.meterFinalCost;
+		fvRef.current?.setMeterFull(full);
+	}, [self?.meter, battle.finalVent]);
+
+	const ventWatch = (() => {
+		const v = battle.finalVent;
+		if (!v || Date.now() >= v.until) return null;
+		const who = battle.players.find((p) => p.id === v.playerId);
+		return {
+			name: who?.riderName ?? "Rider",
+			phase: v.phase,
+			isSelf: v.playerId === youIdRef.current,
+		};
+	})();
+
 	return (
 		<div
 			style={{
@@ -938,6 +1041,9 @@ function BattlePage() {
 						guarding={camGuard}
 						poseStatus={camPose}
 						facingSide={camSide}
+						phase={fvPhase}
+						poseProgress={fvPoseProgress}
+						riderId={routine.riderId}
 						videoRef={ventVideoRef}
 						canvasRef={ventCanvasRef}
 					/>
@@ -947,11 +1053,20 @@ function BattlePage() {
 			{/* 乱入 WARNING（サーバーが全員を停止させている間、中央に表示） */}
 			{intruder != null && <IntrusionWarning name={intruder} />}
 
+			{/* ファイナルベント溜め（SA3 風）: 全員停止中に発動者のポーズを見守る */}
+			{ventWatch && (
+				<FinalVentWatchBanner
+					name={ventWatch.name}
+					phase={ventWatch.phase}
+					isSelf={ventWatch.isSelf}
+				/>
+			)}
+
 			{/* カード技発動のカットイン（カメラ寄せ＋全員停止中の「発動!!」バナー） */}
 			{cutinShow && <CutinBanner kind={cutinShow.kind} name={cutinShow.name} />}
 
-			{/* ファイナルベント演出（発動カットイン中は重複するので出さない） */}
-			{finalActive && !cutinShow && <FinalVentBanner />}
+			{/* ファイナルベント演出（発動カットイン中／溜め中は重複するので出さない） */}
+			{finalActive && !cutinShow && !ventWatch && <FinalVentBanner />}
 
 			{/* 決着スプラッシュ（この直後に /result へ遷移する） */}
 			{winner && <GameSetBanner mine={!!winner.isSelf} />}
@@ -1812,6 +1927,9 @@ function FinalVentCam({
 	guarding,
 	poseStatus,
 	facingSide,
+	phase,
+	poseProgress,
+	riderId,
 	videoRef,
 	canvasRef,
 }: {
@@ -1819,10 +1937,55 @@ function FinalVentCam({
 	guarding: boolean;
 	poseStatus: CameraGuardStatus; // ポーズ解析（骨格・ガード判定）の読み込み状態
 	facingSide: boolean; // カメラに対して横向き（向き検出）
+	phase: FinalVentPhase; // カード→ポーズ→発動のシーケンス
+	poseProgress: FinalVentPoseProgress | null;
+	riderId: string;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
 	const [state, setState] = useState<"idle" | "on" | "error">("idle");
+	// 登録の有無はマウント時に読む（登録画面から戻って再入場すれば反映）
+	const poseRegistered = useMemo(
+		() => loadFinalVentPose(riderId) != null,
+		[riderId],
+	);
+
+	const poseHint =
+		poseProgress != null
+			? `${poseProgress.stepIndex + 1}/${poseProgress.stepCount} ${poseProgress.label}`
+			: poseRegistered
+				? "登録手順を取れ！"
+				: "ポーズ！（腕を前へ）";
+
+	const phaseChrome =
+		phase === "card"
+			? {
+					border: "3px solid #c4b5fd",
+					shadow: "0 0 18px #a78bfa88",
+					badge: "CARD",
+					hint: "ファイナルベントカードをかざせ",
+					badgeBg: "#a78bfa",
+					badgeFg: "#1e1b4b",
+				}
+			: phase === "pose"
+				? {
+						border: "3px solid #f0abfc",
+						shadow: "0 0 18px #e879f988",
+						badge: "POSE",
+						hint: poseHint,
+						badgeBg: "#e879f9",
+						badgeFg: "#4a044e",
+					}
+				: phase === "fire"
+					? {
+							border: "3px solid #a78bfa",
+							shadow: "0 0 22px #a78bfa",
+							badge: "FIRE",
+							hint: "ファイナルベント！",
+							badgeBg: "#7c3aed",
+							badgeFg: "#fff",
+						}
+					: null;
 
 	async function enable() {
 		try {
@@ -1869,14 +2032,18 @@ function FinalVentCam({
 				background: "#000",
 				border: highlight
 					? "3px solid #a78bfa"
-					: guarding
-						? "3px solid #7fdfff"
-						: "2px solid #334155",
+					: phaseChrome
+						? phaseChrome.border
+						: guarding
+							? "3px solid #7fdfff"
+							: "2px solid #334155",
 				boxShadow: highlight
 					? "0 0 20px #a78bfa"
-					: guarding
-						? "0 0 20px #7fdfff"
-						: "0 4px 12px rgba(0,0,0,0.4)",
+					: phaseChrome
+						? phaseChrome.shadow
+						: guarding
+							? "0 0 20px #7fdfff"
+							: "0 4px 12px rgba(0,0,0,0.4)",
 				transition: "border 0.2s, box-shadow 0.2s",
 			}}
 		>
@@ -1920,8 +2087,92 @@ function FinalVentCam({
 			>
 				FINAL VENT CAM
 			</span>
-			{/* 横向き検出中の表示 */}
-			{facingSide && (
+			{/* ポーズ未登録時は登録画面への導線（シーケンス中は邪魔なので隠す） */}
+			{!phaseChrome && (
+				<Link
+					to="/final-vent-pose"
+					search={{ rider: riderId }}
+					style={{
+						position: "absolute",
+						right: "6px",
+						top: facingSide ? "26px" : "4px",
+						fontSize: "0.65rem",
+						fontWeight: 700,
+						color: poseRegistered ? "#cbd5e1" : "#1e1b4b",
+						background: poseRegistered
+							? "rgba(15,23,42,0.7)"
+							: "#c4b5fd",
+						padding: "1px 6px",
+						borderRadius: "4px",
+						textDecoration: "none",
+						zIndex: 2,
+					}}
+				>
+					{poseRegistered ? "ポーズ変更" : "ポーズ登録"}
+				</Link>
+			)}
+			{/* FV シーケンス（カード→ポーズ）。ガード／横向き表示より優先 */}
+			{phaseChrome && (
+				<>
+					<span
+						style={{
+							position: "absolute",
+							right: "6px",
+							top: "4px",
+							fontSize: "0.7rem",
+							fontWeight: 900,
+							color: phaseChrome.badgeFg,
+							background: phaseChrome.badgeBg,
+							padding: "1px 8px",
+							borderRadius: "4px",
+							letterSpacing: "0.08em",
+						}}
+					>
+						{phaseChrome.badge}
+					</span>
+					<span
+						style={{
+							position: "absolute",
+							left: "6px",
+							right: "6px",
+							bottom: "28px",
+							fontSize: "0.72rem",
+							fontWeight: 800,
+							color: "#fff",
+							textAlign: "center",
+							textShadow: "0 1px 4px rgba(0,0,0,0.85)",
+							pointerEvents: "none",
+						}}
+					>
+						{phaseChrome.hint}
+					</span>
+					{phase === "pose" && poseProgress && (
+						<div
+							style={{
+								position: "absolute",
+								left: "10px",
+								right: "10px",
+								bottom: "10px",
+								height: "6px",
+								borderRadius: "3px",
+								background: "rgba(0,0,0,0.45)",
+								overflow: "hidden",
+							}}
+						>
+							<div
+								style={{
+									width: `${Math.round(poseProgress.progress * 100)}%`,
+									height: "100%",
+									background: poseProgress.active ? "#e879f9" : "#64748b",
+									transition: "width 0.08s linear",
+								}}
+							/>
+						</div>
+					)}
+				</>
+			)}
+			{/* 横向き検出中の表示（FV シーケンス中は隠す） */}
+			{facingSide && !phaseChrome && (
 				<span
 					style={{
 						position: "absolute",
@@ -1962,8 +2213,8 @@ function FinalVentCam({
 						: "ポーズ解析 準備中…"}
 				</span>
 			)}
-			{/* カメラガード認識中の表示（構えている間ガード状態） */}
-			{guarding && (
+			{/* カメラガード認識中の表示（構えている間ガード状態）。FV シーケンス中は隠す */}
+			{guarding && !phaseChrome && (
 				<span
 					style={{
 						position: "absolute",
@@ -2003,6 +2254,80 @@ function FinalVentCam({
 }
 
 // ---- 演出オーバーレイ ----------------------------------------------------
+
+// ファイナルベント溜め中の SA3 風バナー。全員停止＋カメラ寄せのあいだ表示。
+function FinalVentWatchBanner({
+	name,
+	phase,
+	isSelf,
+}: {
+	name: string;
+	phase: "card" | "pose";
+	isSelf: boolean;
+}) {
+	const sub =
+		phase === "card"
+			? isSelf
+				? "カードをかざせ"
+				: "カード認証中…"
+			: isSelf
+				? "ポーズを取れ！"
+				: "ポーズ発動を見守れ";
+	return (
+		<div
+			style={{
+				position: "fixed",
+				inset: 0,
+				display: "flex",
+				flexDirection: "column",
+				alignItems: "center",
+				justifyContent: "flex-start",
+				paddingTop: "12vh",
+				gap: "0.35rem",
+				pointerEvents: "none",
+				zIndex: 38,
+				background:
+					"radial-gradient(ellipse at center, rgba(88,28,135,0.35) 0%, rgba(0,0,0,0.55) 70%)",
+			}}
+		>
+			<span
+				style={{
+					fontSize: "0.85rem",
+					fontWeight: 800,
+					letterSpacing: "0.45em",
+					color: "#e9d5ff",
+					textShadow: "0 0 12px #a78bfa",
+				}}
+			>
+				FINAL VENT
+			</span>
+			<span
+				style={{
+					fontSize: "clamp(2rem, 6vw, 3.2rem)",
+					fontWeight: 900,
+					fontStyle: "italic",
+					color: "#fff",
+					textShadow: "0 0 24px #a78bfa, 0 4px 0 #4c1d95",
+					transform: "skewX(-6deg)",
+				}}
+			>
+				{name}
+			</span>
+			<span
+				style={{
+					marginTop: "0.4rem",
+					fontSize: "1.05rem",
+					fontWeight: 800,
+					color: phase === "pose" ? "#f0abfc" : "#c4b5fd",
+					letterSpacing: "0.12em",
+					textShadow: "0 0 10px rgba(0,0,0,0.8)",
+				}}
+			>
+				{sub}
+			</span>
+		</div>
+	);
+}
 
 // カード技発動のカットインバナー。サーバーが cutin で全員を停止し、カメラが発動者へ
 // 寄っている間（~0.9s）、中央に「◯◯ 発動!!」を出す。色はカードと対応。

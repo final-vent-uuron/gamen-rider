@@ -2,6 +2,8 @@
 // id は対応する技（＝GLB モーション名ベース）: ストライクベント=skill /
 // エラーベント=error-mode / ファイナルベント=final-vent（クリップは special）。
 // kind は表示チップと解禁条件（final はゲージ満タンのみ）のヒント。
+//
+// ファイナルベントの「かざすカード」参照画像は finalVentCam.ts の FINAL_VENT_CARD_REF。
 
 export type BattleCardKind = 'attack' | 'special' | 'final'
 

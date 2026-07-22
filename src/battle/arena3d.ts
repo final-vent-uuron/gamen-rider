@@ -789,9 +789,15 @@ export function createArenaRenderer(
 
 		// カード技のカットイン演出中: 全アバターのアニメを静止させ（ゲーム状態も
 		// サーバー側で完全停止している）、下のカメラ処理で発動者へ寄る。
+		// ファイナルベント溜め（SA3 風）も同様に全員静止＋発動者へ寄る。
 		const cutin =
 			state.cutin && Date.now() < state.cutin.until ? state.cutin : null;
-		if (cutin) {
+		const vent =
+			state.finalVent && Date.now() < state.finalVent.until
+				? state.finalVent
+				: null;
+		const focusPlayerId = cutin?.playerId ?? vent?.playerId ?? null;
+		if (cutin || vent) {
 			if (cutinFrozenT === null) cutinFrozenT = t;
 		} else {
 			cutinFrozenT = null;
@@ -951,8 +957,8 @@ export function createArenaRenderer(
 		ventLight.intensity = lerp(ventLight.intensity, final ? 3.2 : 0, 0.12);
 
 		// カットイン中は発動者へ斜め前から寄る近接カット（明けたら通常カメラの damp で自然に引く）
-		const cutinPlayer = cutin
-			? state.players.find((p) => p.id === cutin.playerId)
+		const cutinPlayer = focusPlayerId
+			? state.players.find((p) => p.id === focusPlayerId)
 			: null;
 		if (cutinPlayer) {
 			const wx = worldX(cutinPlayer.x);

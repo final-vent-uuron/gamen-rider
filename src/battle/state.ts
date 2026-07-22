@@ -87,6 +87,14 @@ export interface BattleState {
   // until まで全員完全停止し、クライアントは発動者へカメラを寄せてバナーを出す。
   // 技のタイムラインは停止ぶん後ろへずらしてあるので、停止明けからモーションが動き出す。
   cutin?: { playerId: string; kind: 'shot' | 'abare' | 'final'; until: number } | null
+  // ファイナルベント「溜め」（カード→ポーズ手順）。ストリートファイター SA3 風に
+  // until まで全員完全停止し、発動者へカメラを寄せてみんなでポーズを見守る。
+  // 発動成功で final 技へ遷移（このフィールドは消える）。タイムアウト／キャンセルでも解除。
+  finalVent?: {
+    playerId: string
+    phase: 'card' | 'pose'
+    until: number
+  } | null
 }
 
 // バランス・当たり判定パラメータ。ここだけ触れば挙動が変わる。
@@ -158,6 +166,10 @@ export const ARENA = {
 
   // カード技発動のカットイン演出（全員停止＋カメラ寄せ＋バナー）の時間。
   cutinMs: 1800,
+
+  // ファイナルベント溜め（カード＋ポーズ手順）の最大凍結時間。
+  // これを超えるとサーバーが自動解除（カメラ占有の永久フリーズ防止）。
+  finalVentMaxMs: 28000,
 } as const
 
 // 技のフレームデータ（ミリ秒）。startup=発生, active=持続, recovery=硬直。
@@ -413,6 +425,11 @@ export function stepBattle(
   if (now < (state.intrusionUntil ?? 0)) return state
   // カード技のカットイン演出中も同様に完全停止（カメラ寄せ＋バナーの間）。
   if (now < (state.cutin?.until ?? 0)) return state
+  // ファイナルベント溜めの期限切れを掃除してから、有効なら完全停止。
+  if (state.finalVent && now >= state.finalVent.until) {
+    state = { ...state, finalVent: null }
+  }
+  if (state.finalVent && now < state.finalVent.until) return state
   const dt = Math.min(dtMs, 50) / 1000
   const moved = state.players.map((p) => {
     if (p.hp <= 0)
@@ -572,6 +589,14 @@ function startMove(
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
   if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
+  // FV 溜め中は発動者の final だけ通す（ポーズ完走 → 必殺）。他は全部拒否。
+  const venting =
+    state.finalVent &&
+    now < state.finalVent.until &&
+    state.finalVent.playerId === id
+  if (state.finalVent && now < state.finalVent.until && !(venting && kind === 'final')) {
+    return state
+  }
   const attacker = state.players.find((p) => p.id === id)
   if (!attacker || attacker.hp <= 0) return state
 
@@ -589,7 +614,10 @@ function startMove(
   const f = MOVES[kind]
   // カード技（shot/final）はカットイン演出（cutinMs の全員停止）を挟むため、
   // 技のタイムラインを停止ぶん後ろへずらす（停止明けからモーションが動き出す）。
-  const cutinDelay = kind === 'shot' || kind === 'final' ? ARENA.cutinMs : 0
+  // FV 溜めから入った final はすでに長めの停止を見せたのでカットインを短めに。
+  const fromVent = !!(venting && kind === 'final')
+  const cutinDelay =
+    kind === 'shot' ? ARENA.cutinMs : kind === 'final' ? (fromVent ? 900 : ARENA.cutinMs) : 0
   const activeFrom = now + cutinDelay + f.startup
   const activeTo = activeFrom + f.active
   const recoveryTo = activeTo + f.recovery
@@ -625,6 +653,8 @@ function startMove(
   return {
     ...state,
     players,
+    // 溜め状態は技開始で解除（以降は通常の cutin 演出）
+    finalVent: fromVent ? null : state.finalVent,
     cutin: cutinDelay
       ? { playerId: id, kind: kind as 'shot' | 'final', until: now + cutinDelay }
       : state.cutin,
@@ -660,6 +690,7 @@ export function applyAbare(state: BattleState, playerId: string, now: number): B
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
   if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
+  if (isFinalVentActive(state, now)) return state // FV 溜め中は行動不可
   const self = state.players.find((p) => p.id === playerId)
   if (!self || self.hp <= 0) return state
   if (self.meter < ARENA.abareCost) return state
@@ -971,6 +1002,7 @@ export function applyJump(state: BattleState, playerId: string, now: number): Ba
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
   if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
+  if (isFinalVentActive(state, now)) return state // FV 溜め中は行動不可
   let changed = false
   const players = state.players.map((p) => {
     if (p.id !== playerId) return p
@@ -993,6 +1025,7 @@ export function applyTurn(state: BattleState, playerId: string, now: number): Ba
   if (state.winnerId) return state
   if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
   if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
+  if (isFinalVentActive(state, now)) return state // FV 溜め中は行動不可
   let changed = false
   const players = state.players.map((p) => {
     if (p.id !== playerId) return p
@@ -1008,4 +1041,51 @@ function checkWinner(state: BattleState): BattleState {
   const alive = state.players.filter((p) => p.hp > 0)
   if (alive.length <= 1) return { ...state, winnerId: alive[0]?.id ?? null }
   return state
+}
+
+function isFinalVentActive(state: BattleState, now: number): boolean {
+  return !!(state.finalVent && now < state.finalVent.until)
+}
+
+// ファイナルベント溜め開始／フェーズ更新（SA3 風の全員停止）。
+// 他プレイヤーが既に溜め中なら拒否。同一プレイヤーの phase 更新は until を延長せず維持。
+export function beginFinalVent(
+  state: BattleState,
+  playerId: string,
+  phase: 'card' | 'pose',
+  now: number,
+): BattleState {
+  if (state.winnerId) return state
+  if (now < (state.intrusionUntil ?? 0)) return state
+  if (now < (state.cutin?.until ?? 0)) return state
+  const self = state.players.find((p) => p.id === playerId)
+  if (!self || self.hp <= 0) return state
+  if (self.meter < ARENA.meterFinalCost) return state
+
+  const current = state.finalVent
+  if (current && now < current.until && current.playerId !== playerId) {
+    return state // 他人の溜めを奪わない
+  }
+  if (current && now < current.until && current.playerId === playerId) {
+    if (current.phase === phase) return state
+    return { ...state, finalVent: { ...current, phase } }
+  }
+  return {
+    ...state,
+    finalVent: {
+      playerId,
+      phase,
+      until: now + ARENA.finalVentMaxMs,
+    },
+  }
+}
+
+// ファイナルベント溜めの解除（タイムアウト・キャンセル・切断時）。
+export function endFinalVent(
+  state: BattleState,
+  playerId?: string,
+): BattleState {
+  if (!state.finalVent) return state
+  if (playerId && state.finalVent.playerId !== playerId) return state
+  return { ...state, finalVent: null }
 }
