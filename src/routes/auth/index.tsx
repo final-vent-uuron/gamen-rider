@@ -1,4 +1,4 @@
-import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
@@ -304,21 +304,6 @@ function AuthPage() {
       {/* ヘッダー */}
       <div style={{ width: '100%', maxWidth: '800px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
         <h1 style={{ margin: 0, fontSize: '1.5rem' }}>ライダー認証</h1>
-        <Link
-          to="/auth/register"
-          style={{
-            marginLeft: 'auto',
-            padding: '0.4rem 1rem',
-            background: '#a78bfa',
-            color: '#000',
-            borderRadius: '8px',
-            textDecoration: 'none',
-            fontWeight: 'bold',
-            fontSize: '0.9rem',
-          }}
-        >
-          ➕ ライダー登録
-        </Link>
       </div>
 
       {/* フェーズインジケータ */}
