@@ -1,25 +1,33 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 
-import appleUrl from '#/assets/refs/apple.png'
-import bananaUrl from '#/assets/refs/banana.png'
-import grapeUrl from '#/assets/refs/grape.png'
-import agonekoUrl from '#/assets/refs/agoneko.png'
-import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../card'
-import type { CardMatch, CardMatcher, CardRef, MatchStats } from '../card'
+import { CAMERA_HEIGHT, CAMERA_WIDTH, THRESHOLDS, createCardMatcher } from '../card'
+import type { CardMatch, CardMatcher, CardRef, MatchStats, RefStat } from '../card'
+import { listRiders } from '../rider-registry'
+import type { RegisteredRiderWithImage } from '../rider-registry'
 
 export const Route = createFileRoute('/detect')({ component: DetectPage })
 
 type Status = 'loading' | 'ready' | 'running' | 'error'
 
-// 照合に使う参照画像。label を変えればそのまま表示名になる。
-// 画像を差し替える場合は src/assets/refs/ のファイルを置き換えるだけでよい。
-const REFERENCES: CardRef[] = [
-  { id: 'apple', label: 'リンゴ', url: appleUrl },
-  { id: 'banana', label: 'バナナ', url: bananaUrl },
-  { id: 'grape', label: 'ブドウ', url: grapeUrl },
-  { id: 'agoneko', label: 'あごねこ', url: agonekoUrl },
-]
+// 落ちた理由の表示名。engine の RejectReason に対応する。
+const REASON_LABEL: Record<RefStat['reason'], string> = {
+  ok: '',
+  'few-good': '対応不足',
+  'no-homography': '変形不成立',
+  degenerate: '形が退化',
+  'low-ratio': '率不足',
+}
+
+const C = {
+  ok: '#4ade80',
+  ng: '#f87171',
+  warn: '#fbbf24',
+  dim: '#6b7280',
+  text: '#9ca3af',
+  panel: '#111827',
+  bar: '#374151',
+} as const
 
 function DetectPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -27,32 +35,54 @@ function DetectPage() {
   const matcherRef = useRef<CardMatcher | null>(null)
   const rafRef = useRef<number>(0)
   const isRunningRef = useRef(false)
-  // 毎フレーム重ねる確定ラベル（matcher が返す安定値）。
   const overlayLabelRef = useRef<string | null>(null)
+  // 特徴点の重ね描きは毎フレーム行うので、最後の stats を ref でも保持する。
+  const lastStatsRef = useRef<MatchStats | null>(null)
+  const showPointsRef = useRef(true)
 
   const [status, setStatus] = useState<Status>('loading')
   const [match, setMatch] = useState<CardMatch | null>(null)
-  // しきい値調整用の内訳表示。毎フレーム setState すると重いので一定間隔だけ反映する。
   const [stats, setStats] = useState<MatchStats | null>(null)
+  const [refs, setRefs] = useState<CardRef[]>([])
+  const [showPoints, setShowPoints] = useState(true)
   const lastStatsUiRef = useRef(0)
 
-  // カードマッチャ（OpenCV ロード＋参照画像の特徴量事前計算）を用意する。
+  // 登録済みライダーの参照画像でマッチャを用意する（debug 有効）。
   useEffect(() => {
-    const matcher = createCardMatcher(REFERENCES)
-    matcherRef.current = matcher
     let cancelled = false
-    matcher.ready
-      .then(() => {
+    let matcher: CardMatcher | null = null
+
+    async function init() {
+      let registered: RegisteredRiderWithImage[] = []
+      try {
+        registered = await listRiders()
+      } catch {
+        registered = [] // 読み込めない環境ではプレースホルダだけで続行する
+      }
+      if (cancelled) return
+
+      const all: CardRef[] = registered.map((r) => ({
+        id: r.id,
+        label: r.name,
+        url: r.imageDataUrl,
+      }))
+      setRefs(all)
+      matcher = createCardMatcher(all, { debug: true })
+      matcherRef.current = matcher
+      try {
+        await matcher.ready
         if (!cancelled) setStatus('ready')
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setStatus('error')
-      })
+      }
+    }
+    init()
+
     return () => {
       cancelled = true
       isRunningRef.current = false
       cancelAnimationFrame(rafRef.current)
-      matcher.dispose()
+      matcher?.dispose()
       matcherRef.current = null
     }
   }, [])
@@ -74,7 +104,6 @@ function DetectPage() {
     const ctx = canvas.getContext('2d')!
     ctx.drawImage(video, 0, 0)
 
-    // 検出は matcher が間引き＋安定化して「確定中のマッチ」を返す。
     const now = performance.now()
     const current = matcher.detect(video, now)
     const label = current?.label ?? null
@@ -83,13 +112,15 @@ function DetectPage() {
       setMatch(current)
     }
 
-    // 内訳（sharpness / インライア数）を 200ms ごとに反映する。
+    // 特徴点は毎フレーム重ねたいので ref に、パネルは 200ms ごとに state へ。
+    const s = matcher.stats()
+    lastStatsRef.current = s
     if (now - lastStatsUiRef.current > 200) {
       lastStatsUiRef.current = now
-      setStats(matcher.stats())
+      setStats(s)
     }
 
-    // 最後に確定したラベルを毎フレーム重ねる。
+    if (showPointsRef.current) drawPoints(ctx, canvas, lastStatsRef.current)
     drawOverlay(ctx, canvas, overlayLabelRef.current)
 
     rafRef.current = requestAnimationFrame(detect)
@@ -111,6 +142,7 @@ function DetectPage() {
       isRunningRef.current = true
       matcherRef.current?.reset()
       overlayLabelRef.current = null
+      lastStatsRef.current = null
       setMatch(null)
       setStats(null)
       setStatus('running')
@@ -131,6 +163,7 @@ function DetectPage() {
     const canvas = canvasRef.current
     if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
     overlayLabelRef.current = null
+    lastStatsRef.current = null
     setMatch(null)
     setStats(null)
     setStatus('ready')
@@ -148,42 +181,43 @@ function DetectPage() {
       }}
     >
       <div
-        style={{
-          width: '100%',
-          maxWidth: '800px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '1rem',
-        }}
+        style={{ width: '100%', maxWidth: 900, display: 'flex', alignItems: 'center', gap: '1rem' }}
       >
-        <Link to="/" style={{ color: '#9ca3af', textDecoration: 'none', fontSize: '0.9rem' }}>
+        <Link to="/" style={{ color: C.text, textDecoration: 'none', fontSize: '0.9rem' }}>
           ← Back
         </Link>
-        <h1 style={{ margin: 0, fontSize: '1.5rem' }}>画像検知</h1>
-        {status === 'running' && stats && (
-          <span
-            style={{
-              marginLeft: 'auto',
-              color: stats.blurred ? '#fbbf24' : match ? '#4ade80' : '#9ca3af',
-              fontSize: '0.85rem',
-              fontFamily: 'monospace',
+        <h1 style={{ margin: 0, fontSize: '1.5rem' }}>画像検知ラボ</h1>
+        <label
+          style={{
+            marginLeft: 'auto',
+            fontSize: '0.8rem',
+            color: C.text,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.35rem',
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showPoints}
+            onChange={(e) => {
+              setShowPoints(e.target.checked)
+              showPointsRef.current = e.target.checked
             }}
-          >
-            {stats.blurred
-              ? `blurred (sharp ${stats.sharpness.toFixed(0)})`
-              : `sharp ${stats.sharpness.toFixed(0)} · ${stats.bestInliers}/${stats.secondInliers} pts`}
-          </span>
-        )}
+          />
+          特徴点を重ねる
+        </label>
       </div>
 
       <div
         style={{
           position: 'relative',
           background: '#1f2937',
-          borderRadius: '12px',
+          borderRadius: 12,
           overflow: 'hidden',
           width: '100%',
-          maxWidth: '800px',
+          maxWidth: 900,
           aspectRatio: '4/3',
           display: 'flex',
           alignItems: 'center',
@@ -204,9 +238,9 @@ function DetectPage() {
               left: '50%',
               transform: 'translateX(-50%)',
               padding: '0.5rem 1.5rem',
-              borderRadius: '999px',
+              borderRadius: 999,
               background: match ? 'rgba(74,222,128,0.9)' : 'rgba(31,41,55,0.8)',
-              color: match ? '#000' : '#9ca3af',
+              color: match ? '#000' : C.text,
               fontSize: '1.4rem',
               fontWeight: 'bold',
               transition: 'background 0.2s',
@@ -226,13 +260,13 @@ function DetectPage() {
               justifyContent: 'center',
               flexDirection: 'column',
               gap: '0.75rem',
-              color: '#9ca3af',
+              color: C.text,
             }}
           >
-            {status === 'loading' && <p style={{ margin: 0 }}>モデルと参照画像を読み込み中...</p>}
+            {status === 'loading' && <p style={{ margin: 0 }}>参照画像を読み込み中...</p>}
             {status === 'ready' && <p style={{ margin: 0 }}>Start を押してカメラを起動</p>}
             {status === 'error' && (
-              <p style={{ margin: 0, color: '#f87171' }}>
+              <p style={{ margin: 0, color: C.ng }}>
                 エラーが発生しました。カメラの権限を確認してください。
               </p>
             )}
@@ -244,65 +278,240 @@ function DetectPage() {
         <button
           onClick={handleStart}
           disabled={status !== 'ready'}
-          style={{
-            padding: '0.6rem 2rem',
-            fontSize: '1rem',
-            background: status === 'ready' ? '#4ade80' : '#374151',
-            color: status === 'ready' ? '#000' : '#6b7280',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: status === 'ready' ? 'pointer' : 'not-allowed',
-            fontWeight: 'bold',
-          }}
+          style={buttonStyle(status === 'ready', C.ok)}
         >
           Start
         </button>
         <button
           onClick={handleStop}
           disabled={status !== 'running'}
-          style={{
-            padding: '0.6rem 2rem',
-            fontSize: '1rem',
-            background: status === 'running' ? '#f87171' : '#374151',
-            color: status === 'running' ? '#000' : '#6b7280',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: status === 'running' ? 'pointer' : 'not-allowed',
-            fontWeight: 'bold',
-          }}
+          style={buttonStyle(status === 'running', C.ng)}
         >
           Stop
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-        {REFERENCES.map((ref) => (
-          <div
-            key={ref.id}
-            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}
-          >
-            <img
-              src={ref.url}
-              alt={ref.label}
-              style={{
-                width: 48,
-                height: 48,
-                objectFit: 'cover',
-                borderRadius: 8,
-                border:
-                  match?.label === ref.label ? '2px solid #4ade80' : '2px solid transparent',
-              }}
-            />
-            <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{ref.label}</span>
-          </div>
-        ))}
-      </div>
+      <ScorePanel stats={stats} refs={refs} />
 
-      <p style={{ color: '#6b7280', fontSize: '0.8rem', margin: 0 }}>
-        ORB 特徴点マッチング（OpenCV.js）· 用意した画像をカメラにかざしてください（離れていても・斜めでも・背景込みでOK）
+      <p style={{ color: C.dim, fontSize: '0.8rem', margin: 0, maxWidth: 900, textAlign: 'center' }}>
+        灰色の点＝ORB が拾った特徴点 / 緑の点＝1位の参照画像と幾何的に整合した点（インライア）。
+        緑がカード上に集まっていれば正しく効いており、灰色ばかりが背景に散っていれば
+        特徴点が無駄撃ちされている。
       </p>
     </div>
   )
+}
+
+/** 参照画像ごとのスコアと、判定ゲートの通過状況を表示する。 */
+function ScorePanel({ stats, refs }: { stats: MatchStats | null; refs: CardRef[] }) {
+  if (!stats) {
+    return (
+      <div style={{ width: '100%', maxWidth: 900, color: C.dim, fontSize: '0.85rem' }}>
+        Start するとここにスコアが出ます（参照画像 {refs.length} 枚）
+      </div>
+    )
+  }
+
+  const margin = stats.bestInliers - stats.secondInliers
+  // good が伸びているのに inliers が伸びない、が一目で分かるよう両方を同じ物差しで描く。
+  const scale = Math.max(THRESHOLDS.MATCH_MIN_INLIERS * 2, ...stats.refs.map((r) => r.good), 1)
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        maxWidth: 900,
+        background: C.panel,
+        borderRadius: 12,
+        padding: '0.9rem 1rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.7rem',
+        fontFamily: 'monospace',
+        fontSize: '0.8rem',
+      }}
+    >
+      <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
+        <Gate
+          label="sharp"
+          value={stats.sharpness.toFixed(0)}
+          need={`>= ${THRESHOLDS.MIN_SHARPNESS}`}
+          pass={!stats.blurred}
+        />
+        <Gate
+          label="特徴点"
+          value={`${stats.frameKeypoints}`}
+          need={`/ ${THRESHOLDS.ORB_FEATURES}`}
+          pass={stats.frameKeypoints > 0}
+        />
+        <Gate
+          label="1位"
+          value={`${stats.bestInliers}`}
+          need={`>= ${THRESHOLDS.MATCH_MIN_INLIERS}`}
+          pass={stats.bestInliers >= THRESHOLDS.MATCH_MIN_INLIERS}
+        />
+        <Gate
+          label="2位との差"
+          value={`${margin}`}
+          need={`>= ${THRESHOLDS.MATCH_MARGIN}`}
+          pass={margin >= THRESHOLDS.MATCH_MARGIN}
+        />
+      </div>
+
+      {stats.blurred ? (
+        <div style={{ color: C.warn }}>ブレ検出のため照合をスキップしました</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+          {stats.refs.map((r) => (
+            <ScoreRow
+              key={r.id}
+              stat={r}
+              scale={scale}
+              isBest={r.label === stats.bestLabel && r.inliers > 0}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Gate({
+  label,
+  value,
+  need,
+  pass,
+}: {
+  label: string
+  value: string
+  need: string
+  pass: boolean
+}) {
+  return (
+    <span style={{ color: C.text }}>
+      {label} <strong style={{ color: pass ? C.ok : C.ng, fontSize: '1rem' }}>{value}</strong>{' '}
+      <span style={{ color: C.dim }}>{need}</span>
+    </span>
+  )
+}
+
+/** 1参照画像ぶんの棒グラフ。薄い棒=good（比率テスト通過）、濃い棒=inliers（幾何検算通過）。 */
+function ScoreRow({ stat, scale, isBest }: { stat: RefStat; scale: number; isBest: boolean }) {
+  const pct = (n: number) => `${Math.min(100, (n / scale) * 100)}%`
+  const ratio = stat.good > 0 ? stat.inliers / stat.good : 0
+  const reason = REASON_LABEL[stat.reason]
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+      <span
+        style={{
+          width: 110,
+          flexShrink: 0,
+          color: isBest ? C.ok : C.text,
+          fontWeight: isBest ? 'bold' : 'normal',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+        title={stat.label}
+      >
+        {stat.label}
+      </span>
+
+      <div style={{ position: 'relative', flex: 1, height: 16, background: C.bar, borderRadius: 3 }}>
+        {/* good（対応がついた総数）を薄く */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: pct(stat.good),
+            background: 'rgba(148,163,184,0.45)',
+            borderRadius: 3,
+          }}
+        />
+        {/* inliers（幾何的に整合した数）を濃く */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: pct(stat.inliers),
+            background: isBest ? C.ok : '#64748b',
+            borderRadius: 3,
+          }}
+        />
+        {/* MATCH_MIN_INLIERS の位置に基準線 */}
+        <div
+          style={{
+            position: 'absolute',
+            top: -2,
+            bottom: -2,
+            left: pct(THRESHOLDS.MATCH_MIN_INLIERS),
+            width: 2,
+            background: C.warn,
+          }}
+          title={`MATCH_MIN_INLIERS = ${THRESHOLDS.MATCH_MIN_INLIERS}`}
+        />
+      </div>
+
+      <span style={{ width: 150, flexShrink: 0, color: C.dim, textAlign: 'right' }}>
+        {stat.inliers}/{stat.good} 率{(ratio * 100).toFixed(0)}%
+        {reason && <span style={{ color: C.warn }}> {reason}</span>}
+      </span>
+      <span style={{ width: 60, flexShrink: 0, color: C.dim, textAlign: 'right' }}>
+        kp {stat.refKeypoints}
+      </span>
+    </div>
+  )
+}
+
+function buttonStyle(enabled: boolean, color: string) {
+  return {
+    padding: '0.6rem 2rem',
+    fontSize: '1rem',
+    background: enabled ? color : '#374151',
+    color: enabled ? '#000' : C.dim,
+    border: 'none',
+    borderRadius: 8,
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    fontWeight: 'bold',
+  } as const
+}
+
+/**
+ * ORB が拾った特徴点と、1位の参照画像と整合した点をプレビューに重ねる。
+ * 座標は処理解像度（stats.processWidth）基準なので canvas サイズへ換算する。
+ */
+function drawPoints(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  stats: MatchStats | null,
+) {
+  if (!stats || !stats.framePoints || !stats.processWidth) return
+  const k = canvas.width / stats.processWidth
+  const r = Math.max(1.5, canvas.width / 500)
+
+  ctx.save()
+  // 特徴点は最大 ORB_FEATURES 個あり毎フレーム描くので、円ではなく矩形で塗る（arc より大幅に軽い）。
+  ctx.fillStyle = 'rgba(148,163,184,0.55)'
+  const all = stats.framePoints
+  const d = r * 2
+  for (let i = 0; i < all.length; i += 2) {
+    ctx.fillRect(all[i] * k - r, all[i + 1] * k - r, d, d)
+  }
+
+  const inl = stats.bestInlierPoints
+  if (inl && inl.length > 0) {
+    ctx.fillStyle = '#4ade80'
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)'
+    ctx.lineWidth = 1
+    for (let i = 0; i < inl.length; i += 2) {
+      ctx.beginPath()
+      ctx.arc(inl[i] * k, inl[i + 1] * k, r * 2, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+    }
+  }
+  ctx.restore()
 }
 
 /** 検知中ラベルを映像の上に重ねる。 */
@@ -315,12 +524,11 @@ function drawOverlay(
   ctx.save()
   ctx.font = `bold ${Math.round(canvas.height * 0.08)}px sans-serif`
   ctx.textBaseline = 'top'
-  const text = label
   const pad = canvas.height * 0.02
-  const metrics = ctx.measureText(text)
+  const metrics = ctx.measureText(label)
   ctx.fillStyle = 'rgba(74,222,128,0.85)'
   ctx.fillRect(pad, pad, metrics.width + pad * 2, canvas.height * 0.11)
   ctx.fillStyle = '#000'
-  ctx.fillText(text, pad * 2, pad * 1.5)
+  ctx.fillText(label, pad * 2, pad * 1.5)
   ctx.restore()
 }

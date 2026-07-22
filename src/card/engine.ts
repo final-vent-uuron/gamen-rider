@@ -22,13 +22,13 @@ const RATIO = 0.75
 // findHomography(RANSAC) の再投影誤差しきい値（px）。
 const RANSAC_REPROJ = 5
 // 幾何的に整合する一致点（インライア）がこの数以上ならマッチ候補とする。
-const MATCH_MIN_INLIERS = 12
+const MATCH_MIN_INLIERS = 7
 // 1位と2位のインライア差。これ未満なら「どれか曖昧」として未確定にする（似た画像の誤確定防止）。
 const MATCH_MARGIN = 6
 // インライア「率」（インライア数 / 比率テストを通った対応数）の下限。
 // 数だけだと、背景の雑多な特徴点にたまたま多く当たった場合に閾値を超えうる。
 // 本物のカードが映っていれば良い対応の大半が1枚の平面変形で説明できる＝率が高くなる。
-const MIN_INLIER_RATIO = 0.35
+const MIN_INLIER_RATIO = 0.25
 // CLAHE（局所ヒストグラム平坦化）の強さとタイルサイズ。
 // 照明ムラ・テカリ・逆光を吸収する。clip を上げすぎるとノイズまで強調されるので 2.0 前後。
 const CLAHE_CLIP = 2.0
@@ -40,12 +40,23 @@ const MIN_SHARPNESS = 25
 // 射影した参照画像の四隅がこの面積（処理px²）未満なら退化した変形として捨てる。
 const MIN_QUAD_AREA = 256
 // 同じ結果がこの回数連続したら確定（チラつき防止）。
-const STABLE_FRAMES = 4
+const STABLE_FRAMES = 2
 // 検出を回す最小間隔(ms)。表示は毎フレーム描くのでプレビューは滑らかなまま、検出だけ間引く。
 const DETECT_INTERVAL_MS = 110
 
 // OpenCV.js は emscripten モジュールで型が部分的なため any 扱いにする。
 export type Cv = any
+
+// 判定に使っているしきい値を UI に公開する（/detect の調整ラボがグラフの基準線に使う）。
+// UI 側で数値を書き写すと調整のたびに二重管理になるので、必ずここを参照させる。
+export const THRESHOLDS = {
+  ORB_FEATURES,
+  MATCH_MIN_INLIERS,
+  MATCH_MARGIN,
+  MIN_INLIER_RATIO,
+  MIN_SHARPNESS,
+  RATIO,
+} as const
 
 // カードの参照画像1枚分の定義。url は import した asset を渡す想定。
 export interface CardRef {
@@ -221,7 +232,35 @@ function quadIsPlausible(pts: ArrayLike<number>): boolean {
 }
 
 /**
- * 現在フレームと参照画像1枚を照合し、幾何的に整合する一致点（インライア）数を返す。
+ * インライアが 0 に落とされた理由。/detect の調整ラボが「なぜ通らないか」を出すのに使う。
+ * ok=素通り / few-good=比率テスト後の対応が4点未満 / no-homography=変形を求められない
+ * degenerate=射影した四隅が潰れている / low-ratio=インライア率が MIN_INLIER_RATIO 未満
+ */
+export type RejectReason = 'ok' | 'few-good' | 'no-homography' | 'degenerate' | 'low-ratio'
+
+/** 参照画像1枚との照合結果の内訳。 */
+export interface RefStat {
+  id: string
+  label: string
+  // 参照画像から抽出できた特徴点の数。カードの「素材としての情報量」。少なすぎるカードは苦しい。
+  refKeypoints: number
+  // 比率テストを通った対応の数。
+  good: number
+  // 幾何検算を生き残った対応の数。判定に使うのはこの値。
+  inliers: number
+  reason: RejectReason
+}
+
+type MatchResult = {
+  good: number
+  inliers: number
+  reason: RejectReason
+  // インライアになったフレーム側の座標（処理解像度基準）。可視化用に返す。
+  inlierPts: number[]
+}
+
+/**
+ * 現在フレームと参照画像1枚を照合し、幾何的に整合する一致点（インライア）の数と内訳を返す。
  * 比率テストで良い対応を絞り、findHomography(RANSAC) で平面変形として辻褄が合う点だけ数える。
  */
 function matchAgainst(
@@ -230,8 +269,9 @@ function matchAgainst(
   frameDes: any,
   frameKp: any,
   sig: Signature,
-): number {
-  if (frameDes.rows === 0 || sig.des.rows === 0) return 0
+): MatchResult {
+  const empty: MatchResult = { good: 0, inliers: 0, reason: 'few-good', inlierPts: [] }
+  if (frameDes.rows === 0 || sig.des.rows === 0) return empty
 
   const knn = new cv.DMatchVectorVector()
   matcher.knnMatch(sig.des, frameDes, knn, 2)
@@ -254,7 +294,7 @@ function matchAgainst(
 
   const good = refPts.length / 2
   // findHomography には最低4点必要。それ未満はマッチ扱いしない。
-  if (good < 4) return good
+  if (good < 4) return { good, inliers: 0, reason: 'few-good', inlierPts: [] }
 
   const src = cv.matFromArray(good, 1, cv.CV_32FC2, refPts)
   const dst = cv.matFromArray(good, 1, cv.CV_32FC2, framePts)
@@ -262,26 +302,38 @@ function matchAgainst(
   const homography = cv.findHomography(src, dst, cv.RANSAC, RANSAC_REPROJ, mask)
 
   let inliers = 0
+  let reason: RejectReason = 'no-homography'
+  let inlierPts: number[] = []
   if (!homography.empty() && mask.rows === good) {
-    for (let i = 0; i < mask.rows; i++) inliers += mask.data[i] ? 1 : 0
+    reason = 'ok'
+    for (let i = 0; i < mask.rows; i++) {
+      if (!mask.data[i]) continue
+      inliers++
+      inlierPts.push(framePts[i * 2], framePts[i * 2 + 1])
+    }
 
     // 参照画像の四隅をフレームへ射影し、変形が平面として妥当かを確認する。
     const corners = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, sig.w, 0, sig.w, sig.h, 0, sig.h])
     const projected = new cv.Mat()
     cv.perspectiveTransform(corners, projected, homography)
-    if (!quadIsPlausible(projected.data32F)) inliers = 0
+    const plausible = quadIsPlausible(projected.data32F)
     corners.delete()
     projected.delete()
 
     // 良い対応のうち幾何的に整合した割合が低い＝カード面ではなく背景に散った偶然の一致。
-    if (inliers / good < MIN_INLIER_RATIO) inliers = 0
+    if (!plausible) reason = 'degenerate'
+    else if (inliers / good < MIN_INLIER_RATIO) reason = 'low-ratio'
+    if (reason !== 'ok') {
+      inliers = 0
+      inlierPts = []
+    }
   }
 
   src.delete()
   dst.delete()
   mask.delete()
   homography.delete()
-  return inliers
+  return { good, inliers, reason, inlierPts }
 }
 
 // 直近1回の検出の内訳。しきい値（MIN_SHARPNESS / MATCH_MIN_INLIERS / MATCH_MARGIN）を
@@ -294,6 +346,17 @@ export interface MatchStats {
   bestLabel: string | null
   bestInliers: number
   secondInliers: number
+  // フレームから抽出できた特徴点の数。ORB_FEATURES が上限。
+  frameKeypoints: number
+  // 参照画像ごとの内訳（登録順）。どのカードにどれだけ票が入ったかが分かる。
+  refs: RefStat[]
+  // 処理解像度。下の座標配列をプレビュー canvas に重ねるときの換算に使う。
+  processWidth: number
+  processHeight: number
+  // 可視化用の座標（処理解像度基準の [x0,y0,x1,y1,...]）。debug 無効時は null。
+  // framePoints は検出した全特徴点、bestInlierPoints は1位の参照画像と幾何的に整合した点。
+  framePoints: Float32Array | null
+  bestInlierPoints: Float32Array | null
 }
 
 export interface CardMatcher {
@@ -310,8 +373,39 @@ export interface CardMatcher {
   dispose(): void
 }
 
+/** 照合まで到達しなかったフレーム（ブレ・特徴点ゼロ）用の空の内訳。 */
+function emptyRefStat(sig: Signature): RefStat {
+  return {
+    id: sig.ref.id,
+    label: sig.ref.label,
+    refKeypoints: sig.kp.size(),
+    good: 0,
+    inliers: 0,
+    reason: 'few-good',
+  }
+}
+
+/** KeyPointVector から座標だけを [x0,y0,x1,y1,...] に取り出す（可視化用）。 */
+function readKeypoints(kp: any): Float32Array {
+  const n = kp.size()
+  const out = new Float32Array(n * 2)
+  for (let i = 0; i < n; i++) {
+    const p = kp.get(i).pt
+    out[i * 2] = p.x
+    out[i * 2 + 1] = p.y
+  }
+  return out
+}
+
+export interface MatcherOptions {
+  // 可視化用の座標（MatchStats.framePoints / bestInlierPoints）を集める。
+  // 特徴点1500個の座標取り出しは安くないので、調整ラボ（/detect）だけで有効にする。
+  debug?: boolean
+}
+
 // 参照画像群からカードマッチャを生成する。クライアント（ブラウザ）でのみ呼ぶこと。
-export function createCardMatcher(refs: CardRef[]): CardMatcher {
+export function createCardMatcher(refs: CardRef[], options: MatcherOptions = {}): CardMatcher {
+  const debug = options.debug ?? false
   const proc = document.createElement('canvas')
   let cv: Cv = null
   let orb: any = null
@@ -385,29 +479,50 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
         bestLabel: null,
         bestInliers: 0,
         secondInliers: 0,
+        frameKeypoints: 0,
+        refs: signatures.map(emptyRefStat),
+        processWidth: proc.width,
+        processHeight: proc.height,
+        framePoints: null,
+        bestInlierPoints: null,
       }
       frameGray.delete()
       return confirmed
     }
 
     const { kp: frameKp, des: frameDes } = computeFeatures(cv, orb, frameGray)
+    const frameKeypoints = frameKp.size()
 
     // 各参照画像と照合し、インライア上位2件を求める。
-    let best: { ref: CardRef; inliers: number } | null = null
+    let best: { ref: CardRef; inliers: number; pts: number[] } | null = null
     let second = 0
+    const refStats: RefStat[] = []
     if (frameDes.rows > 0) {
       const matcher = new cv.BFMatcher(cv.NORM_HAMMING)
       for (const sig of signatures) {
-        const inliers = matchAgainst(cv, matcher, frameDes, frameKp, sig)
-        if (!best || inliers > best.inliers) {
+        const r = matchAgainst(cv, matcher, frameDes, frameKp, sig)
+        refStats.push({
+          id: sig.ref.id,
+          label: sig.ref.label,
+          refKeypoints: sig.kp.size(),
+          good: r.good,
+          inliers: r.inliers,
+          reason: r.reason,
+        })
+        if (!best || r.inliers > best.inliers) {
           if (best) second = best.inliers
-          best = { ref: sig.ref, inliers }
-        } else if (inliers > second) {
-          second = inliers
+          best = { ref: sig.ref, inliers: r.inliers, pts: r.inlierPts }
+        } else if (r.inliers > second) {
+          second = r.inliers
         }
       }
       matcher.delete()
+    } else {
+      signatures.forEach((s) => refStats.push(emptyRefStat(s)))
     }
+
+    // 可視化用の座標取り出しは KeyPointVector を1点ずつ舐めるので、debug のときだけ行う。
+    const framePoints = debug ? readKeypoints(frameKp) : null
 
     frameGray.delete()
     frameKp.delete()
@@ -419,6 +534,12 @@ export function createCardMatcher(refs: CardRef[]): CardMatcher {
       bestLabel: best?.ref.label ?? null,
       bestInliers: best?.inliers ?? 0,
       secondInliers: second,
+      frameKeypoints,
+      refs: refStats,
+      processWidth: proc.width,
+      processHeight: proc.height,
+      framePoints,
+      bestInlierPoints: debug && best ? Float32Array.from(best.pts) : null,
     }
 
     // 閾値を超え、かつ2位と十分差がついていれば確定候補。
