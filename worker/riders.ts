@@ -5,6 +5,10 @@
 // 保存形式: riders/<id>.json 1オブジェクト＝ライダー1件（画像は data URL のまま同梱）。
 // registry.json のような単一ファイルへの read-modify-write をしないので、
 // 2PC からの同時登録でも上書き事故が起きない。
+//
+// id はクライアントがロースターの slug（arduino / python / swift / flutter）を指定してくる想定。
+// 同じ id への再登録は同じファイルへの上書き＝ライダーは常に1件ずつに保たれる
+//（同一画像が2件並ぶとカード認証のマージン判定が通らなくなるため、重複させない）。
 
 const RIDERS_PREFIX = 'riders/'
 
@@ -77,8 +81,10 @@ export async function handleRiders(request: Request, bucket: R2Bucket): Promise<
     if (!input.imageDataUrl?.startsWith('data:image/')) return json({ error: '画像がありません' }, 400)
     if (!Array.isArray(input.steps) || input.steps.length === 0)
       return json({ error: 'ポーズが未登録です' }, 400)
+    if (input.id !== undefined && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(input.id))
+      return json({ error: 'id は英小文字・数字・ハイフンのみです' }, 400)
 
-    const id = `rider-${Date.now().toString(36)}`
+    const id = input.id ?? `rider-${Date.now().toString(36)}`
     const sensorSet =
       typeof input.sensorSet === 'number' && Number.isInteger(input.sensorSet) && input.sensorSet > 0
         ? input.sensorSet
