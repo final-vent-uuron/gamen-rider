@@ -223,8 +223,8 @@ function RegisterPage() {
     try {
       await saveRider({ data: { name: name.trim(), imageDataUrl, steps } })
       navigate({ to: '/auth' })
-    } catch {
-      setSaveError('保存に失敗しました。ローカル実行（pnpm dev）か確認してください。')
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : '保存に失敗しました。通信環境を確認してください。')
       setSaving(false)
     }
   }
@@ -496,7 +496,7 @@ function RegisterPage() {
       )}
 
       <p style={{ color: '#6b7280', fontSize: '0.8rem', margin: 0 }}>
-        画像は src/assets/riders/ に保存され、/auth のカード認証・ポーズ認証にすぐ使えます（ローカル実行時のみ）。
+        登録データは Cloudflare R2 に保存され、どの PC の /auth からもカード認証・ポーズ認証にすぐ使えます。
       </p>
     </div>
   )

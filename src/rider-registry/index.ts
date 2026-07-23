@@ -1,36 +1,38 @@
-// ライダー登録のサーバー関数。/auth/register（登録）と /auth（認証への読み込み）が使う。
-// 保存の実体は storage.ts（node:fs）。handler 内 dynamic import なのでクライアントには載らない。
-// CLAUDE.md 方針: DB は未定なので「src/assets/riders/ 内のファイル＋registry.json」を仮ストアとする。
-import { createServerFn } from '@tanstack/react-start'
+// ライダー登録の API クライアント。/auth/register（登録）と /auth ほか（認証への読み込み）が使う。
+// 保存の実体はバトル Worker（worker/riders.ts）＋ R2（gamen-rider-models の riders/）。
+// dev / 本番どちらでも常にデプロイ済み Worker へ fetch する＝登録データは Cloudflare に残り、
+// どの PC からも同じ一覧が見える。
 import type { RegisteredRiderWithImage, SaveRiderInput } from './types'
 
 export type { RegisteredRider, RegisteredRiderWithImage, SaveRiderInput } from './types'
 
-/** 登録済みライダー一覧を画像（data URL）つきで返す。 */
-export const listRiders = createServerFn({ method: 'GET' }).handler(
-  async (): Promise<RegisteredRiderWithImage[]> => {
-    const storage = await import('./storage')
-    const registry = await storage.readRegistry()
-    const riders: RegisteredRiderWithImage[] = []
-    for (const r of registry) {
-      const imageDataUrl = await storage.readRiderImageDataUrl(r)
-      if (!imageDataUrl) continue // 画像が欠けている登録は認証に使えないので除外
-      riders.push({ id: r.id, name: r.name, steps: r.steps, imageDataUrl })
-    }
-    return riders
-  },
-)
+// バトル Worker と同じホスト（net.ts の PROD_WS_URL と揃える）。VITE_RIDERS_API_URL で上書き可。
+const PROD_API_BASE = 'https://gamen-rider-battle.pachi.workers.dev'
 
-/** ライダーを新規登録する（画像を src/assets/riders/ に保存し registry.json へ追記）。 */
-export const saveRider = createServerFn({ method: 'POST' })
-  .validator((input: SaveRiderInput) => {
-    if (!input.name?.trim()) throw new Error('ライダー名が空です')
-    if (!input.imageDataUrl?.startsWith('data:image/')) throw new Error('画像がありません')
-    if (!Array.isArray(input.steps) || input.steps.length === 0) throw new Error('ポーズが未登録です')
-    return input
+function apiBase(): string {
+  const fromEnv = import.meta.env?.VITE_RIDERS_API_URL as string | undefined
+  return (fromEnv?.trim() || PROD_API_BASE).replace(/\/$/, '')
+}
+
+/** 登録済みライダー一覧を画像（data URL）つきで返す。 */
+export async function listRiders(): Promise<RegisteredRiderWithImage[]> {
+  const res = await fetch(`${apiBase()}/riders`)
+  if (!res.ok) throw new Error(`ライダー一覧の取得に失敗しました (${res.status})`)
+  return (await res.json()) as RegisteredRiderWithImage[]
+}
+
+/** ライダーを新規登録する（R2 の riders/<id>.json に保存）。 */
+export async function saveRider({ data }: { data: SaveRiderInput }): Promise<{ id: string }> {
+  const res = await fetch(`${apiBase()}/riders`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(data),
   })
-  .handler(async ({ data }): Promise<{ id: string }> => {
-    const storage = await import('./storage')
-    const entry = await storage.saveRiderFiles(data)
-    return { id: entry.id }
-  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null)
+    throw new Error(
+      (detail as { error?: string } | null)?.error ?? `登録の保存に失敗しました (${res.status})`,
+    )
+  }
+  return (await res.json()) as { id: string }
+}
