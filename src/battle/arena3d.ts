@@ -681,6 +681,14 @@ export function createArenaRenderer(
 	let shakeMag = 0;
 	let zoomKick = 0;
 	let lastFxT = 0;
+	// スローモーション用のアニメ専用クロック。実時間 t とは別に timeScale 倍で進み、
+	// slowmo() が呼ばれた間だけ減速する（止め演出で死亡/必殺モーションをゆっくり見せる）。
+	// 背景・FX・カメラ追従は実時間 t のままなので、キャラの動きだけがスローになる。
+	let animClock = 0;
+	let lastAnimT = 0;
+	let timeScale = 1; // 現在のアニメ再生倍率（1 = 等速。なめらかに減速/復帰する）
+	let slowUntilMs = 0; // この実時刻まで減速（Date.now 基準）
+	let slowTargetScale = 1; // 減速中に狙う倍率
 	let cutinFrozenT: number | null = null; // カットイン中に固定するアニメ時刻（全員静止用）
 	const cutinBox = new THREE.Box3(); // カットイン中の身長実測用（ボーンのワールド座標から）
 	const cutinTmp = new THREE.Vector3();
@@ -698,6 +706,12 @@ export function createArenaRenderer(
 	}
 	function punch(amount: number) {
 		zoomKick = Math.min(2.4, zoomKick + amount);
+	}
+	// スローモーションを焚く（止め演出用）。durationMs の間、アバターのアニメを scale 倍速へ
+	// なめらかに落とし、明けたら等速へ戻す。ゲーム状態・カメラ・FX には触れない見た目専用。
+	function slowmo(durationMs = 1400, scale = 0.26) {
+		slowUntilMs = Date.now() + durationMs;
+		slowTargetScale = scale;
 	}
 	function hitSpark(
 		normX: number,
@@ -771,6 +785,28 @@ export function createArenaRenderer(
 		return av;
 	}
 
+	// アバターの実身長（ワールド）をボーンのワールド座標から測る。カメラ寄せ（カットイン・
+	// 乱入）で足元ではなく顔〜上半身を映すため。スキンメッシュは Box3.setFromObject では
+	// 骨格スケールを拾えないのでボーンで測る。wy = そのキャラの接地ワールド Y。
+	function avatarHeight(id: string, wy: number): number {
+		let h = playerTags.get(id)?.topY ?? 1.6; // 実測できないときの後備え
+		const av = avatars.get(id);
+		if (av) {
+			cutinBox.makeEmpty();
+			let bones = 0;
+			av.root.traverse((o) => {
+				if ((o as THREE.Bone).isBone) {
+					bones++;
+					cutinBox.expandByPoint(o.getWorldPosition(cutinTmp));
+				}
+			});
+			if (bones > 0 && Number.isFinite(cutinBox.max.y)) {
+				h = Math.max(0.4, cutinBox.max.y - wy);
+			}
+		}
+		return h;
+	}
+
 	function render(state: BattleState, final = false) {
 		// いなくなったプレイヤー（離脱・退出）のアバターを破棄
 		for (const [id, av] of avatars) {
@@ -789,9 +825,16 @@ export function createArenaRenderer(
 		const t = performance.now() / 1000;
 		backdrop.update(t); // Webワールド背景のアニメ（浮遊ウィンドウ・コードレイン・パケット）
 
-		// カード技のカットイン演出中: 全アバターのアニメを静止させ（ゲーム状態も
-		// サーバー側で完全停止している）、下のカメラ処理で発動者へ寄る。
-		// ファイナルベント溜め（SA3 風）も同様に全員静止＋発動者へ寄る。
+		// アニメ専用クロックを進める。通常は等速、slowmo() 中だけ timeScale が落ちて
+		// アバターのモーションがスローになる（背景・カメラ・FX は実時間 t のまま）。
+		const dtReal = lastAnimT ? Math.min(t - lastAnimT, 0.05) : 0;
+		lastAnimT = t;
+		const targetScale = Date.now() < slowUntilMs ? slowTargetScale : 1;
+		timeScale += (targetScale - timeScale) * 0.18; // なめらかに入って戻る
+		animClock += dtReal * timeScale;
+
+		// カード技のカットイン／ファイナルベント溜め／乱入の演出中は、全アバターのアニメを
+		// 静止させる（ゲーム状態もサーバー側で完全停止）。下のカメラ処理で発動者／乱入者へ寄る。
 		const cutin =
 			state.cutin && Date.now() < state.cutin.until ? state.cutin : null;
 		const vent =
@@ -799,12 +842,13 @@ export function createArenaRenderer(
 				? state.finalVent
 				: null;
 		const focusPlayerId = cutin?.playerId ?? vent?.playerId ?? null;
-		if (cutin || vent) {
-			if (cutinFrozenT === null) cutinFrozenT = t;
+		const intruding = (state.intrusionUntil ?? 0) > Date.now();
+		if (cutin || vent || intruding) {
+			if (cutinFrozenT === null) cutinFrozenT = animClock;
 		} else {
 			cutinFrozenT = null;
 		}
-		const tAnim = cutinFrozenT ?? t;
+		const tAnim = cutinFrozenT ?? animClock;
 
 		state.players.forEach((p, index) => {
 			const av = ensureAvatar(p, index);
@@ -960,42 +1004,32 @@ export function createArenaRenderer(
 				projSprites.delete(id);
 			}
 		}
-		// ファイナルベント中は場を紫に寄せ、紫ライトを焚く
-		(scene.fog as THREE.Fog).color.lerp(
-			new THREE.Color(final ? 0x2a1052 : 0x0b1220),
-			0.1,
+		// 場の色: ファイナルベント中は紫、乱入中は危険な赤に寄せる（両方無ければ通常）。
+		const fogTarget = final ? 0x2a1052 : intruding ? 0x2a0810 : 0x0b1220;
+		const bgTarget = final ? 0x1a0f3a : intruding ? 0x1a0608 : 0x070b16;
+		(scene.fog as THREE.Fog).color.lerp(new THREE.Color(fogTarget), 0.1);
+		(scene.background as THREE.Color).lerp(new THREE.Color(bgTarget), 0.1);
+		// 演出ライト: final は紫、乱入は赤。乱入者へ寄るので位置も乱入者側へ。
+		ventLight.color.set(intruding && !final ? 0xff3b3b : 0xa855f7);
+		ventLight.intensity = lerp(
+			ventLight.intensity,
+			final ? 3.2 : intruding ? 2.4 : 0,
+			0.12,
 		);
-		(scene.background as THREE.Color).lerp(
-			new THREE.Color(final ? 0x1a0f3a : 0x070b16),
-			0.1,
-		);
-		ventLight.intensity = lerp(ventLight.intensity, final ? 3.2 : 0, 0.12);
 
 		// カットイン中は発動者へ斜め前から寄る近接カット（明けたら通常カメラの damp で自然に引く）
 		const cutinPlayer = focusPlayerId
 			? state.players.find((p) => p.id === focusPlayerId)
 			: null;
+		// 乱入中は乱入者（新規参戦者）。カットインが同時に走ることは無いので排他に扱う。
+		const intruder =
+			intruding && state.intruderId && !cutinPlayer
+				? state.players.find((p) => p.id === state.intruderId) ?? null
+				: null;
 		if (cutinPlayer) {
 			const wx = worldX(cutinPlayer.x);
 			const wy = cutinPlayer.y * JUMP_WORLD;
-			// 発動者の身長をボーンのワールド座標から毎フレーム実測する（決め打ちや
-			// タグ用キャッシュだとモデル差・未更新で足元を映してしまう）。
-			// スキンメッシュは Box3.setFromObject では骨格スケールを拾えないためボーンで測る。
-			let h = playerTags.get(cutinPlayer.id)?.topY ?? 1.6; // 実測できないときの後備え
-			const cav = avatars.get(cutinPlayer.id);
-			if (cav) {
-				cutinBox.makeEmpty();
-				let bones = 0;
-				cav.root.traverse((o) => {
-					if ((o as THREE.Bone).isBone) {
-						bones++;
-						cutinBox.expandByPoint(o.getWorldPosition(cutinTmp));
-					}
-				});
-				if (bones > 0 && Number.isFinite(cutinBox.max.y)) {
-					h = Math.max(0.4, cutinBox.max.y - wy);
-				}
-			}
+			const h = avatarHeight(cutinPlayer.id, wy);
 			// 向いている方向へ回り込み、顔〜上半身を見る。lerp 強め＝素早くドリーイン
 			camTargetPos.set(
 				wx + cutinPlayer.facing * h * 0.5,
@@ -1004,12 +1038,29 @@ export function createArenaRenderer(
 			);
 			camBase.lerp(camTargetPos, 0.22);
 			camLook.lerp(tmpVec.set(wx, wy + h * 0.72, 0), 0.22);
+		} else if (intruder) {
+			// 乱入者の正面・低めから煽り気味に寄る（見上げる構図＝「強敵が現れた」）。
+			// 通常フォロー位置から始まるので、ゆっくりめの lerp で「じわっと寄る」ドリーインになる。
+			// ventLight も乱入者側へ寄せて赤く照らす。
+			const wx = worldX(intruder.x);
+			const wy = intruder.y * JUMP_WORLD;
+			const h = avatarHeight(intruder.id, wy);
+			ventLight.position.set(wx + intruder.facing * h * 0.6, wy + h * 0.6, 6);
+			camTargetPos.set(
+				wx + intruder.facing * (h * 0.55 + 0.8), // 正面へ回り込む
+				wy + h * 0.5, // 低め＝見上げる
+				Math.max(1.4, h * 1.15),
+			);
+			camBase.lerp(camTargetPos, 0.11); // ゆっくり寄る（push-in を見せる）
+			camLook.lerp(tmpVec.set(wx, wy + h * 0.95, 0), 0.11); // 頭上気味を見る＝煽り
+		} else {
+			ventLight.position.set(0, 5, 8); // 通常位置へ戻す
 		}
 
 		// 格ゲー風フォローカメラ: 生存プレイヤーを画面に収めるよう pan＋zoom
 		const shown = state.players.filter((p) => p.hp > 0);
 		const xs = (shown.length ? shown : state.players).map((p) => worldX(p.x));
-		if (!cutinPlayer && xs.length) {
+		if (!cutinPlayer && !intruder && xs.length) {
 			// pan の中心は平均位置（端の増減で急に振れないので落ち着く）
 			const center = xs.reduce((a, b) => a + b, 0) / xs.length;
 			const spread = Math.max(...xs) - Math.min(...xs);
@@ -1052,6 +1103,7 @@ export function createArenaRenderer(
 		shake,
 		hitSpark,
 		punch,
+		slowmo,
 		dispose() {
 			ro.disconnect();
 			for (const av of avatars.values()) av.dispose();
@@ -1087,6 +1139,7 @@ export interface ArenaRenderer {
 	shake(mag: number): void; // 画面シェイク（強さを足し込む）
 	hitSpark(normX: number, normY: number, color?: number, big?: boolean): void; // 命中位置に火花
 	punch(amount: number): void; // ズームパンチ（一瞬寄る）
+	slowmo(durationMs?: number, scale?: number): void; // 止め演出のスローモーション
 	dispose(): void;
 }
 

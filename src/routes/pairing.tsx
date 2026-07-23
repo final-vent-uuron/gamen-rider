@@ -1,18 +1,18 @@
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 
-import { createBleSensorSource, createKeyboardSource } from '../battle'
-import type { BattleInput, BleSensorSource, BleStatus } from '../battle'
-import type { WinnerPresenter } from '../battle/winner3d'
+import { SENSOR_PARTS, createKeyboardSource, createSensorHub } from '../battle'
+import type { BattleInput, BleStatus, SensorHub, SensorPartKey } from '../battle'
+import type { PresenterAction, WinnerPresenter } from '../battle/winner3d'
 import { RIDER_ROUTINES } from '../pose'
 
 // センサーペアリング画面（変身成立 → バトルの間のステップ）。
-// 画面中央に変身したライダーの 3D モデルを置き、腕・足のセンサーリングを接続して
-// 「どんな入力が届いているか」をバトル前に試せる。入力が届くと対応するリングが光り、
-// モデルがその技のモーションを再生する＝センサーが通っていることが一目で分かる。
-//   - 腕リング: BLE パンチセンサー（PunchSensor）。実機。
-//   - 足リング: センサーは未確定（CLAUDE.md）。今はキーボード（←→/K）で入力だけ試せる。
-// 導線: /henshin（変身成立）→ /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
+// 右手・左手・右足・左足・ベルトの計5デバイスを、それぞれ BLE でペアリングして試す。
+// 入力が届くと対応するリングが光り、中央のモデルがその技のモーションを再生する
+// ＝センサーが通っていることが一目で分かる。
+//   - 手/足: 加速度センサー（PunchSensor / KickSensor 系）。パンチ/キック検出。
+//   - ベルト: BeltSensor（変身/ファイナルベント検出用に予約。入力割り当ては未確定）。
+// 導線: /select・/henshin → /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
 
 export const Route = createFileRoute('/pairing')({
   validateSearch: (search: Record<string, unknown>): { rider?: string; name?: string } => ({
@@ -22,12 +22,31 @@ export const Route = createFileRoute('/pairing')({
   component: PairingPage,
 })
 
-// 入力テストの表示ラベル（届いた入力の種類 → リングと表示名）
-const INPUT_LABELS: Partial<Record<BattleInput['kind'], { label: string; limb: 'arm' | 'leg' }>> = {
-  punch: { label: '👊 パンチ', limb: 'arm' },
-  kick: { label: '🦵 キック', limb: 'leg' },
-  move: { label: '🏃 移動', limb: 'leg' },
-  jump: { label: '🦘 ジャンプ', limb: 'leg' },
+// 部位 → 入力テスト時にモデルへ振らせるモーション（ベルトは専用モーション無し）。
+const ACTION_BY_PART: Record<SensorPartKey, PresenterAction | null> = {
+  rightHand: 'punch',
+  leftHand: 'punch',
+  rightFoot: 'kick',
+  leftFoot: 'kick',
+  belt: null,
+}
+
+const PART_TILE_COLOR: Record<SensorPartKey, string> = {
+  rightHand: '#f87171',
+  leftHand: '#fb923c',
+  rightFoot: '#38bdf8',
+  leftFoot: '#22d3ee',
+  belt: '#a78bfa',
+}
+
+function emptyStatuses(): Record<SensorPartKey, BleStatus> {
+  return {
+    rightHand: 'idle',
+    leftHand: 'idle',
+    rightFoot: 'idle',
+    leftFoot: 'idle',
+    belt: 'idle',
+  }
 }
 
 function PairingPage() {
@@ -40,13 +59,13 @@ function PairingPage() {
   const hostRef = useRef<HTMLDivElement>(null)
   const presenterRef = useRef<WinnerPresenter | null>(null)
   const idleTimerRef = useRef(0)
-  const flashTimerRef = useRef<Record<'arm' | 'leg', number>>({ arm: 0, leg: 0 })
+  const flashTimerRef = useRef<Partial<Record<SensorPartKey, number>>>({})
+  const hubRef = useRef<SensorHub | null>(null)
 
-  const [bleStatus, setBleStatus] = useState<BleStatus>('idle')
-  const [impact, setImpact] = useState(0)
-  const [flash, setFlash] = useState<{ arm: boolean; leg: boolean }>({ arm: false, leg: false })
+  const [statuses, setStatuses] = useState<Record<SensorPartKey, BleStatus>>(emptyStatuses)
+  const [impacts, setImpacts] = useState<Partial<Record<SensorPartKey, number>>>({})
+  const [flash, setFlash] = useState<Partial<Record<SensorPartKey, boolean>>>({})
   const [lastInput, setLastInput] = useState<string | null>(null)
-  const bleRef = useRef<BleSensorSource | null>(null)
 
   // 中央の 3D モデル（勝者画面と同じプレゼンタ。GLB 登録済みならそのライダーの姿）。
   useEffect(() => {
@@ -69,70 +88,96 @@ function PairingPage() {
     }
   }, [riderId])
 
-  // 入力（BLE センサー＋キーボード）→ リング発光＋モデルのモーション再生。
+  // 入力（5部位の BLE センサー＋キーボード）→ リング発光＋モデルのモーション再生。
   useEffect(() => {
-    const trigger = (kind: BattleInput['kind']) => {
-      const meta = INPUT_LABELS[kind]
-      if (!meta) return
-      setLastInput(meta.label)
-      // リング発光（短時間で消す）
-      setFlash((f) => ({ ...f, [meta.limb]: true }))
-      window.clearTimeout(flashTimerRef.current[meta.limb])
-      flashTimerRef.current[meta.limb] = window.setTimeout(
-        () => setFlash((f) => ({ ...f, [meta.limb]: false })),
+    // 部位のタイルを一瞬光らせる。
+    const flashPart = (key: SensorPartKey) => {
+      setFlash((f) => ({ ...f, [key]: true }))
+      window.clearTimeout(flashTimerRef.current[key])
+      flashTimerRef.current[key] = window.setTimeout(
+        () => setFlash((f) => ({ ...f, [key]: false })),
         450,
       )
-      // モデルに技を振らせて idle へ戻す（walk はその場走りが一瞬入る）
-      const action =
-        kind === 'punch' ? 'punch' : kind === 'kick' ? 'kick' : kind === 'jump' ? 'jump' : 'walk'
-      presenterRef.current?.setAction(action)
-      window.clearTimeout(idleTimerRef.current)
-      idleTimerRef.current = window.setTimeout(
-        () => presenterRef.current?.setAction('idle'),
-        900,
-      )
     }
-
-    const handleInput = (input: BattleInput) => {
-      if (input.kind === 'move') {
-        if (input.dir !== 0) trigger('move')
-        return
+    // タイル発光＋モデルモーション＋頭上ラベルをまとめて焚く。
+    const triggerVisual = (key: SensorPartKey | null, action: PresenterAction | null, label: string) => {
+      if (key) flashPart(key)
+      setLastInput(label)
+      if (action) {
+        presenterRef.current?.setAction(action)
+        window.clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = window.setTimeout(
+          () => presenterRef.current?.setAction('idle'),
+          900,
+        )
       }
-      if (input.kind === 'guard') return // 押しっぱなし系はテスト対象外
-      trigger(input.kind)
     }
 
-    const keyboard = createKeyboardSource(handleInput)
-    const ble = createBleSensorSource(handleInput, {
-      onStatus: setBleStatus,
-      onImpact: (v) => setImpact(v),
-    })
+    // BLE センサー（5部位）。ペアリング済みなら start で自動再接続。各部位の接続は下のタイルの
+    // 「接続」ボタン（hub.connect(key)）から。届いた入力はモデルとタイルへ反映する。
+    const hub = createSensorHub(
+      // onInput はモデルの向き等に使わず、per 部位の onImpact 側で見た目を焚くのでここは空。
+      () => {},
+      {
+        onStatus: (key, status) => setStatuses((s) => ({ ...s, [key]: status })),
+        onImpact: (key, impact, hit) => {
+          setImpacts((m) => ({ ...m, [key]: impact }))
+          if (!hit) return
+          const def = SENSOR_PARTS.find((p) => p.key === key)
+          triggerVisual(key, ACTION_BY_PART[key], `${def?.emoji ?? ''} ${def?.label ?? ''}`)
+        },
+      },
+    )
+    hub.start()
+    hubRef.current = hub
+
+    // キーボード（センサー無しでもモデル・タイルを試せるダミー入力）。
+    const kbHandler = (input: BattleInput) => {
+      switch (input.kind) {
+        case 'punch': {
+          const key: SensorPartKey = input.side === 'left' ? 'leftHand' : 'rightHand'
+          triggerVisual(key, 'punch', '🥊 パンチ')
+          break
+        }
+        case 'kick': {
+          const key: SensorPartKey = input.side === 'left' ? 'leftFoot' : 'rightFoot'
+          triggerVisual(key, 'kick', '🦵 キック')
+          break
+        }
+        case 'jump':
+          triggerVisual(null, 'jump', '🦘 ジャンプ')
+          break
+        case 'move':
+          if (input.dir !== 0) triggerVisual(null, 'walk', '🏃 移動')
+          break
+      }
+    }
+    const keyboard = createKeyboardSource(kbHandler)
     keyboard.start()
-    ble.start()
-    bleRef.current = ble
+
     return () => {
       keyboard.stop()
-      ble.stop()
-      bleRef.current = null
+      hub.stop()
+      hubRef.current = null
       window.clearTimeout(idleTimerRef.current)
-      window.clearTimeout(flashTimerRef.current.arm)
-      window.clearTimeout(flashTimerRef.current.leg)
+      for (const t of Object.values(flashTimerRef.current)) window.clearTimeout(t)
     }
   }, [])
 
   const toBattle = () => navigate({ to: '/battle', search: { rider: riderId, name: riderName } })
 
+  const connectedCount = SENSOR_PARTS.filter((p) => statuses[p.key] === 'connected').length
+
   return (
     <div
       style={{
         position: 'relative',
-        height: '100vh',
-        overflow: 'hidden',
+        minHeight: '100vh',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         color: '#fff',
-        background: 'radial-gradient(ellipse at 50% 30%, #1e2a4a 0%, #0b1220 65%, #070b16 100%)',
+        background: 'radial-gradient(ellipse at 50% 25%, #1e2a4a 0%, #0b1220 65%, #070b16 100%)',
       }}
     >
       {/* ヘッダー */}
@@ -151,80 +196,58 @@ function PairingPage() {
         <h1 style={{ margin: 0, fontSize: '1.15rem' }}>センサーペアリング</h1>
         <span style={{ color: '#a78bfa', fontWeight: 'bold' }}>{riderName}</span>
         <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: '#9ca3af' }}>
-          リングを着けて、腕を振って入力が届くか試そう
+          接続済み {connectedCount}/{SENSOR_PARTS.length} 部位
         </span>
       </div>
 
-      {/* 中央: 3D モデル ＋ 左右のリングインジケータ */}
+      {/* 中央: 3D モデル */}
+      <div style={{ position: 'relative', width: 'min(46vw, 360px)', height: 'min(38vh, 320px)' }}>
+        <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
+        {lastInput && (
+          <span
+            key={lastInput + Object.values(flash).join('')}
+            style={{
+              position: 'absolute',
+              top: '4%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              fontSize: '1.3rem',
+              fontWeight: 900,
+              textShadow: '0 2px 8px #000',
+              whiteSpace: 'nowrap',
+              animation: 'comboPop 0.25s ease-out',
+            }}
+          >
+            {lastInput}
+          </span>
+        )}
+      </div>
+
+      {/* 5部位のセンサータイル */}
       <div
         style={{
-          position: 'relative',
-          flex: 1,
-          width: 'min(92vw, 900px)',
           display: 'flex',
-          alignItems: 'stretch',
+          gap: '0.7rem',
+          flexWrap: 'wrap',
           justifyContent: 'center',
+          maxWidth: '860px',
+          padding: '0.4rem 1rem',
         }}
       >
-        {/* 腕リング（左側・BLE 実機） */}
-        <RingPanel
-          side="left"
-          title="腕リング"
-          desc="パンチ検出（実機センサー）"
-          active={flash.arm}
-          color="#f87171"
-        >
-          <BleBadge status={bleStatus} />
-          {bleStatus === 'connected' && <ImpactMeter impact={impact} flash={flash.arm} />}
-          {bleStatus === 'idle' && (
-            <button type="button" style={btn('#a78bfa')} onClick={() => bleRef.current?.connect()}>
-              📡 センサー接続
-            </button>
-          )}
-          {(bleStatus === 'connected' || bleStatus === 'disconnected') && (
-            <button type="button" style={btn('#9ca3af')} onClick={() => bleRef.current?.release()}>
-              手放す
-            </button>
-          )}
-        </RingPanel>
-
-        {/* 3D モデル（中央） */}
-        <div style={{ position: 'relative', width: 'min(46vw, 420px)' }}>
-          <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
-          {/* 最後に届いた入力（モデルの頭上に一瞬出す） */}
-          {lastInput && (
-            <span
-              key={lastInput + String(flash.arm) + String(flash.leg)}
-              style={{
-                position: 'absolute',
-                top: '6%',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                fontSize: '1.3rem',
-                fontWeight: 900,
-                textShadow: '0 2px 8px #000',
-                whiteSpace: 'nowrap',
-                animation: 'comboPop 0.25s ease-out',
-              }}
-            >
-              {lastInput}
-            </span>
-          )}
-        </div>
-
-        {/* 足リング（右側・センサー未確定のためキーボードで試す） */}
-        <RingPanel
-          side="right"
-          title="足リング"
-          desc="移動・キック（センサーは準備中）"
-          active={flash.leg}
-          color="#38bdf8"
-        >
-          <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-            いまはキーボードで入力を試せます
-            <br />← → 移動 / K キック / W ジャンプ
-          </span>
-        </RingPanel>
+        {SENSOR_PARTS.map((p) => (
+          <SensorTile
+            key={p.key}
+            label={p.label}
+            emoji={p.emoji}
+            color={PART_TILE_COLOR[p.key]}
+            status={statuses[p.key]}
+            active={!!flash[p.key]}
+            impact={impacts[p.key]}
+            reserved={p.emit === null}
+            onConnect={() => hubRef.current?.connect(p.key)}
+            onRelease={() => hubRef.current?.release(p.key)}
+          />
+        ))}
       </div>
 
       {/* フッター: バトルへ */}
@@ -234,6 +257,7 @@ function PairingPage() {
           alignItems: 'center',
           gap: '0.9rem',
           padding: '1rem',
+          marginTop: 'auto',
         }}
       >
         <span style={{ fontSize: '0.8rem', color: '#9ca3af' }}>
@@ -261,69 +285,89 @@ function PairingPage() {
   )
 }
 
-// ---- リングインジケータ（腕/足） ------------------------------------------
-// 光る輪＝リング本体のイメージ。入力が届いた瞬間に強く発光する。
+// ---- センサータイル（部位ごとの接続 UI＋入力テスト） ----------------------
+// リング（輪）＝リング本体のイメージ。入力が届いた瞬間に強く発光する。
 
-function RingPanel({
-  side,
-  title,
-  desc,
-  active,
+function SensorTile({
+  label,
+  emoji,
   color,
-  children,
+  status,
+  active,
+  impact,
+  reserved,
+  onConnect,
+  onRelease,
 }: {
-  side: 'left' | 'right'
-  title: string
-  desc: string
-  active: boolean
+  label: string
+  emoji: string
   color: string
-  children?: React.ReactNode
+  status: BleStatus
+  active: boolean
+  impact?: number
+  reserved: boolean // ベルト等、バトル入力が未割当の部位
+  onConnect: () => void
+  onRelease: () => void
 }) {
+  const connected = status === 'connected'
   return (
     <div
       style={{
-        width: 'clamp(180px, 24vw, 260px)',
+        width: '150px',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: side === 'left' ? 'flex-end' : 'flex-start',
-        justifyContent: 'center',
-        gap: '0.6rem',
-        padding: '0 1rem',
-        textAlign: side === 'left' ? 'right' : 'left',
+        alignItems: 'center',
+        gap: '0.45rem',
+        padding: '0.7rem 0.5rem',
+        borderRadius: '12px',
+        border: `1px solid ${connected ? color : '#334155'}`,
+        background: connected ? `${color}14` : 'rgba(15,23,42,0.6)',
       }}
     >
       {/* リング（輪） */}
       <div
         style={{
-          width: '86px',
-          height: '86px',
+          width: '58px',
+          height: '58px',
           borderRadius: '50%',
-          border: `7px solid ${color}`,
-          boxShadow: active
-            ? `0 0 30px ${color}, inset 0 0 18px ${color}`
-            : `0 0 8px ${color}55, inset 0 0 4px ${color}33`,
-          opacity: active ? 1 : 0.55,
-          transition: 'box-shadow 0.12s, opacity 0.12s',
-          alignSelf: 'center',
-        }}
-      />
-      <span style={{ fontWeight: 900, fontSize: '1rem', alignSelf: 'center', color }}>
-        {title}
-      </span>
-      <span style={{ fontSize: '0.75rem', color: '#9ca3af', alignSelf: 'center', textAlign: 'center' }}>
-        {desc}
-      </span>
-      <div
-        style={{
+          border: `6px solid ${color}`,
           display: 'flex',
-          flexDirection: 'column',
-          gap: '0.4rem',
           alignItems: 'center',
-          alignSelf: 'center',
+          justifyContent: 'center',
+          fontSize: '1.5rem',
+          boxShadow: active
+            ? `0 0 26px ${color}, inset 0 0 14px ${color}`
+            : connected
+              ? `0 0 8px ${color}66, inset 0 0 4px ${color}44`
+              : 'none',
+          opacity: connected ? 1 : 0.5,
+          transition: 'box-shadow 0.12s, opacity 0.2s',
         }}
       >
-        {children}
+        {emoji}
       </div>
+      <span style={{ fontWeight: 900, fontSize: '0.95rem', color }}>
+        {label}
+        {reserved && (
+          <span style={{ fontSize: '0.6rem', color: '#9ca3af', marginLeft: '4px' }}>(予約)</span>
+        )}
+      </span>
+      <BleBadge status={status} />
+      {connected && !reserved && <ImpactMeter impact={impact ?? 0} flash={active} />}
+      {connected ? (
+        <button type="button" style={btn('#9ca3af')} onClick={onRelease}>
+          手放す
+        </button>
+      ) : (
+        <button
+          type="button"
+          style={btn(status === 'connecting' ? '#6b7280' : color)}
+          disabled={status === 'connecting' || status === 'unsupported'}
+          onClick={onConnect}
+        >
+          {status === 'connecting' ? '接続中…' : '📡 接続'}
+        </button>
+      )}
     </div>
   )
 }
@@ -332,7 +376,7 @@ function RingPanel({
 
 function btn(color: string): React.CSSProperties {
   return {
-    padding: '0.35rem 0.9rem',
+    padding: '0.3rem 0.9rem',
     borderRadius: '8px',
     border: `2px solid ${color}`,
     background: 'transparent',
@@ -359,7 +403,7 @@ function BleBadge({ status }: { status: BleStatus }) {
         display: 'inline-flex',
         alignItems: 'center',
         gap: '5px',
-        fontSize: '0.75rem',
+        fontSize: '0.72rem',
         color,
         border: `1px solid ${color}55`,
         borderRadius: '999px',
@@ -378,14 +422,14 @@ function ImpactMeter({ impact, flash }: { impact: number; flash: boolean }) {
   const THRESHOLD = 25 // Arduino 側 IMPACT_THRESHOLD と合わせる
   const pct = Math.min(100, (impact / MAX) * 100)
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-      <span style={{ fontSize: '0.75rem', color: '#9ca3af', fontFamily: 'monospace' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+      <span style={{ fontSize: '0.7rem', color: '#9ca3af', fontFamily: 'monospace', width: '2.4em', textAlign: 'right' }}>
         {impact.toFixed(1)}
       </span>
       <span
         style={{
           position: 'relative',
-          width: '120px',
+          width: '90px',
           height: '9px',
           background: '#111827',
           borderRadius: '5px',
