@@ -76,6 +76,19 @@ function bluetoothApi(): BluetoothApi | null {
   return (navigator as Navigator & { bluetooth?: BluetoothApi }).bluetooth ?? null
 }
 
+// Notify の文字列を解析する。ファーム2系統のフォーマットを吸収する:
+//   旧: "PUNCH,<impact>" / "<impact>"            （PunchSensor 系）
+//   新: "<ID>,PUNCH,<impact>" / "<ID>,<impact>"  （Punch_RF 等・先頭にデバイスID）
+// PUNCH トークンの有無で検出を判定し、impact は末尾の数値トークンを採る。
+// "Ready" 等の非数値メッセージは null（無視）。
+function parseSensorMessage(raw: string): { impact: number; punch: boolean } | null {
+  const tokens = raw.trim().split(',')
+  const punch = tokens.includes('PUNCH')
+  const impact = Number.parseFloat(tokens[tokens.length - 1] ?? '')
+  if (!Number.isFinite(impact)) return punch ? { impact: 0, punch: true } : null
+  return { impact, punch }
+}
+
 // ---- 部位別ペアリング状態 -------------------------------------------------
 // 右手/左手/右足/左足の加速度センサーが「このブラウザにペアリング（許可）済みか」。
 // バトル画面のステータス表示用。接続はせず、許可済みデバイスの名前を見るだけ。
@@ -137,7 +150,7 @@ export interface SensorPartDef {
   key: SensorPartKey
   label: string // 表示名（右手 等）
   emoji: string // タイル用アイコン
-  namePrefix: string // BLE 名の前方一致
+  namePrefix: string | string[] // BLE 名の前方一致（複数命名を許容: 例 KickSensor / Punch_RF）
   excludePrefix?: string // 同名衝突の除外（右手=PunchSensor は PunchSensor-L を除外）
   serviceUuid: string
   charUuid: string
@@ -170,7 +183,7 @@ export const SENSOR_PARTS: SensorPartDef[] = [
     key: 'rightFoot',
     label: '右足',
     emoji: '🦵',
-    namePrefix: 'KickSensor',
+    namePrefix: ['KickSensor', 'Punch_RF'], // Punch_RF = Right Foot ファーム（DEVICE_NAME）
     excludePrefix: 'KickSensor-L',
     serviceUuid: PUNCH_SERVICE_UUID,
     charUuid: PUNCH_CHAR_UUID,
@@ -202,10 +215,15 @@ function emptyPaired(): PairedParts {
   return { rightHand: false, leftHand: false, rightFoot: false, leftFoot: false, belt: false }
 }
 
+// namePrefix を配列へ正規化（単一文字列も許容）。
+function namePrefixes(def: SensorPartDef): string[] {
+  return Array.isArray(def.namePrefix) ? def.namePrefix : [def.namePrefix]
+}
+
 // BLE 名 → 部位定義。前方一致（＋除外）で判別する。順不同（excludePrefix で衝突回避）。
 function partForName(name: string): SensorPartDef | null {
   for (const p of SENSOR_PARTS) {
-    if (!name.startsWith(p.namePrefix)) continue
+    if (!namePrefixes(p).some((pre) => name.startsWith(pre))) continue
     if (p.excludePrefix && name.startsWith(p.excludePrefix)) continue
     return p
   }
@@ -283,16 +301,10 @@ export function createSensorHub(
     c.onValue = (e) => {
       const dv = (e.target as BleCharacteristic).value
       if (!dv) return
-      const text = decoder.decode(dv).trim()
-      if (text.startsWith('PUNCH')) {
-        const raw = Number.parseFloat(text.split(',')[1] ?? '')
-        const impact = Number.isFinite(raw) ? raw : 0
-        opts.onImpact?.(def.key, impact, true)
-        if (active && def.emit) onInput(def.emit(impact))
-      } else {
-        const impact = Number.parseFloat(text)
-        if (Number.isFinite(impact)) opts.onImpact?.(def.key, impact, false)
-      }
+      const msg = parseSensorMessage(decoder.decode(dv))
+      if (!msg) return // "Ready" 等の非数値は無視
+      opts.onImpact?.(def.key, msg.impact, msg.punch)
+      if (msg.punch && active && def.emit) onInput(def.emit(msg.impact))
     }
     c.onDisconnected = () => {
       c.characteristic = null
@@ -417,7 +429,10 @@ export function createSensorHub(
       const def = partDef(key)
       return requestAndAttach(
         key,
-        [{ services: [def.serviceUuid] }, { namePrefix: def.namePrefix }],
+        [
+          { services: [def.serviceUuid] },
+          ...namePrefixes(def).map((namePrefix) => ({ namePrefix })),
+        ],
         [def.serviceUuid],
       )
     },
@@ -425,7 +440,7 @@ export function createSensorHub(
       const services = [...new Set(SENSOR_PARTS.map((p) => p.serviceUuid))]
       return requestAndAttach(
         null,
-        SENSOR_PARTS.map((p) => ({ namePrefix: p.namePrefix })),
+        SENSOR_PARTS.flatMap((p) => namePrefixes(p).map((namePrefix) => ({ namePrefix }))),
         services,
       )
     },
@@ -461,16 +476,10 @@ export function createBleSensorSource(
   const onValue = (e: Event) => {
     const dv = (e.target as BleCharacteristic).value
     if (!dv) return
-    const text = decoder.decode(dv).trim()
-    if (text.startsWith('PUNCH')) {
-      const impact = Number.parseFloat(text.split(',')[1] ?? '')
-      opts.onImpact?.(Number.isFinite(impact) ? impact : 0, true)
-      if (active) onInput({ kind: 'punch' })
-    } else {
-      // "Ready" などの非数値は無視。通常はインパクト値ストリーム。
-      const impact = Number.parseFloat(text)
-      if (Number.isFinite(impact)) opts.onImpact?.(impact, false)
-    }
+    const msg = parseSensorMessage(decoder.decode(dv))
+    if (!msg) return // "Ready" などの非数値は無視
+    opts.onImpact?.(msg.impact, msg.punch)
+    if (msg.punch && active) onInput({ kind: 'punch' })
   }
 
   // 保持中のデバイスへ GATT 接続＋Notify 購読。成功で true。
