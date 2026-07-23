@@ -1,26 +1,28 @@
 import type { CustomStep } from '../pose/custom'
 
-// registry.json に保存する登録ライダー1件分。
-// 画像本体は同じフォルダ（src/assets/riders/）に `${id}.<ext>` で保存する。
+// R2（riders/<id>.json）に保存する登録ライダー1件分。画像は data URL のまま同梱する。
+// sensorSet: このライダーが使う BLE センサーセット番号（GR<n>_… 命名の n）。null = 紐付けなし。
 export interface RegisteredRider {
   id: string
   name: string
-  image: string // src/assets/riders/ 内のファイル名
+  imageDataUrl: string
   steps: CustomStep[]
+  sensorSet: number | null
   createdAt: string
 }
 
-// クライアントへ返す形。画像はファイルパスではなく data URL として同梱する
-// （dev/build どちらでも <img> や ORB マッチャにそのまま渡せるようにするため）。
+// クライアントへ返す形。画像は data URL なので <img> や ORB マッチャにそのまま渡せる。
 export interface RegisteredRiderWithImage {
   id: string
   name: string
   steps: CustomStep[]
   imageDataUrl: string
+  sensorSet: number | null
 }
 
 export interface SaveRiderInput {
   name: string
   imageDataUrl: string // data:image/png;base64,... 形式
   steps: CustomStep[]
+  sensorSet: number | null
 }

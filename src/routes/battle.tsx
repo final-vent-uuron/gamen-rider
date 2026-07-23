@@ -51,7 +51,7 @@ import type {
 	Sfx,
 } from "../battle";
 import type { ArenaRenderer } from "../battle/arena3d";
-import { listRiders } from "../rider-registry";
+import { listRiders, riderSensorSet } from "../rider-registry";
 
 // 被弾ダメージの浮き数字。命中検出で追加し、一定時間で消す。
 interface DamagePopup {
@@ -193,6 +193,8 @@ function BattlePage() {
 	const finalActiveRef = useRef(false); // rAF ループから読む finalActive のミラー
 	const netRef = useRef<BattleNet | null>(null);
 	const hubRef = useRef<SensorHub | null>(null); // バトル中の 5部位センサーハブ（接続ボタンから connectAny() を呼ぶ）
+	// 自分のライダーのセンサーセット番号（GR<n>。R2 から非同期に取得）。他セットの GR デバイス除外用。
+	const sensorSetRef = useRef<number | null>(null);
 	const sfxRef = useRef<Sfx | null>(null); // 効果音（WebAudio 合成）
 	const bgmRef = useRef<Bgm | null>(null); // BGM（public/bgm/ の mp3）
 	const intrusionSeenRef = useRef(0); // 処理済みの intrusionUntil（同じ乱入を1回だけ演出する）
@@ -244,7 +246,7 @@ function BattlePage() {
 	useEffect(() => {
 		let alive = true;
 		const check = async () => {
-			const parts = await getPairedParts();
+			const parts = await getPairedParts(sensorSetRef.current);
 			if (alive) setPairedParts(parts);
 		};
 		check();
@@ -669,9 +671,16 @@ function BattlePage() {
 		const hub = createSensorHub(handleInput, {
 			onStatus: (key, s) =>
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
+			sensorSet: () => sensorSetRef.current,
 		});
-		hub.start();
 		hubRef.current = hub;
+		// 自分のライダーのセンサーセット（GR 番号）を R2 から引いてから自動接続を始める
+		//（先に始めると他セットの許可済みデバイスを拾い得るため）。
+		let hubCancelled = false;
+		void riderSensorSet(routine.riderId).then((set) => {
+			sensorSetRef.current = set;
+			if (!hubCancelled) hub.start();
+		});
 
 		// カメラガード: 右下カメラの映像で「ボクシングの構え」を認識している間、強制的にガード。
 		// 骨格オーバーレイは smoother 経由（検出 ~15fps → 表示 60fps 補間でぬるぬる動く）。
@@ -717,6 +726,7 @@ function BattlePage() {
 
 		return () => {
 			source.stop();
+			hubCancelled = true;
 			hub.stop(); // 切断のみ（許可は保持）。次の画面/再入場で自動再接続できる
 			hubRef.current = null;
 			camSource.stop();

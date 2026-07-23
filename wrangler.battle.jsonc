@@ -16,6 +16,8 @@
   "durable_objects": {
     "bindings": [{ "name": "BATTLE_ROOM", "class_name": "BattleRoom" }]
   },
+  // 登録ライダー（/riders API）の保存先。GLB 配信と同じバケットの riders/ プレフィックスを使う。
+  "r2_buckets": [{ "bucket_name": "gamen-rider-models", "binding": "RIDER_BUCKET" }],
   // 新規 DO は SQLite ストレージクラスで登録する（Cloudflare 推奨の既定）。
   // 本ゲームは状態をメモリに持つだけで SQL は使わないが、クラス登録に migration が必要。
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BattleRoom"] }]

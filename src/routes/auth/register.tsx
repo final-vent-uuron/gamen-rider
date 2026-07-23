@@ -18,6 +18,9 @@ type ImageSource = 'camera' | 'upload'
 const DEFAULT_MIN_SCORE = 80
 const DEFAULT_HOLD_MS = 700
 
+// 選べるセンサーセット番号（BLE 名 GR<n>_RH/…LF/…BELT の n。実機ラベルと合わせる）
+const SENSOR_SETS = [1, 2, 3, 4]
+
 const PHASES: Phase[] = ['name', 'image', 'pose', 'preview']
 const PHASE_LABELS: Record<Phase, string> = {
   name: '1. 名前',
@@ -43,6 +46,7 @@ function RegisterPage() {
   const [status, setStatus] = useState<Status>('loading')
   const [phase, setPhaseState] = useState<Phase>('name')
   const [name, setName] = useState('')
+  const [sensorSet, setSensorSet] = useState<number | null>(null)
   const [imageSource, setImageSource] = useState<ImageSource>('camera')
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null)
   const [steps, setSteps] = useState<CustomStep[]>([])
@@ -221,10 +225,10 @@ function RegisterPage() {
     setSaving(true)
     setSaveError(null)
     try {
-      await saveRider({ data: { name: name.trim(), imageDataUrl, steps } })
+      await saveRider({ data: { name: name.trim(), imageDataUrl, steps, sensorSet } })
       navigate({ to: '/auth' })
-    } catch {
-      setSaveError('保存に失敗しました。ローカル実行（pnpm dev）か確認してください。')
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : '保存に失敗しました。通信環境を確認してください。')
       setSaving(false)
     }
   }
@@ -326,6 +330,33 @@ function RegisterPage() {
               }}
             />
           </label>
+
+          {/* センサーセット（GR 番号）。選ぶと変身後はそのセットの BLE デバイスしか接続候補に出ない */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <span style={{ color: '#9ca3af', fontSize: '0.9rem' }}>
+              センサーセット（実機ラベルの GR 番号。近くの他プレイヤーのセンサーを拾わないための紐付け）
+            </span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {SENSOR_SETS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setSensorSet(n)}
+                  style={tabButtonStyle(sensorSet === n)}
+                >
+                  GR{n}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setSensorSet(null)}
+                style={tabButtonStyle(sensorSet === null)}
+              >
+                なし（制限しない）
+              </button>
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={() => setPhase('image')}
@@ -468,6 +499,9 @@ function RegisterPage() {
               <span>
                 名前: <strong style={{ color: '#a78bfa', fontSize: '1.2rem' }}>{name.trim()}</strong>
               </span>
+              <span style={{ color: '#9ca3af' }}>
+                センサーセット: {sensorSet != null ? `GR${sensorSet}` : 'なし（制限しない）'}
+              </span>
               <span style={{ color: '#9ca3af' }}>変身ポーズ: {steps.length} ステップ</span>
               {steps.map((s, i) => (
                 <span key={s.id} style={{ fontSize: '0.9rem' }}>
@@ -496,7 +530,7 @@ function RegisterPage() {
       )}
 
       <p style={{ color: '#6b7280', fontSize: '0.8rem', margin: 0 }}>
-        画像は src/assets/riders/ に保存され、/auth のカード認証・ポーズ認証にすぐ使えます（ローカル実行時のみ）。
+        登録データは Cloudflare R2 に保存され、どの PC の /auth からもカード認証・ポーズ認証にすぐ使えます。
       </p>
     </div>
   )
