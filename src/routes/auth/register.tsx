@@ -5,12 +5,12 @@ import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision
 
 import { createPoseLandmarker, poseSimilarity } from '../../pose'
 import type { CustomStep, MediaPipeModules, RefPoint } from '../../pose'
-import { saveRider } from '../../rider-registry'
+import { RIDER_ROSTER, listRiders, saveRider } from '../../rider-registry'
 
 export const Route = createFileRoute('/auth/register')({ component: RegisterPage })
 
 type Status = 'loading' | 'running' | 'error'
-// name: 名前入力 / image: カード画像登録 / pose: 変身ポーズ登録 / preview: 確認・確定
+// name: ライダー選択 / image: カード画像登録 / pose: 変身ポーズ登録 / preview: 確認・確定
 type Phase = 'name' | 'image' | 'pose' | 'preview'
 type ImageSource = 'camera' | 'upload'
 
@@ -23,7 +23,7 @@ const SENSOR_SETS = [1, 2, 3, 4]
 
 const PHASES: Phase[] = ['name', 'image', 'pose', 'preview']
 const PHASE_LABELS: Record<Phase, string> = {
-  name: '1. 名前',
+  name: '1. ライダー',
   image: '2. 画像',
   pose: '3. ポーズ',
   preview: '4. 確認',
@@ -45,8 +45,12 @@ function RegisterPage() {
 
   const [status, setStatus] = useState<Status>('loading')
   const [phase, setPhaseState] = useState<Phase>('name')
+  // ロースター（Arduino / Python / Swift / Flutter）から選ぶ。slug が登録ID＝R2 のファイル名。
+  const [slug, setSlug] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [sensorSet, setSensorSet] = useState<number | null>(null)
+  // 登録済みライダーの ID（選択ボタンに「上書きになる」印を出すため）。取得失敗は空でよい。
+  const [registeredIds, setRegisteredIds] = useState<string[]>([])
   const [imageSource, setImageSource] = useState<ImageSource>('camera')
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null)
   const [steps, setSteps] = useState<CustomStep[]>([])
@@ -58,6 +62,13 @@ function RegisterPage() {
     phaseRef.current = p
     setPhaseState(p)
   }
+
+  // 登録済み一覧（上書き表示用）。失敗しても登録自体には影響しない。
+  useEffect(() => {
+    listRiders()
+      .then((riders) => setRegisteredIds(riders.map((r) => r.id)))
+      .catch(() => {})
+  }, [])
 
   // 直近に登録したポーズを「ライブ一致度」の基準にする（撮れているかの確認用）
   useEffect(() => {
@@ -221,11 +232,11 @@ function RegisterPage() {
   // ---- 確定 ----
 
   async function handleConfirm() {
-    if (!imageDataUrl || steps.length === 0 || !name.trim()) return
+    if (!imageDataUrl || steps.length === 0 || !slug || !name.trim()) return
     setSaving(true)
     setSaveError(null)
     try {
-      await saveRider({ data: { name: name.trim(), imageDataUrl, steps, sensorSet } })
+      await saveRider({ data: { id: slug, name: name.trim(), imageDataUrl, steps, sensorSet } })
       navigate({ to: '/auth' })
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : '保存に失敗しました。通信環境を確認してください。')
@@ -311,57 +322,66 @@ function RegisterPage() {
         </p>
       )}
 
-      {/* ---- 1. 名前 ---- */}
+      {/* ---- 1. ライダー選択 ---- */}
       {phase === 'name' && (
         <div style={panelStyle}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <span style={{ color: '#9ca3af', fontSize: '0.9rem' }}>ライダー名</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例: 龍騎"
-              style={{
-                padding: '0.6rem 0.8rem',
-                fontSize: '1.1rem',
-                borderRadius: '8px',
-                border: '1px solid #374151',
-                background: '#111827',
-                color: '#fff',
-              }}
-            />
-          </label>
+          <span style={{ color: '#9ca3af', fontSize: '0.9rem' }}>
+            登録するライダーを選択（登録済みのライダーを選ぶと上書き登録になります）
+          </span>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {RIDER_ROSTER.map((r) => (
+              <button
+                key={r.slug}
+                type="button"
+                onClick={() => {
+                  setSlug(r.slug)
+                  setName(r.name)
+                  setSensorSet(r.sensorSet) // 既定の GR セット。下で変更可
+                }}
+                style={{ ...tabButtonStyle(slug === r.slug), flex: '1 1 140px', padding: '0.9rem' }}
+              >
+                {r.name}
+                <span style={{ display: 'block', fontSize: '0.7rem', marginTop: '2px' }}>
+                  GR{r.sensorSet}
+                  {registeredIds.includes(r.slug) ? '・登録済み（上書き）' : ''}
+                </span>
+              </button>
+            ))}
+          </div>
 
           {/* センサーセット（GR 番号）。選ぶと変身後はそのセットの BLE デバイスしか接続候補に出ない */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <span style={{ color: '#9ca3af', fontSize: '0.9rem' }}>
-              センサーセット（実機ラベルの GR 番号。近くの他プレイヤーのセンサーを拾わないための紐付け）
-            </span>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              {SENSOR_SETS.map((n) => (
+          {slug && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <span style={{ color: '#9ca3af', fontSize: '0.9rem' }}>
+                センサーセット（実機ラベルの GR 番号。近くの他プレイヤーのセンサーを拾わないための紐付け）
+              </span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {SENSOR_SETS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setSensorSet(n)}
+                    style={tabButtonStyle(sensorSet === n)}
+                  >
+                    GR{n}
+                  </button>
+                ))}
                 <button
-                  key={n}
                   type="button"
-                  onClick={() => setSensorSet(n)}
-                  style={tabButtonStyle(sensorSet === n)}
+                  onClick={() => setSensorSet(null)}
+                  style={tabButtonStyle(sensorSet === null)}
                 >
-                  GR{n}
+                  なし（制限しない）
                 </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setSensorSet(null)}
-                style={tabButtonStyle(sensorSet === null)}
-              >
-                なし（制限しない）
-              </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <button
             type="button"
             onClick={() => setPhase('image')}
-            disabled={!name.trim()}
-            style={primaryButtonStyle(!!name.trim())}
+            disabled={!slug}
+            style={primaryButtonStyle(!!slug)}
           >
             次へ（画像登録）
           </button>
@@ -498,6 +518,11 @@ function RegisterPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <span>
                 名前: <strong style={{ color: '#a78bfa', fontSize: '1.2rem' }}>{name.trim()}</strong>
+                {slug && registeredIds.includes(slug) && (
+                  <span style={{ color: '#fbbf24', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                    ※ 既存の {name.trim()} を上書きします
+                  </span>
+                )}
               </span>
               <span style={{ color: '#9ca3af' }}>
                 センサーセット: {sensorSet != null ? `GR${sensorSet}` : 'なし（制限しない）'}

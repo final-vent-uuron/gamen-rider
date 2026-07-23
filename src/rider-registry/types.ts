@@ -21,6 +21,9 @@ export interface RegisteredRiderWithImage {
 }
 
 export interface SaveRiderInput {
+  // 登録ID（ロースターの slug。R2 のファイル名になり、同じ id への再登録は上書き）。
+  // 省略時はサーバー側でタイムスタンプ ID を採番する。
+  id?: string
   name: string
   imageDataUrl: string // data:image/png;base64,... 形式
   steps: CustomStep[]

@@ -5,6 +5,8 @@
 import type { RegisteredRiderWithImage, SaveRiderInput } from './types'
 
 export type { RegisteredRider, RegisteredRiderWithImage, SaveRiderInput } from './types'
+export { RIDER_ROSTER } from './roster'
+export type { RosterRider } from './roster'
 
 // バトル Worker と同じホスト（net.ts の PROD_WS_URL と揃える）。VITE_RIDERS_API_URL で上書き可。
 const PROD_API_BASE = 'https://gamen-rider-battle.pachi.workers.dev'

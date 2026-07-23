@@ -53,12 +53,12 @@ function AuthPage() {
     import('../../battle/arena3d').then((m) => m.preloadRiderModels())
   }, [])
 
-  // 認証成功の演出を少し見せてから、そのライダーでバトル画面へ自動遷移（本番フロー）。
-  // /henshin と同じ受け渡し（search.rider）で /battle に入る。
+  // 認証成功の演出を少し見せてから、センサーペアリング画面へ自動遷移（本番フロー）。
+  // /pairing がライダーの GR セットで BLE を絞り、そこから /battle へ進む。
   useEffect(() => {
     if (phase !== 'done' || !rider) return
     const t = setTimeout(() => {
-      navigate({ to: '/battle', search: { rider: rider.id } })
+      navigate({ to: '/pairing', search: { rider: rider.id, name: rider.name } })
     }, 1400)
     return () => clearTimeout(t)
   }, [phase, rider, navigate])
