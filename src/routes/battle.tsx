@@ -27,6 +27,7 @@ import {
 	getStoredBgmVolume,
 	loadFinalVentPose,
 	meterStocks,
+	resolveFinalVentCardRefs,
 	setStoredBgmVolume,
 	stepBattle,
 } from "../battle";
@@ -45,6 +46,7 @@ import type {
 	Sfx,
 } from "../battle";
 import type { ArenaRenderer } from "../battle/arena3d";
+import { listRiders } from "../rider-registry";
 
 // 被弾ダメージの浮き数字。命中検出で追加し、一定時間で消す。
 interface DamagePopup {
@@ -569,6 +571,20 @@ function BattlePage() {
 			getVideo: () => ventVideoRef.current,
 			riderId: routine.riderId,
 			riderName: routine.riderName,
+			// 変身フローと同じ登録ライダー画像をかざすカードにする
+			getCardRefs: async () => {
+				try {
+					const registered = await listRiders();
+					return resolveFinalVentCardRefs(
+						registered,
+						routine.riderId,
+						routine.riderName,
+					);
+				} catch (err) {
+					console.warn("[battle] FV card refs load failed:", err);
+					return [];
+				}
+			},
 			onPhase: (p) => {
 				setFvPhase(p);
 				const selfId = youIdRef.current;
@@ -2030,7 +2046,7 @@ function FinalVentCam({
 					border: "3px solid #c4b5fd",
 					shadow: "0 0 18px #a78bfa88",
 					badge: "CARD",
-					hint: "ファイナルベントカードをかざせ",
+					hint: "ライダーカードをかざせ",
 					badgeBg: "#a78bfa",
 					badgeFg: "#1e1b4b",
 				}
