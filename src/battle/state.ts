@@ -86,6 +86,8 @@ export interface BattleState {
   // 乱入演出の終了時刻(ms)。3人目以降が参戦した瞬間にサーバーが設定し、
   // この時刻まで全員の時間が完全停止する（クライアントは WARNING を表示する）。
   intrusionUntil?: number
+  // 乱入者（新規参戦者）の id。クライアントはこの時刻まで乱入者へカメラを寄せる演出に使う。
+  intruderId?: string | null
   // カード技（ストライクベント/エラーベント/ファイナルベント）発動のカットイン演出。
   // until まで全員完全停止し、クライアントは発動者へカメラを寄せてバナーを出す。
   // 技のタイムラインは停止ぶん後ろへずらしてあるので、停止明けからモーションが動き出す。
@@ -434,6 +436,7 @@ export function addPlayer(state: BattleState, init: PlayerInit, now = Date.now()
     // 飛翔中の弾は消す（停止中の無防備な相手へ着弾するのを防ぐ）。
     projectiles: intrusion ? [] : state.projectiles,
     intrusionUntil: intrusion ? now + ARENA.intrusionFreezeMs : state.intrusionUntil,
+    intruderId: intrusion ? init.id : state.intruderId,
   })
 }
 

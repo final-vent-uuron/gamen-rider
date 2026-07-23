@@ -60,7 +60,9 @@ function SelectPage() {
   }, [])
 
   function pick(c: Choice) {
-    navigate({ to: '/battle', search: { rider: c.id, name: c.name } })
+    // キャラ選択 → センサーペアリング（/pairing）→ バトル、の順で進む。
+    // rider/name はそのまま持ち回し、/pairing の「バトルへ」で /battle へ渡る。
+    navigate({ to: '/pairing', search: { rider: c.id, name: c.name } })
   }
 
   return (
@@ -82,7 +84,7 @@ function SelectPage() {
       </div>
 
       <p style={{ margin: 0, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>
-        カード認証・ポーズ認証をスキップして、選んだライダーでそのままバトルに入ります。
+        カード認証・ポーズ認証をスキップして、選んだライダーでセンサーペアリングへ進みます。
       </p>
 
       <div
@@ -146,7 +148,7 @@ function SelectPage() {
                 </span>
               )}
               <span style={{ fontWeight: 'bold', fontSize: '0.9rem', lineHeight: 1.2 }}>{c.name}</span>
-              <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>このライダーで参戦 →</span>
+              <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>このライダーでペアリングへ →</span>
             </button>
           )
         })}
