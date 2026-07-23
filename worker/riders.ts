@@ -10,11 +10,13 @@ const RIDERS_PREFIX = 'riders/'
 
 // steps（ポーズ手順）は src/pose/custom.ts の CustomStep[]。Worker 側では中身に
 // 関知せず JSON として素通しする。
+// sensorSet: BLE センサーセット番号（GR<n>_… 命名の n）。null = 紐付けなし。
 interface StoredRider {
   id: string
   name: string
   imageDataUrl: string
   steps: unknown[]
+  sensorSet: number | null
   createdAt: string
 }
 
@@ -54,7 +56,13 @@ export async function handleRiders(request: Request, bucket: R2Bucket): Promise<
     const valid = riders
       .filter((r): r is StoredRider => r !== null)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .map(({ id, name, steps, imageDataUrl }) => ({ id, name, steps, imageDataUrl }))
+      .map(({ id, name, steps, imageDataUrl, sensorSet }) => ({
+        id,
+        name,
+        steps,
+        imageDataUrl,
+        sensorSet: sensorSet ?? null, // sensorSet 導入前の登録は null 扱い
+      }))
     return json(valid)
   }
 
@@ -71,11 +79,16 @@ export async function handleRiders(request: Request, bucket: R2Bucket): Promise<
       return json({ error: 'ポーズが未登録です' }, 400)
 
     const id = `rider-${Date.now().toString(36)}`
+    const sensorSet =
+      typeof input.sensorSet === 'number' && Number.isInteger(input.sensorSet) && input.sensorSet > 0
+        ? input.sensorSet
+        : null
     const entry: StoredRider = {
       id,
       name: input.name.trim(),
       imageDataUrl: input.imageDataUrl,
       steps: input.steps,
+      sensorSet,
       createdAt: new Date().toISOString(),
     }
     await bucket.put(`${RIDERS_PREFIX}${id}.json`, JSON.stringify(entry), {

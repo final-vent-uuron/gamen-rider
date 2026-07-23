@@ -5,6 +5,7 @@ import { SENSOR_PARTS, createKeyboardSource, createSensorHub } from '../battle'
 import type { BattleInput, BleStatus, SensorHub, SensorPartKey } from '../battle'
 import type { PresenterAction, WinnerPresenter } from '../battle/winner3d'
 import { RIDER_ROUTINES } from '../pose'
+import { riderSensorSet } from '../rider-registry'
 
 // センサーペアリング画面（変身成立 → バトルの間のステップ）。
 // 右手・左手・右足・左足・ベルトの計5デバイスを、それぞれ BLE でペアリングして試す。
@@ -61,7 +62,10 @@ function PairingPage() {
   const idleTimerRef = useRef(0)
   const flashTimerRef = useRef<Partial<Record<SensorPartKey, number>>>({})
   const hubRef = useRef<SensorHub | null>(null)
+  // 登録ライダーに紐づくセンサーセット番号（GR<n>）。R2 から非同期に決まるので ref + 表示用 state。
+  const sensorSetRef = useRef<number | null>(null)
 
+  const [sensorSet, setSensorSet] = useState<number | null>(null)
   const [statuses, setStatuses] = useState<Record<SensorPartKey, BleStatus>>(emptyStatuses)
   const [impacts, setImpacts] = useState<Partial<Record<SensorPartKey, number>>>({})
   const [flash, setFlash] = useState<Partial<Record<SensorPartKey, boolean>>>({})
@@ -126,10 +130,18 @@ function PairingPage() {
           const def = SENSOR_PARTS.find((p) => p.key === key)
           triggerVisual(key, ACTION_BY_PART[key], `${def?.emoji ?? ''} ${def?.label ?? ''}`)
         },
+        sensorSet: () => sensorSetRef.current,
       },
     )
-    hub.start()
     hubRef.current = hub
+    // 自分のライダーのセンサーセット（GR 番号）を R2 から引いてから自動接続を始める
+    //（先に始めると他セットの許可済みデバイスを拾い得るため）。
+    let cancelled = false
+    void riderSensorSet(riderId).then((set) => {
+      sensorSetRef.current = set
+      setSensorSet(set)
+      if (!cancelled) hub.start()
+    })
 
     // キーボード（センサー無しでもモデル・タイルを試せるダミー入力）。
     const kbHandler = (input: BattleInput) => {
@@ -156,13 +168,14 @@ function PairingPage() {
     keyboard.start()
 
     return () => {
+      cancelled = true
       keyboard.stop()
       hub.stop()
       hubRef.current = null
       window.clearTimeout(idleTimerRef.current)
       for (const t of Object.values(flashTimerRef.current)) window.clearTimeout(t)
     }
-  }, [])
+  }, [riderId])
 
   const toBattle = () => navigate({ to: '/battle', search: { rider: riderId, name: riderName } })
 
@@ -195,6 +208,19 @@ function PairingPage() {
         </Link>
         <h1 style={{ margin: 0, fontSize: '1.15rem' }}>センサーペアリング</h1>
         <span style={{ color: '#a78bfa', fontWeight: 'bold' }}>{riderName}</span>
+        {sensorSet != null && (
+          <span
+            style={{
+              fontSize: '0.75rem',
+              color: '#34d399',
+              border: '1px solid #34d39955',
+              borderRadius: '999px',
+              padding: '2px 10px',
+            }}
+          >
+            センサーセット GR{sensorSet}（他セットは選択不可）
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: '#9ca3af' }}>
           接続済み {connectedCount}/{SENSOR_PARTS.length} 部位
         </span>

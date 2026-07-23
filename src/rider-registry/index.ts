@@ -14,6 +14,16 @@ function apiBase(): string {
   return (fromEnv?.trim() || PROD_API_BASE).replace(/\/$/, '')
 }
 
+/** 登録ライダーの BLE センサーセット番号（GR<n>_… の n）。未登録 ID・未設定・取得失敗は null。 */
+export async function riderSensorSet(riderId: string): Promise<number | null> {
+  try {
+    const riders = await listRiders()
+    return riders.find((r) => r.id === riderId)?.sensorSet ?? null
+  } catch {
+    return null // 取得できないときは「制限なし」に倒す（センサーが繋げない事故を避ける）
+  }
+}
+
 /** 登録済みライダー一覧を画像（data URL）つきで返す。 */
 export async function listRiders(): Promise<RegisteredRiderWithImage[]> {
   const res = await fetch(`${apiBase()}/riders`)
