@@ -36,7 +36,7 @@
 > 入力は `InputSource` インターフェースで抽象化してあり、キーボードと BLE を差し替え可能。
 > PunchSensor は Arduino（LIS3DH + ArduinoBLE）＋ Web Bluetooth 想定。一度ペアリングすれば以降は自動再接続する実装がある。
 > リポジトリの `test/` は PlatformIO のひな形（現状は LED 点滅デモ）で、PunchSensor 本体ファームとは別。
-> ファイナルベント用カード参照は `src/battle/finalVentCam.ts` の `FINAL_VENT_CARD_REF`（当面はプレースホルダ画像）。
+> ファイナルベント用カード参照は変身フローと同じ登録ライダー画像（`listRiders` → `resolveFinalVentCardRefs`）。
 > FV ポーズは `/final-vent-pose` で**キャラごと・複数ステップ**登録（変身と同じ流れ判定。localStorage）。
 
 ## 技術スタック
@@ -121,7 +121,7 @@ scripts/          R2 モデル管理など
 - **BLE → 本番バトル**：`/battle` へのセンサー配線、キック／移動センサー
 - **本番導線**：`/auth` → `/pairing` → `/battle` のつなぎ
 - **DB**：未定（現状インメモリ／ファイルベース）
-- **ライダー別デッキ／FV カード絵**：バトルカードと `FINAL_VENT_CARD_REF` はプレースホルダ
+- **ライダー別デッキ**：バトルカード UI は共通プレースホルダ。FV のかざすカードは登録ライダー画像を使用
 - **FV ポーズ**：`/final-vent-pose` でキャラごとに登録（未登録キャラは前突き出し）
 
 ## リポジトリ

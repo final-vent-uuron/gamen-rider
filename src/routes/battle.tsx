@@ -26,8 +26,11 @@ import {
 	createSfx,
 	endFinalVent,
 	getPairedParts,
+	getStoredBgmVolume,
 	loadFinalVentPose,
 	meterStocks,
+	resolveFinalVentCardRefs,
+	setStoredBgmVolume,
 	stepBattle,
 } from "../battle";
 import type {
@@ -48,6 +51,7 @@ import type {
 	Sfx,
 } from "../battle";
 import type { ArenaRenderer } from "../battle/arena3d";
+import { listRiders } from "../rider-registry";
 
 // 被弾ダメージの浮き数字。命中検出で追加し、一定時間で消す。
 interface DamagePopup {
@@ -610,6 +614,20 @@ function BattlePage() {
 			getVideo: () => ventVideoRef.current,
 			riderId: routine.riderId,
 			riderName: routine.riderName,
+			// 変身フローと同じ登録ライダー画像をかざすカードにする
+			getCardRefs: async () => {
+				try {
+					const registered = await listRiders();
+					return resolveFinalVentCardRefs(
+						registered,
+						routine.riderId,
+						routine.riderName,
+					);
+				} catch (err) {
+					console.warn("[battle] FV card refs load failed:", err);
+					return [];
+				}
+			},
 			onPhase: (p) => {
 				setFvPhase(p);
 				const selfId = youIdRef.current;
@@ -1011,7 +1029,7 @@ function BattlePage() {
 					/>
 				</div>
 
-				{/* ステージ右上: Back・全画面（その下に開閉式の操作説明） */}
+				{/* ステージ右上: Back・BGM音量・全画面（その下に開閉式の操作説明） */}
 				<div
 					style={{
 						position: "absolute",
@@ -1038,6 +1056,13 @@ function BattlePage() {
 					>
 						← Back
 					</Link>
+					<BgmVolumeControl
+						onChange={(v) => {
+							// bgm 未生成の一瞬でも localStorage に残し、createBgm が拾えるようにする
+							if (bgmRef.current) bgmRef.current.setVolume(v);
+							else setStoredBgmVolume(v);
+						}}
+					/>
 					<FullscreenButton />
 				</div>
 				{/* 操作説明（ステージ右上・開閉式。Back/全画面の下） */}
@@ -1308,6 +1333,55 @@ function FullscreenButton() {
 		>
 			{fs ? "✕ 全画面解除" : "⛶ 全画面"}
 		</button>
+	);
+}
+
+// BGM マスター音量（0〜100%）。localStorage に保存し、リザルトの win-bgm にも引き継ぐ。
+function BgmVolumeControl({ onChange }: { onChange: (v: number) => void }) {
+	const [master, setMaster] = useState(() => getStoredBgmVolume());
+	const pct = Math.round(master * 100);
+	return (
+		<label
+			title="BGM 音量"
+			style={{
+				display: "inline-flex",
+				alignItems: "center",
+				gap: "0.35rem",
+				background: "rgba(0,0,0,0.45)",
+				border: "1px solid #334155",
+				borderRadius: "6px",
+				color: "#e5e7eb",
+				fontSize: "0.78rem",
+				padding: "2px 8px",
+				whiteSpace: "nowrap",
+				cursor: "default",
+				userSelect: "none",
+			}}
+		>
+			<span aria-hidden="true">{pct === 0 ? "🔇" : "♪"}</span>
+			<span style={{ minWidth: "2.4em", textAlign: "right", color: "#cbd5e1" }}>
+				{pct}
+			</span>
+			<input
+				type="range"
+				min={0}
+				max={100}
+				step={1}
+				value={pct}
+				aria-label="BGM 音量"
+				onChange={(e) => {
+					const v = Number(e.target.value) / 100;
+					setMaster(v);
+					onChange(v);
+				}}
+				style={{
+					width: "88px",
+					accentColor: "#a78bfa",
+					cursor: "pointer",
+					verticalAlign: "middle",
+				}}
+			/>
+		</label>
 	);
 }
 
@@ -2131,7 +2205,7 @@ function FinalVentCam({
 					border: "3px solid #c4b5fd",
 					shadow: "0 0 18px #a78bfa88",
 					badge: "CARD",
-					hint: "ファイナルベントカードをかざせ",
+					hint: "ライダーカードをかざせ",
 					badgeBg: "#a78bfa",
 					badgeFg: "#1e1b4b",
 				}

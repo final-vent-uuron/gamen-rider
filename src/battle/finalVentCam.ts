@@ -1,5 +1,6 @@
 // バトル右下カメラでのファイナルベント発動シーケンス。
 // メーター満タン → カード（ORB）→ ポーズ手順（変身と同じ流れ判定）→ sendAttack("final")。
+// かざすカードの参照は変身フローと同じ登録ライダー画像（/auth/register → registry）。
 // ポーズ手順は localStorage（finalVentPose.ts）のキャラ別登録。未登録時は前突き出し 1 ステップ。
 // ガード用 MediaPipe と同じ <video> を共有し、カード／ポーズ相では cam ガードを mute する。
 
@@ -9,14 +10,33 @@ import type { CardMatcher, CardRef } from '../card'
 import { createCardMatcher } from '../card'
 import { createRoutineRunner } from '../pose/routine'
 import type { RoutineRunner, RunnerStep } from '../pose/routine'
+import type { RegisteredRiderWithImage } from '../rider-registry'
 
-import grapeUrl from '../assets/refs/grape.png'
 import { resolveFinalVentRoutine } from './finalVentPose'
 
-export const FINAL_VENT_CARD_REF: CardRef = {
-  id: 'final-vent',
-  label: 'ファイナルベント',
-  url: grapeUrl,
+/** 変身フローと同じく、登録ライダー画像から FV 用 CardRef を組み立てる。 */
+export function resolveFinalVentCardRefs(
+  registered: RegisteredRiderWithImage[],
+  riderId: string,
+  riderName?: string,
+): CardRef[] {
+  const all: CardRef[] = registered.map((r) => ({
+    id: r.id,
+    label: r.name,
+    url: r.imageDataUrl,
+  }))
+  if (all.length === 0) return []
+  // /auth 経由: registry の id そのもの
+  const byId = all.filter((r) => r.id === riderId)
+  if (byId.length) return byId
+  // /select の言語 id（arduino 等）→ 登録名（Arduino）で紐付け
+  const nameLc = (riderName ?? '').trim().toLowerCase()
+  if (nameLc) {
+    const byName = all.filter((r) => r.label.trim().toLowerCase() === nameLc)
+    if (byName.length) return byName
+  }
+  // 紐付けできないときは変身と同じく全登録カードを候補にする
+  return all
 }
 
 export type FinalVentPhase = 'idle' | 'card' | 'pose' | 'fire'
@@ -50,7 +70,10 @@ export interface FinalVentControllerOptions {
   onFire: () => void
   // ポーズ手順の進捗（UI 表示用）
   onPoseProgress?: (progress: FinalVentPoseProgress | null) => void
+  /** 事前に渡す参照。省略時は getCardRefs（変身と同じ登録ライダー）を lazy load */
   cardRefs?: CardRef[]
+  /** 変身フロー同様 listRiders → resolveFinalVentCardRefs を想定 */
+  getCardRefs?: () => Promise<CardRef[]>
   riderId?: string
   riderName?: string
 }
@@ -58,8 +81,6 @@ export interface FinalVentControllerOptions {
 export function createFinalVentController(
   opts: FinalVentControllerOptions,
 ): FinalVentController {
-  const refs = opts.cardRefs ?? [FINAL_VENT_CARD_REF]
-  const targetIds = new Set(refs.map((r) => r.id))
   const riderId = opts.riderId ?? ''
   const { routine } = resolveFinalVentRoutine(riderId, opts.riderName)
   const poseTimeoutMs =
@@ -76,6 +97,7 @@ export function createFinalVentController(
   let cardPhaseAt = 0
   let posePhaseAt = 0
   let cooldownUntil = 0
+  let targetIds = new Set((opts.cardRefs ?? []).map((r) => r.id))
 
   const emitProgress = (step: RunnerStep | null) => {
     if (!step) {
@@ -126,6 +148,23 @@ export function createFinalVentController(
   const ensureMatcher = () => {
     if (matcher || loadPromise) return
     loadPromise = (async () => {
+      // 変身フローと同じ登録ライダー画像を参照する（cardRefs 優先、無ければ getCardRefs）
+      let refs = opts.cardRefs ?? []
+      if (refs.length === 0 && opts.getCardRefs) {
+        refs = await opts.getCardRefs()
+      }
+      if (!running) {
+        loadPromise = null
+        return
+      }
+      if (refs.length === 0) {
+        console.warn(
+          '[finalVent] カード参照が空です。/auth/register でライダーを登録してください（L/F でバイパス可）',
+        )
+        loadPromise = null
+        return
+      }
+      targetIds = new Set(refs.map((r) => r.id))
       const m = createCardMatcher(refs)
       await m.ready
       if (!running) {

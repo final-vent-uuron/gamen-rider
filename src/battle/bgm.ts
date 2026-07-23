@@ -9,8 +9,19 @@
 //
 // ブラウザの自動再生ポリシー対策: play() が拒否されたら最初のユーザー操作
 // （pointerdown / keydown）で自動リトライする。SSR 安全（Audio が無ければ何もしない）。
+//
+// 音量: マスター 0〜1（localStorage に保存）。各トラックの相対音量に掛ける。
 
 const BGM_DIR = '/bgm'
+const VOLUME_KEY = 'gamen-rider:bgm-volume'
+const DEFAULT_MASTER = 1
+
+// トラックごとの相対音量（マスター 1.0 のときの目標値）
+const MAIN_BASE = 0.35
+const INTRUSION_BASE = 0.75
+const FINAL_BASE = 0.6
+const VOICE_BASE = 0.9
+const WIN_BASE = 0.7
 
 // ファイナルベントの掛け声（存在するファイル名そのまま。3 だけ綴りが違う）。
 const FINAL_VENT_VOICES = [
@@ -25,6 +36,8 @@ export interface Bgm {
   intrusion(durationMs: number): void // 乱入: main を止めて Intrusion-bgm を durationMs だけ流す
   finalVent(): void // ファイナルベント: 掛け声＋final-vent-bgm を数秒流して main へ戻す
   fadeOutMain(ms?: number): void // 決着時など、main をフェードアウトして止める
+  setVolume(master: number): void // マスター音量 0〜1（即時反映＋localStorage）
+  getVolume(): number
   close(): void // 全停止＋解放（画面を離れるとき必ず呼ぶ）
 }
 
@@ -33,7 +46,36 @@ const NOOP: Bgm = {
   intrusion() {},
   finalVent() {},
   fadeOutMain() {},
+  setVolume() {},
+  getVolume: () => DEFAULT_MASTER,
   close() {},
+}
+
+function clamp01(v: number): number {
+  if (Number.isNaN(v)) return DEFAULT_MASTER
+  return Math.min(1, Math.max(0, v))
+}
+
+/** localStorage からマスター音量を読む（SSR では既定値）。 */
+export function getStoredBgmVolume(): number {
+  if (typeof window === 'undefined') return DEFAULT_MASTER
+  try {
+    const raw = window.localStorage.getItem(VOLUME_KEY)
+    if (raw == null) return DEFAULT_MASTER
+    return clamp01(Number.parseFloat(raw))
+  } catch {
+    return DEFAULT_MASTER
+  }
+}
+
+/** マスター音量を localStorage に保存する（UI からも直接呼べる）。 */
+export function setStoredBgmVolume(master: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(VOLUME_KEY, String(clamp01(master)))
+  } catch {
+    /* quota / private mode */
+  }
 }
 
 // play() が自動再生ポリシーで拒否されたら、最初のユーザー操作で一度だけリトライする。
@@ -56,9 +98,11 @@ export function createBgm(): Bgm {
   if (typeof window === 'undefined' || typeof Audio === 'undefined') return NOOP
 
   let closed = false
+  let master = getStoredBgmVolume()
   const alive = () => !closed
   const timers: number[] = []
   const later = (fn: () => void, ms: number) => timers.push(window.setTimeout(fn, ms))
+  const scaled = (base: number) => clamp01(base * master)
 
   const make = (file: string, volume: number, loop = false) => {
     const a = new Audio(`${BGM_DIR}/${file}`)
@@ -68,10 +112,9 @@ export function createBgm(): Bgm {
     return a
   }
 
-  const MAIN_VOL = 0.35
-  const main = make('main-bgm.mp3', MAIN_VOL, true)
-  const intrusionBgm = make('Intrusion-bgm.mp3', 0.75)
-  const finalBgm = make('final-vent-bgm.mp3', 0.6)
+  const main = make('main-bgm.mp3', scaled(MAIN_BASE), true)
+  const intrusionBgm = make('Intrusion-bgm.mp3', scaled(INTRUSION_BASE))
+  const finalBgm = make('final-vent-bgm.mp3', scaled(FINAL_BASE))
 
   // 音量フェード（50ms 刻みの線形）。onDone は最後に一度だけ。
   const fades = new Map<HTMLAudioElement, number>()
@@ -97,7 +140,7 @@ export function createBgm(): Bgm {
     interruptDepth++
     main.pause()
     a.currentTime = 0
-    a.volume = a === intrusionBgm ? 0.75 : 0.6
+    a.volume = scaled(a === intrusionBgm ? INTRUSION_BASE : FINAL_BASE)
     playWithUnlock(a, alive)
     later(() => fadeTo(a, 0, fadeOutMs, () => a.pause()), Math.max(0, durationMs - fadeOutMs))
     later(() => {
@@ -105,7 +148,7 @@ export function createBgm(): Bgm {
       if (interruptDepth > 0 || closed || mainStopped) return
       main.volume = 0
       playWithUnlock(main, alive)
-      fadeTo(main, MAIN_VOL, 600)
+      fadeTo(main, scaled(MAIN_BASE), 600)
     }, durationMs)
   }
 
@@ -115,6 +158,7 @@ export function createBgm(): Bgm {
     playMain() {
       if (closed || mainStopped) return
       if (!main.paused) return
+      main.volume = scaled(MAIN_BASE)
       playWithUnlock(main, alive)
     },
     intrusion(durationMs) {
@@ -124,7 +168,10 @@ export function createBgm(): Bgm {
     finalVent() {
       if (closed) return
       // 掛け声（ランダム）＋ BGM を約 8 秒。技そのものは ~1.2s だが余韻を残す。
-      const voice = make(FINAL_VENT_VOICES[Math.floor(Math.random() * FINAL_VENT_VOICES.length)], 0.9)
+      const voice = make(
+        FINAL_VENT_VOICES[Math.floor(Math.random() * FINAL_VENT_VOICES.length)],
+        scaled(VOICE_BASE),
+      )
       playWithUnlock(voice, alive)
       interrupt(finalBgm, 8000, 1200)
     },
@@ -132,6 +179,30 @@ export function createBgm(): Bgm {
       if (closed) return
       mainStopped = true // 以後 interrupt 明けでも main は復帰させない
       fadeTo(main, 0, ms, () => main.pause())
+    },
+    setVolume(next) {
+      if (closed) return
+      master = clamp01(next)
+      setStoredBgmVolume(master)
+      // 再生中トラックへ即反映（フェード中は目標へスナップ）
+      if (!main.paused && !mainStopped && interruptDepth === 0) {
+        window.clearInterval(fades.get(main))
+        fades.delete(main)
+        main.volume = scaled(MAIN_BASE)
+      }
+      if (!intrusionBgm.paused) {
+        window.clearInterval(fades.get(intrusionBgm))
+        fades.delete(intrusionBgm)
+        intrusionBgm.volume = scaled(INTRUSION_BASE)
+      }
+      if (!finalBgm.paused) {
+        window.clearInterval(fades.get(finalBgm))
+        fades.delete(finalBgm)
+        finalBgm.volume = scaled(FINAL_BASE)
+      }
+    },
+    getVolume() {
+      return master
     },
     close() {
       closed = true
@@ -146,11 +217,12 @@ export function createBgm(): Bgm {
 }
 
 // リザルト画面用の勝利ジングル（約6秒・単発）。戻り値のクリーンアップを unmount で呼ぶ。
-export function playWinBgm(volume = 0.7): () => void {
+// volume 未指定時は保存済みマスター × WIN_BASE。
+export function playWinBgm(volume?: number): () => void {
   if (typeof window === 'undefined' || typeof Audio === 'undefined') return () => {}
   let stopped = false
   const a = new Audio(`${BGM_DIR}/win-bgm.mp3`)
-  a.volume = volume
+  a.volume = clamp01(volume ?? WIN_BASE * getStoredBgmVolume())
   playWithUnlock(a, () => !stopped)
   return () => {
     stopped = true

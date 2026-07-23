@@ -3,7 +3,8 @@
 // エラーベント=error-mode / ファイナルベント=final-vent（クリップは special）。
 // kind は表示チップと解禁条件（final はゲージ満タンのみ）のヒント。
 //
-// ファイナルベントの「かざすカード」参照画像は finalVentCam.ts の FINAL_VENT_CARD_REF。
+// ファイナルベントの「かざすカード」参照画像は変身フローと同じ登録ライダー
+// （listRiders → resolveFinalVentCardRefs）。キーボード L/F とカード UI は開発用バイパス。
 
 export type BattleCardKind = 'attack' | 'special' | 'final'
 
