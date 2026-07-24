@@ -1,6 +1,7 @@
 // NFC ファイナルベント連携の検証ページ（開発用）。
-// Swift アプリが本来やること（① 紐付け: POST /riders/nfc、② 発動: POST /riders/nfc-final。
-// WS の {t:'nfc-final'} でも同じことができるが HTTP 版が本命）をブラウザから素振りできる。
+// Swift アプリが本来やること（① 紐付け: POST /riders/nfc-bind、② 発動: POST /riders/nfc。
+// /riders/nfc-final は旧パスの後方互換エイリアス。WS の {t:'nfc-final'} でも発動できるが
+// HTTP 版が本命）をブラウザから素振りできる。
 //
 // API ベース URL は画面上で明示的に選べるようにしてある（rider-registry の bindRiderNfc や
 // battle/net.ts の defaultWsUrl は環境から自動判定するため、実際にどこを叩いたか分かりにくい
@@ -24,7 +25,7 @@ interface LogEntry {
   kind: 'send' | 'recv' | 'info' | 'error'
 }
 
-// サーバー（BattleRoom）が記録している直近の nfc-final 結果。GET /riders/nfc-final でポーリングする。
+// サーバー（BattleRoom）が記録している直近の nfc-final 結果。GET /riders/nfc でポーリングする。
 // DO がアイドルで退避されるとサーバー側の履歴はリセットされる（インメモリ・デバッグ用途のため）。
 interface ServerNfcLogEntry {
   at: number
@@ -84,7 +85,7 @@ function NfcTestPage() {
   // サーバー側の直近 nfc-final 結果を定期ポーリング（実機からの本物のリクエストを見るのが目的）。
   useEffect(() => {
     let cancelled = false
-    const url = `${apiBase}/riders/nfc-final?room=${encodeURIComponent(room.trim() || 'room')}`
+    const url = `${apiBase}/riders/nfc?room=${encodeURIComponent(room.trim() || 'room')}`
     const tick = async () => {
       try {
         const res = await fetch(url)
@@ -108,7 +109,7 @@ function NfcTestPage() {
 
   async function handleBind() {
     if (!bindRiderId || !nfcId.trim()) return
-    const url = `${apiBase}/riders/nfc`
+    const url = `${apiBase}/riders/nfc-bind`
     setBinding(true)
     setBindResult(null)
     pushLog(`POST ${url} body={riderId:"${bindRiderId}",nfcId:"${nfcId.trim()}"}`, 'send')
@@ -132,7 +133,7 @@ function NfcTestPage() {
 
   async function handleFireHttp() {
     if (!nfcId.trim()) return
-    const url = `${apiBase}/riders/nfc-final`
+    const url = `${apiBase}/riders/nfc`
     setFiring(true)
     setFireResult(null)
     pushLog(`POST ${url} body={nfcId:"${nfcId.trim()}"}`, 'send')
@@ -279,14 +280,15 @@ function NfcTestPage() {
         </div>
         <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} style={inputStyle} />
         <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
-          今の設定なら POST 先は <code>{apiBase}/riders/nfc</code> と <code>{apiBase}/riders/nfc-final</code>
+          今の設定なら POST 先は <code>{apiBase}/riders/nfc-bind</code>（紐付け）と{' '}
+          <code>{apiBase}/riders/nfc</code>（発動）
         </span>
       </section>
 
       {/* 1. 紐付け */}
       <section style={panelStyle}>
         <h2 style={h2Style}>① NFC タグの紐付け</h2>
-        <code style={urlStyle}>POST {apiBase}/riders/nfc</code>
+        <code style={urlStyle}>POST {apiBase}/riders/nfc-bind</code>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label style={fieldStyle}>
             <span style={labelStyle}>対象ライダー</span>
@@ -324,7 +326,7 @@ function NfcTestPage() {
       {/* 2-A. 発動（HTTP・本命） */}
       <section style={panelStyle}>
         <h2 style={h2Style}>② 発動（HTTP・Swift アプリが実際に使う版）</h2>
-        <code style={urlStyle}>POST {apiBase}/riders/nfc-final</code>
+        <code style={urlStyle}>POST {apiBase}/riders/nfc</code>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label style={{ ...fieldStyle, flex: '1 1 220px' }}>
             <span style={labelStyle}>送信する nfcId（上と共通）</span>

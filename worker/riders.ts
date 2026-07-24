@@ -110,7 +110,7 @@ export async function handleRiders(
 				? input.sensorSet
 				: null;
 		// 既存ライダーへの上書き登録（画像/ポーズの撮り直し）で NFC タグの紐付けを消さないよう、
-		// 既存エントリの nfcId を引き継ぐ（bind は /riders/nfc の専任なのでここでは受け取らない）。
+		// 既存エントリの nfcId を引き継ぐ（bind は /riders/nfc-bind の専任なのでここでは受け取らない）。
 		const existing = await bucket.get(`${RIDERS_PREFIX}${id}.json`);
 		const nfcId = existing
 			? ((await existing.json()) as StoredRider).nfcId ?? null
