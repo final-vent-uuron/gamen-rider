@@ -95,6 +95,10 @@ const EMPTY_BATTLE: BattleState = {
 // 実時間で前進させつつ、最新 st - 遅延 へゆっくり寄せる（時計ドリフト・バースト到着を吸収）。
 const INTERP_DELAY_MS = 120;
 
+// 振り向き: カメラで横向きを検知した瞬間、直近このミリ秒以内に両手センサーが
+// パンチ判定（ble.ts の PUNCH しきい値）を出していないと振り向かない（誤爆防止のAND条件）。
+const TURN_HAND_WINDOW_MS = 500;
+
 // 止め（最後の1人になる直前の撃墜）の演出タイミング。
 // スロー再生で倒れ切るのに実時間がかかるので、GAME SET と /result 遷移をそこへ合わせる。
 //   0ms            : 撃墜 → スローモーション開始（死亡モーションをゆっくり再生）
@@ -195,6 +199,12 @@ function BattlePage() {
 	const hubRef = useRef<SensorHub | null>(null); // バトル中の 5部位センサーハブ（接続ボタンから connectAny() を呼ぶ）
 	// 自分のライダーのセンサーセット番号（GR<n>。R2 から非同期に取得）。他セットの GR デバイス除外用。
 	const sensorSetRef = useRef<number | null>(null);
+	// 振り向き判定用: 両手加速度センサーの直近ヒット時刻（パンチ検出＝ble.ts 側のしきい値と同じ判定を流用）。
+	// カメラで横向きを検知した瞬間、両方が TURN_HAND_WINDOW_MS 以内に振られていたら振り向く。
+	const lastHandHitAtRef = useRef<{ rightHand: number; leftHand: number }>({
+		rightHand: 0,
+		leftHand: 0,
+	});
 	const sfxRef = useRef<Sfx | null>(null); // 効果音（WebAudio 合成）
 	const bgmRef = useRef<Bgm | null>(null); // BGM（public/bgm/ の mp3）
 	const intrusionSeenRef = useRef(0); // 処理済みの intrusionUntil（同じ乱入を1回だけ演出する）
@@ -671,6 +681,12 @@ function BattlePage() {
 		const hub = createSensorHub(handleInput, {
 			onStatus: (key, s) =>
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
+			// 振り向き判定（両手同時パンチ AND カメラ横向き）用に、手のヒット時刻だけ記録する。
+			onImpact: (key, _impact, hit) => {
+				if (!hit) return;
+				if (key === "rightHand") lastHandHitAtRef.current.rightHand = Date.now();
+				else if (key === "leftHand") lastHandHitAtRef.current.leftHand = Date.now();
+			},
 			sensorSet: () => sensorSetRef.current,
 		});
 		hubRef.current = hub;
@@ -708,8 +724,10 @@ function BattlePage() {
 			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
-			// 体の向き（カメラに対して横向きか）。正面 → 横向きの瞬間に振り向く（facing 反転）。
+			// 体の向き（カメラに対して横向きか）。正面 → 横向きの瞬間が振り向きの候補になる。
 			// デバウンス済みの変化時のみ呼ばれるので、横向き 1 回につき 1 回だけ送られる。
+			// 実際に振り向くのは、かつ両手センサーが直近 TURN_HAND_WINDOW_MS 以内に
+			// パンチ判定（ble.ts の同じしきい値）を出していたとき（AND 条件。誤爆防止）。
 			(side) => {
 				if (fv.isCamMuted()) {
 					setCamSide(false);
@@ -717,8 +735,15 @@ function BattlePage() {
 				}
 				setCamSide(side);
 				if (side) {
-					net.sendTurn();
-					applyPred((s) => applyTurn(s, youIdRef.current, Date.now()));
+					const now = Date.now();
+					const hands = lastHandHitAtRef.current;
+					const bothHandsSwung =
+						now - hands.rightHand <= TURN_HAND_WINDOW_MS &&
+						now - hands.leftHand <= TURN_HAND_WINDOW_MS;
+					if (bothHandsSwung) {
+						net.sendTurn();
+						applyPred((s) => applyTurn(s, youIdRef.current, now));
+					}
 				}
 			},
 		);
