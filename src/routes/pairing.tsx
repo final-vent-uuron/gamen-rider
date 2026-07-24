@@ -177,7 +177,14 @@ function PairingPage() {
     }
   }, [riderId])
 
-  const toBattle = () => navigate({ to: '/battle', search: { rider: riderId, name: riderName } })
+  // 解決済みの sensorSet をそのまま /battle へ渡す（null は空文字にして必ず値を持たせる）。
+  // /battle 側はこれが付いていれば R2 への再フェッチをせず即座に自動再接続を始められる
+  // （フェッチ待ちで「まだ何も繋がってない」空白時間ができ、体感で切断されたように見えていた）。
+  const toBattle = () =>
+    navigate({
+      to: '/battle',
+      search: { rider: riderId, name: riderName, sensorSet: sensorSetRef.current ?? '' },
+    })
 
   const connectedCount = SENSOR_PARTS.filter((p) => statuses[p.key] === 'connected').length
 

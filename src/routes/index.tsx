@@ -104,7 +104,7 @@ function Home() {
 				▶ ゲームスタート
 			</Link>
 
-			{/* 開発用（個別テスト）。本番フローには含まれない単体検証ページ。 */}
+			{/* 開発用（即座にテストするための入口）。本番フローには含まれない。 */}
 			<div
 				style={{
 					position: "relative",
@@ -122,7 +122,7 @@ function Home() {
 						letterSpacing: "0.1em",
 					}}
 				>
-					開発用（個別テスト）
+					開発用
 				</span>
 				<div
 					style={{
@@ -135,13 +135,6 @@ function Home() {
 					{(
 						[
 							{ to: "/select", label: "キャラ選択（デモ）" },
-							{ to: "/pose", label: "Pose 検知" },
-							{ to: "/detect", label: "画像検知" },
-							{ to: "/henshin", label: "変身フロー(旧)" },
-							{ to: "/pairing", label: "ペアリング単体" },
-							{ to: "/battle", label: "バトル単体" },
-							{ to: "/battle-test", label: "バトル検証" },
-							{ to: "/model-check", label: "モデル検証" },
 							{ to: "/auth/register", label: "ライダー登録" },
 							{ to: "/final-vent-pose", label: "FVポーズ登録" },
 						] as const

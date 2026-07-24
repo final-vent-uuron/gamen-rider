@@ -5,7 +5,6 @@ import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
 
 import { RIDER_ROUTINES } from "../pose";
 import { LM } from "../pose/landmarks";
-import { facingMetrics } from "../pose/poses";
 import { createSkeletonSmoother } from "../pose/skeleton";
 import {
 	ARENA,
@@ -68,9 +67,12 @@ interface DamagePopup {
 export const Route = createFileRoute("/battle")({
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { rider?: string; name?: string } => ({
+	): { rider?: string; name?: string; sensorSet?: string } => ({
 		rider: typeof search.rider === "string" ? search.rider : undefined,
 		name: typeof search.name === "string" ? search.name : undefined,
+		// /pairing が解決済みの値を渡してくる（空文字 = 制限なし）。undefined なら
+		// /pairing を経由していない（直接 /battle を開いた等）ので下で自前フェッチする。
+		sensorSet: typeof search.sensorSet === "string" ? search.sensorSet : undefined,
 	}),
 	component: BattlePage,
 });
@@ -98,6 +100,23 @@ const INTERP_DELAY_MS = 120;
 // 振り向き: カメラで横向きを検知した瞬間、直近このミリ秒以内に両手センサーが
 // パンチ判定（ble.ts の PUNCH しきい値）を出していないと振り向かない（誤爆防止のAND条件）。
 const TURN_HAND_WINDOW_MS = 500;
+
+// 振り向きジェスチャー対策: 片手のパンチ検出をこの ms だけ遅らせ、その間にもう片方の手も
+// 検出されたら両方とも誤パンチとして出さない（ble.ts の bothHandPunchSuppressMs 参照）。
+// 片手だけなら delay 分だけ遅れて通常どおりパンチが出る。
+const BOTH_HAND_PUNCH_SUPPRESS_MS = 100;
+
+// 走行: 実際の走る動作（右手と左足、左手と右足が対になって振れるクロス歩行）に合わせ、
+// 対角の手足ペア（右手+左足 or 左手+右足）が直近 RUN_HOLD_MS 以内にどちらも反応してたら
+// 向いている方向へ前進する。片方のペアが揃えば良く、両ペア同時である必要はない
+// （交互のストライドにそのまま対応できる）。
+// 判定は各部位の生インパクト値ストリーム（onImpact。パンチ/キック判定とは別経路）を使う。
+// RUN_STEP_THRESHOLD はキック検出のしきい値（ble.ts 側 firmware、目安25）よりだいぶ低い値に
+// してある（軽い動きでも拾うが、パンチ/キック判定そのものには影響しない独立経路。ただし
+// 強く腕を振るとパンチ判定＝firmware側の閾値も超えて同時にパンチが出ることはありうる）。
+// 実機の個体差で誤反応/無反応が出たら、この2つの値をまず調整する。
+const RUN_STEP_THRESHOLD = 10;
+const RUN_HOLD_MS = 450;
 
 // 止め（最後の1人になる直前の撃墜）の演出タイミング。
 // スロー再生で倒れ切るのに実時間がかかるので、GAME SET と /result 遷移をそこへ合わせる。
@@ -136,7 +155,7 @@ function predAction(
 }
 
 function BattlePage() {
-	const { rider, name } = Route.useSearch();
+	const { rider, name, sensorSet: sensorSetParam } = Route.useSearch();
 	const navigate = useNavigate();
 
 	// 自分のライダーを解決。RIDER_ROUTINES に無い id（登録ライダー・デモ選択）は id を
@@ -177,6 +196,10 @@ function BattlePage() {
 		leftFoot: "idle",
 		belt: "idle",
 	}));
+	// 各部位の直近インパクト値（HUD のゲージ表示用。~100ms 間引きで反映）
+	const [sensorImpacts, setSensorImpacts] = useState<
+		Partial<Record<SensorPartKey, number>>
+	>({});
 	const [intruder, setIntruder] = useState<string | null>(null); // 乱入 WARNING（乱入者名。null = 非表示）
 	// カード技のカットイン（発動者名と種別。null = 非表示）
 	const [cutinShow, setCutinShow] = useState<{
@@ -205,6 +228,31 @@ function BattlePage() {
 		rightHand: 0,
 		leftHand: 0,
 	});
+	// 走行判定用: 4肢それぞれの直近「動き」時刻（パンチ/キック判定より緩い閾値。onImpact の
+	// 生値で判定）。対角ペア（右手+左足 / 左手+右足）が揃ってるかを見る＝クロス歩行の検知。
+	// キーボードの移動入力より弱い優先度で合成する（キーボード入力中はそちらを優先）。
+	const lastLimbStepAtRef = useRef<{
+		rightHand: number;
+		leftHand: number;
+		rightFoot: number;
+		leftFoot: number;
+	}>({ rightHand: 0, leftHand: 0, rightFoot: 0, leftFoot: 0 });
+	const keyboardDirRef = useRef<-1 | 0 | 1>(0); // キーボードの移動入力（センサー走行より優先）
+	const sensorDirRef = useRef<-1 | 0 | 1>(0); // 足踏みから導出した移動入力
+	// センサーの生インパクト値（HUD のゲージ表示用）。頻度が高いので ref に貯め、UI 反映は間引く。
+	const sensorImpactsRef = useRef<Partial<Record<SensorPartKey, number>>>({});
+	const lastImpactUiRef = useRef(0);
+
+	// 移動はキーボードと足センサー（足踏み走行）の2系統。キーボードが押されていればそちら優先、
+	// 離している間だけ足踏みが移動を担う（両方 0 なら停止）。変化した時だけ送信する。
+	// ref だけを参照する純粋な合成なので、入力側（handleInput）・描画ループ側の両方から呼べる。
+	const applyEffectiveMove = () => {
+		const dir = keyboardDirRef.current !== 0 ? keyboardDirRef.current : sensorDirRef.current;
+		if (dir === moveDirRef.current) return;
+		moveDirRef.current = dir;
+		netRef.current?.sendMove(dir);
+	};
+
 	const sfxRef = useRef<Sfx | null>(null); // 効果音（WebAudio 合成）
 	const bgmRef = useRef<Bgm | null>(null); // BGM（public/bgm/ の mp3）
 	const intrusionSeenRef = useRef(0); // 処理済みの intrusionUntil（同じ乱入を1回だけ演出する）
@@ -566,8 +614,8 @@ function BattlePage() {
 			const selfId = youIdRef.current;
 			switch (input.kind) {
 				case "move":
-					moveDirRef.current = input.dir;
-					net.sendMove(input.dir);
+					keyboardDirRef.current = input.dir;
+					applyEffectiveMove();
 					break;
 				case "jump":
 					net.sendJump();
@@ -681,22 +729,47 @@ function BattlePage() {
 		const hub = createSensorHub(handleInput, {
 			onStatus: (key, s) =>
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
-			// 振り向き判定（両手同時パンチ AND カメラ横向き）用に、手のヒット時刻だけ記録する。
-			onImpact: (key, _impact, hit) => {
-				if (!hit) return;
-				if (key === "rightHand") lastHandHitAtRef.current.rightHand = Date.now();
-				else if (key === "leftHand") lastHandHitAtRef.current.leftHand = Date.now();
+			onImpact: (key, impact, hit) => {
+				// HUD ゲージ用の生値（高頻度なので ref に貯め、UI 反映は ~100ms に間引く）。
+				sensorImpactsRef.current = { ...sensorImpactsRef.current, [key]: impact };
+				const uiNow = performance.now();
+				if (uiNow - lastImpactUiRef.current >= 100) {
+					lastImpactUiRef.current = uiNow;
+					setSensorImpacts(sensorImpactsRef.current);
+				}
+				// 振り向き判定（両手同時パンチ AND カメラ横向き）用に、手のヒット時刻を記録する。
+				if (hit && key === "rightHand") lastHandHitAtRef.current.rightHand = Date.now();
+				if (hit && key === "leftHand") lastHandHitAtRef.current.leftHand = Date.now();
+				// 走行判定用: パンチ/キック判定(hit)を待たず、生インパクトが軽い閾値を超えた
+				// 時点で「その肢が動いた」とみなす（パンチ/キック検出＝firmware側の別経路なので
+				// 干渉しない。turn 判定の hit ベース記録とは独立に並行して記録する）。
+				if (key === "rightHand" && impact >= RUN_STEP_THRESHOLD)
+					lastLimbStepAtRef.current.rightHand = Date.now();
+				else if (key === "leftHand" && impact >= RUN_STEP_THRESHOLD)
+					lastLimbStepAtRef.current.leftHand = Date.now();
+				else if (key === "rightFoot" && impact >= RUN_STEP_THRESHOLD)
+					lastLimbStepAtRef.current.rightFoot = Date.now();
+				else if (key === "leftFoot" && impact >= RUN_STEP_THRESHOLD)
+					lastLimbStepAtRef.current.leftFoot = Date.now();
 			},
 			sensorSet: () => sensorSetRef.current,
+			// 両手をほぼ同時に振ったとき（＝振り向きジェスチャー）は誤パンチを出さない。
+			bothHandPunchSuppressMs: BOTH_HAND_PUNCH_SUPPRESS_MS,
 		});
 		hubRef.current = hub;
-		// 自分のライダーのセンサーセット名を R2 から引いてから自動接続を始める
-		//（先に始めると他ライダー名の許可済みデバイスを拾い得るため）。
+		// 自分のライダーのセンサーセット名。/pairing から渡ってきていればそれをそのまま使い
+		// （画面遷移直後に「まだ何も繋がってない」空白時間ができるのを防ぐ）、無ければ
+		// （/pairing を経由せず直接 /battle を開いた場合など）R2 から取得する。
 		let hubCancelled = false;
-		void riderSensorSet(routine.riderId).then((set) => {
-			sensorSetRef.current = set;
-			if (!hubCancelled) hub.start();
-		});
+		if (sensorSetParam !== undefined) {
+			sensorSetRef.current = sensorSetParam || null;
+			hub.start();
+		} else {
+			void riderSensorSet(routine.riderId).then((set) => {
+				sensorSetRef.current = set;
+				if (!hubCancelled) hub.start();
+			});
+		}
 
 		// カメラガード: 右下カメラの映像で「ボクシングの構え」を認識している間、強制的にガード。
 		// 骨格オーバーレイは smoother 経由（検出 ~15fps → 表示 60fps 補間でぬるぬる動く）。
@@ -772,6 +845,25 @@ function BattlePage() {
 		const loop = () => {
 			const server = battleRef.current;
 			const selfId = youIdRef.current;
+
+			// --- クロス歩行走行: 対角の手足ペア（右手+左足 or 左手+右足）が直近 RUN_HOLD_MS ---
+			// --- 以内にどちらも動いていれば、向いている方向へ前進する。片方のペアで良い ---
+			// （自分の予測状態 predRef の facing を使う。まだ無ければ 1=右向き扱い）
+			{
+				const stepNow = Date.now();
+				const limb = lastLimbStepAtRef.current;
+				const rightHandLeftFoot =
+					stepNow - limb.rightHand < RUN_HOLD_MS && stepNow - limb.leftFoot < RUN_HOLD_MS;
+				const leftHandRightFoot =
+					stepNow - limb.leftHand < RUN_HOLD_MS && stepNow - limb.rightFoot < RUN_HOLD_MS;
+				const stepping = rightHandLeftFoot || leftHandRightFoot;
+				const selfFacing = predRef.current?.players[0]?.facing ?? 1;
+				const nextSensorDir: -1 | 0 | 1 = stepping ? (selfFacing >= 0 ? 1 : -1) : 0;
+				if (nextSensorDir !== sensorDirRef.current) {
+					sensorDirRef.current = nextSensorDir;
+					applyEffectiveMove();
+				}
+			}
 
 			// --- 他プレイヤーの補間（INTERP_DELAY_MS 分の過去を、受信履歴の間で lerp）---
 			// 自分は下の予測で描くので対象外。履歴が rt を挟めない（受信直後・停滞中）は最新のまま。
@@ -1155,16 +1247,30 @@ function BattlePage() {
 					</span>
 				</div> */}
 
-				{/* 左: 部位ステータス（顔=カメラ可視ゲージ、手足=センサーのペアリング＋カメラ可視） */}
-				<div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
+				{/* 左: 部位ステータス（顔=カメラ可視ゲージ、手足=センサーのペアリング＋カメラ可視）。
+				    2つのパネルを1枚の背景でまとめて「ひとつのステータス」に見せる。 */}
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: "0.6rem",
+						flexShrink: 0,
+						background: "rgba(15,23,42,0.55)",
+						border: "1px solid #1e293b",
+						borderRadius: "10px",
+						padding: "0.35rem 0.6rem",
+					}}
+				>
 					<CamStatusBar
 						lmRef={camLmRef}
 						side={camSide}
 						pose={camPose}
 						paired={effectivePaired}
 					/>
+					<div style={{ width: "1px", alignSelf: "stretch", background: "#1e293b" }} />
 					<SensorHudPanel
 						statuses={sensorStatuses}
+						impacts={sensorImpacts}
 						onAdd={() => {
 							sfxRef.current?.resume();
 							hubRef.current?.connectAny();
@@ -1263,11 +1369,16 @@ export function ConnBadge({ status }: { status: NetStatus }) {
 // バトル中の 5部位センサー状態＋接続ボタン（HUD 左）。各部位を絵文字ドットで状態表示し、
 // 未接続があれば「センサー追加」で connectAny（選んだ実機を名前から部位へ自動振り分け）。
 // ペアリング画面で許可済みなら自動再接続するので、通常このボタンは押さなくてよい。
+// 加速度センサーの生インパクト値の表示レンジ（m/s^2 相当。ファームの IMPACT_THRESHOLD=25 目安）。
+const SENSOR_IMPACT_MAX = 40;
+
 function SensorHudPanel({
 	statuses,
+	impacts,
 	onAdd,
 }: {
 	statuses: Record<SensorPartKey, BleStatus>;
+	impacts: Partial<Record<SensorPartKey, number>>;
 	onAdd: () => void;
 }) {
 	const connected = SENSOR_PARTS.filter(
@@ -1295,22 +1406,35 @@ function SensorHudPanel({
 				flexShrink: 0,
 			}}
 		>
-			<div style={{ display: "flex", gap: "2px" }}>
+			{/* 部位ドット＋加速度センサーの生インパクト値（接続中のみ、直近値で光る＝本物のBLEゲージ）。
+			    絵文字ではなく無地の丸ドットにして、他の HUD 要素とトーンを揃えている。 */}
+			<div style={{ display: "flex", gap: "5px" }}>
 				{SENSOR_PARTS.map((p) => {
 					const s = statuses[p.key];
+					const impact = impacts[p.key] ?? 0;
+					const intensity = s === "connected" ? Math.min(1, impact / SENSOR_IMPACT_MAX) : 0;
+					const c = dotColor(s);
 					return (
 						<span
 							key={p.key}
-							title={`${p.label}: ${s}`}
+							title={
+								s === "connected"
+									? `${p.label}: impact ${impact.toFixed(1)}`
+									: `${p.label}: ${s}`
+							}
 							style={{
-								fontSize: "0.72rem",
-								color: dotColor(s),
-								opacity: s === "connected" ? 1 : 0.55,
-								filter: s === "connected" ? "none" : "grayscale(0.5)",
+								width: "8px",
+								height: "8px",
+								borderRadius: "50%",
+								background: c,
+								opacity: s === "connected" ? 1 : 0.4,
+								boxShadow:
+									intensity > 0.15
+										? `0 0 ${Math.round(2 + intensity * 6)}px ${c}`
+										: "none",
+								transition: "box-shadow 0.08s linear",
 							}}
-						>
-							{p.emoji}
-						</span>
+						/>
 					);
 				})}
 			</div>
@@ -1463,8 +1587,12 @@ function HpBars({ players }: { players: PlayerState[] }) {
 		<div
 			style={{
 				display: "grid",
-				gridTemplateColumns: `repeat(${players.length}, 1fr)`,
+				// 1fr だと人数で幅が均等割りされ、斜めカット・目盛り・文字サイズが固定px なせいで
+				// 人数ごとに見え方が変わってしまっていた（1人だと間延び、4人だと窮屈）。
+				// 各バーは常に同じ幅レンジで描画し、人数が少ないときは中央寄せで余白にする。
+				gridTemplateColumns: `repeat(${players.length}, minmax(130px, 230px))`,
 				gap: "0.9rem",
+				justifyContent: "center",
 			}}
 		>
 			{players.map((p, i) => (
@@ -1637,7 +1765,7 @@ function HpBar({
 	);
 }
 
-// 逆転ゲージ（5 ゲージ制）。2 本で「波動弾」、3 本で「エラーモード(割り込み)」、満タンで「ファイナル」。
+// 逆転ゲージ（5 ゲージ制）。満タンで「ファイナルベント」解禁。
 // たまった本数は発光したセルで示し、満タンで全体が脈動する。
 function MeterBar({ meter, color }: { meter: number; color: string }) {
 	const STOCKS = ARENA.meterMax / ARENA.meterPerStock;
@@ -1853,8 +1981,6 @@ function ControlsHelp() {
 		["U", "掴み(グラスプ・当たれば掴み攻撃・ガード崩し)"],
 		["T", "振り向き"],
 		["📷 横向き", "カメラに体を横に向けても振り向き"],
-		["I", "ストライクベント(2ゲージ・飛び道具・1発ずつ)"],
-		["E", "エラーベント(3ゲージ・割り込み脱出)"],
 		["L / F", "ファイナルベント(5ゲージ)"],
 	];
 	return (
@@ -2016,12 +2142,14 @@ function IntrusionWarning({ name }: { name: string }) {
 // ref を読んで自分だけ再レンダーする（BattlePage 全体を 15fps で再レンダーさせない）。
 
 // [表示名, カメラのランドマーク index, 対応するセンサー部位（null = センサー無し・カメラのみ）]
+// ラベルは「📷」を付けてカメラ由来（≒可視性信頼度）だと明示する。加速度センサーの実測値は
+// 別（HUD 左の SensorHudPanel。emoji が身体部位そのもの）なので混同しないように区別している。
 const STATUS_PARTS: [string, number, SensorPartKey | null][] = [
-	["顔", LM.NOSE, null],
-	["右手", LM.R_WRIST, "rightHand"],
-	["左手", LM.L_WRIST, "leftHand"],
-	["右足", LM.R_ANKLE, "rightFoot"],
-	["左足", LM.L_ANKLE, "leftFoot"],
+	["📷顔", LM.NOSE, null],
+	["📷右手", LM.R_WRIST, "rightHand"],
+	["📷左手", LM.L_WRIST, "leftHand"],
+	["📷右足", LM.R_ANKLE, "rightFoot"],
+	["📷左足", LM.L_ANKLE, "leftFoot"],
 ];
 
 function CamStatusBar({
@@ -2054,6 +2182,7 @@ function CamStatusBar({
 		return (
 			<span
 				key={label}
+				title="カメラでの検出信頼度（加速度センサーの値ではありません）"
 				style={{
 					display: "inline-flex",
 					alignItems: "center",
@@ -2179,18 +2308,6 @@ function CamStatusBar({
 				>
 					{!lm ? "--" : side ? "横向き" : "正面"}
 				</span>
-				{/* しきい値調整用の生値: 肩幅/胴長の比と左右（肩・腰）の可視性 */}
-				{(() => {
-					const m = lm ? facingMetrics(lm) : null;
-					return (
-						m && (
-							<span style={{ color: "#6b7280" }}>
-								比{m.ratio.toFixed(2)} 角{Math.round(m.yawDeg)} L
-								{m.leftVis.toFixed(2)} R{m.rightVis.toFixed(2)}
-							</span>
-						)
-					);
-				})()}
 			</span>
 		</div>
 	);

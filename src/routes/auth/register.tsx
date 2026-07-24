@@ -15,7 +15,7 @@ type Phase = 'name' | 'image' | 'pose' | 'preview'
 type ImageSource = 'camera' | 'upload'
 
 // スナップショットポーズの既定値（pose.tsx の作成モードと同じ感覚の値）
-const DEFAULT_MIN_SCORE = 80
+const DEFAULT_MIN_SCORE = 85 // 適当なポーズでも通ってしまう問題があったため少し厳しめ（元80）
 const DEFAULT_HOLD_MS = 700
 
 // 選べるセンサーセット名（BLE 名 <ライダー名>_RH/…LF/…BELT の <ライダー名> 部分。

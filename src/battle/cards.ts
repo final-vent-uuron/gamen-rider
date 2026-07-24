@@ -15,9 +15,9 @@ export interface BattleCard {
   color: string
 }
 
+// ストライクベント（skill）・エラーベント（error-mode）はバトルから無し（意図的に外してある）。
+// ファイナルベントのみ表示する。
 export const DEFAULT_BATTLE_CARDS: BattleCard[] = [
-  { id: 'skill', label: 'ストライクベント', kind: 'attack', color: '#f87171' },
-  { id: 'error-mode', label: 'エラーベント', kind: 'special', color: '#fbbf24' },
   { id: 'final-vent', label: 'ファイナルベント', kind: 'final', color: '#a78bfa' },
 ]
 
