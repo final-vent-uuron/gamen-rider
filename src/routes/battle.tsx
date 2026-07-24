@@ -685,6 +685,9 @@ function BattlePage() {
 			applyPred((s) => applyAttack(s, selfId, "final", now));
 		};
 		let lastCamGuarding = false; // mute 解除時にワーカー側の最新ガードを復元するため
+		// カード参照と FV ポーズ手順は同じ registry 取得を共有する（listRiders() の二重呼び出し防止）
+		let registeredCache: ReturnType<typeof listRiders> | null = null;
+		const getRegistered = () => (registeredCache ??= listRiders());
 		const fv = createFinalVentController({
 			getVideo: () => ventVideoRef.current,
 			riderId: routine.riderId,
@@ -692,7 +695,7 @@ function BattlePage() {
 			// 変身フローと同じ登録ライダー画像をかざすカードにする
 			getCardRefs: async () => {
 				try {
-					const registered = await listRiders();
+					const registered = await getRegistered();
 					return resolveFinalVentCardRefs(
 						registered,
 						routine.riderId,
@@ -701,6 +704,22 @@ function BattlePage() {
 				} catch (err) {
 					console.warn("[battle] FV card refs load failed:", err);
 					return [];
+				}
+			},
+			// /auth/register で登録した FV ポーズ手順（未登録なら null → ローカル/builtin フォールバック）
+			getFinalVentSteps: async () => {
+				try {
+					const registered = await getRegistered();
+					const nameLc = routine.riderName.trim().toLowerCase();
+					const found =
+						registered.find((r) => r.id === routine.riderId) ??
+						(nameLc
+							? registered.find((r) => r.name.trim().toLowerCase() === nameLc)
+							: undefined);
+					return found?.finalVentSteps ?? null;
+				} catch (err) {
+					console.warn("[battle] FV pose steps load failed:", err);
+					return null;
 				}
 			},
 			onPhase: (p) => {

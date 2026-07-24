@@ -8,8 +8,10 @@ import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
 
 import type { CardMatcher, CardRef } from '../card'
 import { createCardMatcher } from '../card'
+import { customToRoutine } from '../pose/custom'
+import type { CustomStep } from '../pose/custom'
 import { createRoutineRunner } from '../pose/routine'
-import type { RoutineRunner, RunnerStep } from '../pose/routine'
+import type { HenshinRoutine, RoutineRunner, RunnerStep } from '../pose/routine'
 import type { RegisteredRiderWithImage } from '../rider-registry'
 
 import { resolveFinalVentRoutine } from './finalVentPose'
@@ -74,6 +76,9 @@ export interface FinalVentControllerOptions {
   cardRefs?: CardRef[]
   /** 変身フロー同様 listRiders → resolveFinalVentCardRefs を想定 */
   getCardRefs?: () => Promise<CardRef[]>
+  /** /auth/register で登録した FV ポーズ手順（R2 由来）。lazy load。
+   * null/空/失敗時は localStorage 登録 → builtin フォールバックの順で使う（resolveFinalVentRoutine）。 */
+  getFinalVentSteps?: () => Promise<CustomStep[] | null>
   riderId?: string
   riderName?: string
 }
@@ -82,9 +87,11 @@ export function createFinalVentController(
   opts: FinalVentControllerOptions,
 ): FinalVentController {
   const riderId = opts.riderId ?? ''
-  const { routine } = resolveFinalVentRoutine(riderId, opts.riderName)
-  const poseTimeoutMs =
-    POSE_TIMEOUT_BASE_MS + routine.steps.length * POSE_TIMEOUT_PER_STEP_MS
+  const riderName = opts.riderName ?? riderId
+  // 初期値は localStorage 登録／builtin フォールバック。登録ライダーの finalVentSteps（R2）が
+  // 届き次第（ensureMatcher 内で card 参照と同時に lazy load）そちらを優先して上書きする。
+  let routine: HenshinRoutine = resolveFinalVentRoutine(riderId, riderName).routine
+  let poseTimeoutMs = POSE_TIMEOUT_BASE_MS + routine.steps.length * POSE_TIMEOUT_PER_STEP_MS
 
   let runner: RoutineRunner | null = null
   let running = false
@@ -150,9 +157,25 @@ export function createFinalVentController(
     loadPromise = (async () => {
       // 変身フローと同じ登録ライダー画像を参照する（cardRefs 優先、無ければ getCardRefs）
       let refs = opts.cardRefs ?? []
+      const loaders: Promise<unknown>[] = []
       if (refs.length === 0 && opts.getCardRefs) {
-        refs = await opts.getCardRefs()
+        loaders.push(opts.getCardRefs().then((r) => (refs = r)))
       }
+      // 登録ライダーの FV ポーズ（R2）。取得できたらローカル/builtin より優先して routine を差し替える。
+      if (opts.getFinalVentSteps) {
+        loaders.push(
+          opts
+            .getFinalVentSteps()
+            .then((steps) => {
+              if (steps && steps.length > 0) {
+                routine = customToRoutine({ riderId, riderName, steps })
+                poseTimeoutMs = POSE_TIMEOUT_BASE_MS + routine.steps.length * POSE_TIMEOUT_PER_STEP_MS
+              }
+            })
+            .catch((err) => console.warn('[finalVent] FV ポーズ手順の取得に失敗:', err)),
+        )
+      }
+      if (loaders.length) await Promise.all(loaders)
       if (!running) {
         loadPromise = null
         return

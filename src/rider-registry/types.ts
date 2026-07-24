@@ -8,6 +8,8 @@ export interface RegisteredRider {
   name: string
   imageDataUrl: string
   steps: CustomStep[]
+  // ファイナルベント発動時のポーズ手順（変身ポーズとは別収録）。未登録（旧データ含む）は null。
+  finalVentSteps: CustomStep[] | null
   sensorSet: string | null
   createdAt: string
 }
@@ -17,6 +19,7 @@ export interface RegisteredRiderWithImage {
   id: string
   name: string
   steps: CustomStep[]
+  finalVentSteps: CustomStep[] | null
   imageDataUrl: string
   sensorSet: string | null
 }
@@ -28,5 +31,6 @@ export interface SaveRiderInput {
   name: string
   imageDataUrl: string // data:image/png;base64,... 形式
   steps: CustomStep[]
+  finalVentSteps: CustomStep[] | null
   sensorSet: string | null
 }
