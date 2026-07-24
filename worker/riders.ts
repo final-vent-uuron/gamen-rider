@@ -148,14 +148,20 @@ export async function handleNfcBind(
 	if (request.method !== "POST")
 		return json({ error: "method not allowed" }, 405);
 
-	let input: { riderId?: unknown; nfcId?: unknown };
+	let input: { riderId?: unknown; nfcId?: unknown; tagId?: unknown };
 	try {
-		input = (await request.json()) as { riderId?: unknown; nfcId?: unknown };
+		input = (await request.json()) as {
+			riderId?: unknown;
+			nfcId?: unknown;
+			tagId?: unknown;
+		};
 	} catch {
 		return json({ error: "JSON ボディが必要です" }, 400);
 	}
 	const riderId = typeof input.riderId === "string" ? input.riderId : "";
-	const nfcId = typeof input.nfcId === "string" ? input.nfcId.trim() : "";
+	// Swift アプリ側は "tagId" というキー名で送ってくる（web 側が合わせる方針）。
+	const rawNfcId = input.nfcId ?? input.tagId;
+	const nfcId = typeof rawNfcId === "string" ? rawNfcId.trim() : "";
 	if (!riderId) return json({ error: "riderId が空です" }, 400);
 	if (!nfcId) return json({ error: "nfcId が空です" }, 400);
 
