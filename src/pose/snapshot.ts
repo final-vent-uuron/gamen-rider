@@ -1,6 +1,7 @@
 import { LM } from './landmarks'
 import type { PoseTest } from './poses'
 
+
 // スナップショットとして保存する 1 点（可視性は使わないので x,y,z のみ）
 export interface RefPoint {
   x: number
@@ -32,17 +33,38 @@ export function normalizeLandmarks(lms: ReadonlyArray<Point>): RefPoint[] {
   }))
 }
 
+// 類似度で重視する関節（腕・手首中心）。変身ポーズの違いはほぼ腕の位置に出る一方、
+// 33点を単純平均すると顔・脚・足のほとんど動かない点が差を薄めてしまい、
+// 別のポーズでも「なんとなく立っていれば」高スコアになって誤認識の原因になっていた。
+// 手首・肘を重く、肩・腰を軽く見ることで、実際に動く部分の差がスコアへ素直に反映されるようにする。
+const SIMILARITY_WEIGHTS: Record<number, number> = {
+  [LM.NOSE]: 0.6,
+  [LM.L_SHOULDER]: 1,
+  [LM.R_SHOULDER]: 1,
+  [LM.L_ELBOW]: 1.4,
+  [LM.R_ELBOW]: 1.4,
+  [LM.L_WRIST]: 1.8,
+  [LM.R_WRIST]: 1.8,
+  [LM.L_HIP]: 0.5,
+  [LM.R_HIP]: 0.5,
+}
+
 function similarityNormalized(a: ReadonlyArray<RefPoint>, b: ReadonlyArray<RefPoint>): number {
-  const n = Math.min(a.length, b.length)
-  if (n === 0) return 0
   let sum = 0
-  for (let i = 0; i < n; i++) {
-    const dx = a[i].x - b[i].x
-    const dy = a[i].y - b[i].y
-    const dz = a[i].z - b[i].z
-    sum += Math.sqrt(dx * dx + dy * dy + dz * dz)
+  let weightTotal = 0
+  for (const [idxStr, w] of Object.entries(SIMILARITY_WEIGHTS)) {
+    const i = Number(idxStr)
+    const pa = a[i]
+    const pb = b[i]
+    if (!pa || !pb) continue
+    const dx = pa.x - pb.x
+    const dy = pa.y - pb.y
+    const dz = pa.z - pb.z
+    sum += w * Math.sqrt(dx * dx + dy * dy + dz * dz)
+    weightTotal += w
   }
-  const avg = sum / n
+  if (weightTotal === 0) return 0
+  const avg = sum / weightTotal
   // dist=0 → 100, dist>=2 → 0
   return Math.max(0, Math.round((1 - avg / 2) * 100))
 }

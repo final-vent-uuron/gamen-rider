@@ -31,10 +31,19 @@ const FINAL_VENT_VOICES = [
   'final-vent-voice-4.mp3',
 ]
 
+// ライダー別の掛け声（ロースター順に 1〜4 を割り当て）。
+// 未知の riderId（既定の gamen やテスト用）は従来どおりランダム。
+const VOICE_BY_RIDER: Record<string, string> = {
+  arduino: FINAL_VENT_VOICES[0],
+  python: FINAL_VENT_VOICES[1],
+  swift: FINAL_VENT_VOICES[2],
+  flutter: FINAL_VENT_VOICES[3],
+}
+
 export interface Bgm {
   playMain(): void // メイン BGM をループ再生（既に鳴っていれば何もしない）
   intrusion(durationMs: number): void // 乱入: main を止めて Intrusion-bgm を durationMs だけ流す
-  finalVent(): void // ファイナルベント: 掛け声＋final-vent-bgm を数秒流して main へ戻す
+  finalVent(riderId?: string): void // ファイナルベント: 発動ライダーの掛け声＋final-vent-bgm を数秒流して main へ戻す
   fadeOutMain(ms?: number): void // 決着時など、main をフェードアウトして止める
   setVolume(master: number): void // マスター音量 0〜1（即時反映＋localStorage）
   getVolume(): number
@@ -165,13 +174,13 @@ export function createBgm(): Bgm {
       if (closed) return
       interrupt(intrusionBgm, durationMs, 700)
     },
-    finalVent() {
+    finalVent(riderId) {
       if (closed) return
-      // 掛け声（ランダム）＋ BGM を約 8 秒。技そのものは ~1.2s だが余韻を残す。
-      const voice = make(
-        FINAL_VENT_VOICES[Math.floor(Math.random() * FINAL_VENT_VOICES.length)],
-        scaled(VOICE_BASE),
-      )
+      // 掛け声（発動ライダー固有。未知ならランダム）＋ BGM を約 8 秒。技そのものは ~1.2s だが余韻を残す。
+      const file =
+        (riderId && VOICE_BY_RIDER[riderId]) ??
+        FINAL_VENT_VOICES[Math.floor(Math.random() * FINAL_VENT_VOICES.length)]
+      const voice = make(file, scaled(VOICE_BASE))
       playWithUnlock(voice, alive)
       interrupt(finalBgm, 8000, 1200)
     },

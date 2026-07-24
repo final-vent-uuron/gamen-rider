@@ -1,12 +1,15 @@
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
 import { isArmThrustForward, isTPose } from './poses'
 import type { PoseTest } from './poses'
+import type { RefPoint } from './snapshot'
 
 export interface PoseStep {
   id: string
   label: string
   test: PoseTest
   holdMs: number // このポーズを連続成立で保持すべき時間
+  // お手本として横に表示する参照ポーズ（snapshot 由来のみ。builtin は無し＝表示側でフォールバック）。
+  guide?: RefPoint[]
 }
 
 export interface HenshinRoutine {
@@ -19,8 +22,8 @@ export interface HenshinRoutine {
 // （CLAUDE.md 方針: 手順の中身は仮。ここを書き換えれば差し替え可能。）
 export const RIDER_ROUTINES: HenshinRoutine[] = [
   {
-    riderId: 'ryuki',
-    riderName: '龍騎(仮)',
+    riderId: 'gamen',
+    riderName: '画面ライダー(仮)',
     steps: [
       { id: 'tpose', label: 'Tポーズをキープ', test: isTPose, holdMs: 800 },
       { id: 'thrust', label: '片腕を前に突き出す', test: isArmThrustForward, holdMs: 600 },

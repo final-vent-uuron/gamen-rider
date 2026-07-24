@@ -73,6 +73,9 @@ export interface PlayerState {
   throwDamageAt?: number // 掴みダメージの適用時刻（grasp-attack の中間）
   // --- あばれ（遅延ヒット）---
   abareHitAt?: number // 突き放し（ダメージ）の適用時刻（error-mode モーションの終わりぎわ。0 = 無し）
+  // --- ファイナルベント＝暴れ範囲技 ---
+  rampageOriginX?: number // 暴れ往復の原点（発動時の x。持続中の位置はここから決定論で決まる）
+  rampageNextHitAt?: number // 次の多段ヒット判定時刻（0 = 非発動）
   moveActiveFrom: number // 持続フレーム開始時刻（= 発生の終わり）
   moveActiveTo: number // 持続フレーム終了時刻
   moveHasHit: boolean // この技が既に当たった（多段防止）
@@ -133,7 +136,15 @@ export const ARENA = {
   finalKnockback: 0.083,
   throwKnockback: 0.09,
   guardPushback: 0.018,
-  finalLaunch: 3.0, // Final だけ打ち上げ（締め）。地上コンボ重視なので他は打ち上げ無し
+  finalLaunch: 3.0, // Final の締めだけ打ち上げ。地上コンボ重視なので他は打ち上げ無し
+
+  // ファイナルベント＝暴れ範囲技。発動者が原点から左右に暴れ回り（sin 往復）、
+  // 触れた相手全員（左右両側）に一定間隔で多段ヒットする。締めの1発だけ打ち上げ。
+  finalRampageAmp: 0.18, // 往復の片振れ幅（原点から左右へ。アリーナ幅 0.88 に対する値）
+  finalRampageHz: 0.9, // 1秒あたりの往復数
+  finalRampageHitGapMs: 380, // 多段ヒットの最短間隔
+  finalRampageDamage: 7, // 1ヒットあたり。フルヒット（~5発＋締め）で従来の単発 34 相当
+  finalRampageRange: 0.15, // 有効距離（表面間・左右両側）
 
   // ガード耐久（スマブラ式シールド）
   shieldMax: 60, // 満タン耐久。フル保持で約 5 秒で割れ
@@ -267,13 +278,15 @@ export const MOVES: Record<MoveKind, MoveDef> = {
     blockable: false,
     isThrow: true, // 掴み: ガード貫通・確定ダウン・空振り硬直
   },
-  // 必殺（コンボの締め / 単発）。ゲージ満タンで解禁。広く・痛い・打ち上げ。
+  // 必殺（暴れ範囲技）。ゲージ満タンで解禁。持続中は resolveFinalRampage が
+  // 左右往復の移動と多段ヒットを受け持つ（damage/reach 等の単発値はここでは使わない。
+  // 実数値は ARENA.finalRampage*）。
   final: {
-    startup: 600, // = 合計の 50%（必殺モーションの見せ場にダメージを同期）
-    active: 130,
-    recovery: 470, // 合計 1200ms = final アニメ 1.2s
-    damage: ARENA.finalDamage,
-    reach: ARENA.reachFinal,
+    startup: 600, // カットイン明け → 暴れ開始までの溜め
+    active: 2000, // 暴れ（往復＋多段ヒット）の持続
+    recovery: 500, // 合計 3100ms = final(special) アニメ 3.1s（arena3d ONESHOT_DURATION と対）
+    damage: ARENA.finalRampageDamage,
+    reach: ARENA.finalRampageRange,
     knockback: ARENA.finalKnockback,
     launch: ARENA.finalLaunch,
     hitstun: 520,
@@ -400,6 +413,8 @@ function freshPlayer(init: PlayerInit, x: number, facing: 1 | -1): PlayerState {
     throwVictimId: null,
     throwDamageAt: 0,
     abareHitAt: 0,
+    rampageOriginX: 0,
+    rampageNextHitAt: 0,
     moveActiveFrom: 0,
     moveActiveTo: 0,
     moveHasHit: false,
@@ -598,7 +613,8 @@ export function stepBattle(
 
   const resolved = resolveBodies(moved)
   const afterHits = resolveActiveHits(resolved, now) // 近接技の持続フレーム当たり判定
-  const afterThrows = resolvePendingThrows(afterHits, now) // 掴みの遅延ダメージ（grasp-attack 中間）
+  const afterRampage = resolveFinalRampage(afterHits, now) // FV 暴れ（往復移動＋多段の範囲ヒット）
+  const afterThrows = resolvePendingThrows(afterRampage, now) // 掴みの遅延ダメージ（grasp-attack 中間）
   const afterAbare = resolvePendingAbare(afterThrows, now) // あばれの遅延ヒット（モーション終わりぎわ）
   const proj = stepProjectiles(afterAbare, state.projectiles ?? [], now, dt) // 波動弾の生成・飛翔・衝突
   return checkWinner({ ...state, players: proj.players, projectiles: proj.projectiles })
@@ -659,16 +675,63 @@ function resolveBodies(players: PlayerState[]): PlayerState[] {
 }
 
 // 「持続フレーム中で未ヒットの近接技」を順に当たり判定する（多段は moveHasHit で防止）。
-// shot（波動弾）は近接判定を持たず、stepProjectiles 側で弾を出すのでここでは除外。
+// shot（波動弾）は弾側判定（stepProjectiles）、final（暴れ）は resolveFinalRampage が
+// 移動＋多段ヒットを受け持つので、どちらもここでは除外。
 function resolveActiveHits(players: PlayerState[], now: number): PlayerState[] {
   let result = players
   for (let i = 0; i < players.length; i++) {
     const a = result[i]
-    if (!a.move || a.move === 'shot' || a.hp <= 0 || a.moveHasHit) continue
+    if (!a.move || a.move === 'shot' || a.move === 'final' || a.hp <= 0 || a.moveHasHit) continue
     if (now < a.moveActiveFrom || now > a.moveActiveTo) continue // 持続フレーム外
     result = applyMoveHit(result, a.id, a.move, now)
   }
   return result
+}
+
+// ファイナルベント＝暴れ範囲技の本体。持続中、発動者を原点まわりの sin 往復で左右に
+// 暴れさせ、一定間隔で「左右両側・範囲内の全員」へ多段ヒットを入れる。
+// 位置は moveActiveFrom からの経過時間だけで決まる決定論なので、サーバーと
+// クライアント予測（stepBattle 共有）で一致する。締めの1発だけ打ち上げて派手に終わる。
+function resolveFinalRampage(players: PlayerState[], now: number): PlayerState[] {
+  let out = players
+  for (const src of players) {
+    if (src.move !== 'final' || src.hp <= 0) continue
+    if (now < src.moveActiveFrom || now > src.moveActiveTo) continue
+    // 往復移動＋進行方向を向く（見た目が「暴れて」見える）
+    const t = (now - src.moveActiveFrom) / 1000
+    const phase = 2 * Math.PI * ARENA.finalRampageHz * t
+    const origin = src.rampageOriginX ?? src.x
+    const x = clamp(origin + ARENA.finalRampageAmp * Math.sin(phase), ARENA.minX, ARENA.maxX)
+    const facing: 1 | -1 = Math.cos(phase) >= 0 ? 1 : -1
+    out = out.map((p) => (p.id === src.id ? { ...p, x, facing } : p))
+
+    const a = out.find((p) => p.id === src.id)!
+    if (now < (a.rampageNextHitAt ?? a.moveActiveFrom)) continue
+    const isFinisher = now + ARENA.finalRampageHitGapMs > a.moveActiveTo
+    const def: StrikeDef = {
+      damage: ARENA.finalRampageDamage,
+      knockback: isFinisher ? ARENA.finalKnockback : ARENA.knockback * 2,
+      launch: isFinisher ? ARENA.finalLaunch : 0,
+      hitstun: isFinisher ? 520 : 420,
+      blockstun: 0,
+      hitstop: 90,
+      blockable: false, // ガード不可（カード技）
+    }
+    out = out.map((p) => {
+      if (p.id === a.id || p.hp <= 0) return p
+      if (now < p.invulnUntil) return p // 無敵（あばれ等）中は素通り
+      if (!vertOverlap(a, p)) return p
+      const dx = p.x - a.x
+      if (Math.abs(dx) - 2 * ARENA.bodyHalf > ARENA.finalRampageRange) return p
+      const fromDir: 1 | -1 = dx >= 0 ? 1 : -1 // 攻撃者から離す向き
+      return strikeTarget(p, a.id, fromDir, def, now).p
+    })
+    // 空振りでも間隔は消費する（毎 tick 判定の吸い付き防止）。
+    out = out.map((p) =>
+      p.id === a.id ? { ...p, rampageNextHitAt: now + ARENA.finalRampageHitGapMs } : p,
+    )
+  }
+  return out
 }
 
 // 行動可能か（硬直・スタン・ヒットストップ・KO のいずれでもない）。
@@ -737,6 +800,9 @@ function startMove(
           moveActiveFrom: activeFrom,
           moveActiveTo: activeTo,
           moveHasHit: false,
+          // final = 暴れ範囲技。往復の原点と多段ヒットの初回時刻を仕込む。
+          rampageOriginX: kind === 'final' ? p.x : p.rampageOriginX,
+          rampageNextHitAt: kind === 'final' ? activeFrom : p.rampageNextHitAt,
           cancelUntil: 0,
           actionUntil: recoveryTo,
           guarding: false,

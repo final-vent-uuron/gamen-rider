@@ -4,7 +4,13 @@ import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision
 
 import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../../card'
 import type { CardMatcher, CardRef, MatchStats } from '../../card'
-import { RIDER_ROUTINES, createPoseLandmarker, createRoutineRunner, customToRoutine } from '../../pose'
+import {
+  RIDER_ROUTINES,
+  createPoseLandmarker,
+  createRoutineRunner,
+  customToRoutine,
+  drawPoseGuide,
+} from '../../pose'
 import type { HenshinRoutine, MediaPipeModules, RoutineRunner, RunnerState } from '../../pose'
 import { cardToRiderId, emitHenshin } from '../../henshin'
 import { listRiders } from '../../rider-registry'
@@ -20,6 +26,8 @@ type Rider = { id: string; name: string }
 function AuthPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const guideCanvasRef = useRef<HTMLCanvasElement>(null)
+  const lastGuideKeyRef = useRef<string | null>(null)
   const matcherRef = useRef<CardMatcher | null>(null)
   // 認証対象の全手順（既定＋登録済みライダー）。init で確定し以後変わらない。
   const routinesRef = useRef<HenshinRoutine[]>(RIDER_ROUTINES)
@@ -43,6 +51,8 @@ function AuthPage() {
   const [cardStats, setCardStats] = useState<MatchStats | null>(null)
   const [rider, setRider] = useState<Rider | null>(null)
   const [uiState, setUiState] = useState<RunnerState | null>(null)
+  // お手本パネルにフォールバック文言を出すかどうか（canvas への描画自体は tick から命令的に行う）。
+  const [hasGuide, setHasGuide] = useState(false)
 
   const navigate = useNavigate()
 
@@ -153,6 +163,7 @@ function AuthPage() {
     const r: Rider = { id: riderId, name: routine.riderName }
     riderRef.current = r
     runnerRef.current = createRoutineRunner(routines, riderId)
+    lastGuideKeyRef.current = null
     phaseRef.current = 'pose'
     setRider(r)
     setUiState(runnerRef.current.getState())
@@ -226,6 +237,25 @@ function AuthPage() {
         if (now - lastUiRef.current >= 100) {
           lastUiRef.current = now
           setUiState(state)
+        }
+
+        // お手本パネル: ステップが変わったときだけ再描画する（毎フレーム描き直す必要は無い）。
+        const curStepIndex = state.steps[0]?.stepIndex ?? -1
+        const guideKey = `${riderRef.current?.id ?? ''}:${curStepIndex}`
+        if (guideKey !== lastGuideKeyRef.current) {
+          lastGuideKeyRef.current = guideKey
+          const routine = riderRef.current
+            ? routinesRef.current.find((r) => r.riderId === riderRef.current!.id)
+            : null
+          const guide = routine?.steps[curStepIndex]?.guide ?? null
+          setHasGuide(!!guide)
+          const gc = guideCanvasRef.current
+          if (gc && gc.clientWidth > 0 && gc.clientHeight > 0) {
+            gc.width = gc.clientWidth
+            gc.height = gc.clientHeight
+            const gctx = gc.getContext('2d')
+            if (gctx) drawPoseGuide(gctx, gc.width, gc.height, guide)
+          }
         }
       }
 
@@ -408,46 +438,107 @@ function AuthPage() {
         )}
       </div>
 
-      {/* カメラ映像 */}
+      {/* カメラ映像（ポーズフェーズはお手本パネルを横に並べる） */}
       <div
         style={{
-          position: 'relative',
-          background: '#1f2937',
-          borderRadius: '12px',
-          overflow: 'hidden',
-          width: '100%',
-          maxWidth: '800px',
-          aspectRatio: '4/3',
           display: 'flex',
-          alignItems: 'center',
+          gap: '1rem',
+          flexWrap: 'wrap',
           justifyContent: 'center',
+          width: '100%',
+          maxWidth: phase === 'pose' ? '1040px' : '800px',
         }}
       >
-        <video ref={videoRef} style={{ display: 'none' }} playsInline muted />
-        <canvas
-          ref={canvasRef}
-          style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
-        />
+        <div
+          style={{
+            position: 'relative',
+            background: '#1f2937',
+            borderRadius: '12px',
+            overflow: 'hidden',
+            flex: '1 1 420px',
+            maxWidth: phase === 'pose' ? '620px' : '800px',
+            aspectRatio: '4/3',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <video ref={videoRef} style={{ display: 'none' }} playsInline muted />
+          <canvas
+            ref={canvasRef}
+            style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+          />
 
-        {status !== 'running' && (
+          {status !== 'running' && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexDirection: 'column',
+                gap: '0.75rem',
+                color: '#9ca3af',
+              }}
+            >
+              {status === 'loading' && <p style={{ margin: 0 }}>カード認識とポーズ認識を準備中...</p>}
+              {status === 'error' && (
+                <p style={{ margin: 0, color: '#f87171' }}>
+                  エラーが発生しました。カメラの権限を確認してください。
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {phase === 'pose' && (
           <div
             style={{
-              position: 'absolute',
-              inset: 0,
+              flex: '1 1 220px',
+              maxWidth: '320px',
+              background: '#1f2937',
+              borderRadius: '12px',
+              padding: '0.75rem',
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
               flexDirection: 'column',
-              gap: '0.75rem',
-              color: '#9ca3af',
+              gap: '0.5rem',
             }}
           >
-            {status === 'loading' && <p style={{ margin: 0 }}>カード認識とポーズ認識を準備中...</p>}
-            {status === 'error' && (
-              <p style={{ margin: 0, color: '#f87171' }}>
-                エラーが発生しました。カメラの権限を確認してください。
-              </p>
-            )}
+            <span style={{ color: '#a78bfa', fontWeight: 'bold', fontSize: '0.9rem' }}>
+              👉 お手本ポーズ
+            </span>
+            <div
+              style={{
+                position: 'relative',
+                aspectRatio: '4/3',
+                background: '#111827',
+                borderRadius: '8px',
+                overflow: 'hidden',
+              }}
+            >
+              <canvas ref={guideCanvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+              {!hasGuide && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#6b7280',
+                    fontSize: '0.8rem',
+                    textAlign: 'center',
+                    padding: '0.5rem',
+                  }}
+                >
+                  お手本なし
+                  <br />
+                  ラベルの指示に従ってください
+                </div>
+              )}
+            </div>
+            <span style={{ color: '#9ca3af', fontSize: '0.8rem' }}>このポーズを真似してください</span>
           </div>
         )}
       </div>

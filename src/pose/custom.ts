@@ -32,7 +32,13 @@ export interface CustomRoutine {
 // CustomStep を実行可能な PoseStep（test 関数つき）へ変換
 export function customStepToPoseStep(s: CustomStep): PoseStep {
   if (s.kind === 'snapshot') {
-    return { id: s.id, label: s.label, holdMs: s.holdMs, test: snapshotTest(s.landmarks, s.minScore) }
+    return {
+      id: s.id,
+      label: s.label,
+      holdMs: s.holdMs,
+      test: snapshotTest(s.landmarks, s.minScore),
+      guide: s.landmarks,
+    }
   }
   const builtin = BUILTIN_POSES.find((b) => b.id === s.poseId)
   return { id: s.id, label: s.label, holdMs: s.holdMs, test: builtin?.test ?? (() => false) }
