@@ -29,6 +29,11 @@ export interface CustomRoutine {
   steps: CustomStep[]
 }
 
+// 実プレイでの判定は登録時のしきい値より少し緩める（登録済みライダー分にも即反映されるよう、
+// ここで一律に下げる。登録し直さないと効かない minScore 自体は変えない）。
+const RUNTIME_SCORE_LENIENCY = 6
+const RUNTIME_SCORE_MIN = 50 // どれだけ緩めても下回らない下限（何でも通ってしまう事故防止）
+
 // CustomStep を実行可能な PoseStep（test 関数つき）へ変換
 export function customStepToPoseStep(s: CustomStep): PoseStep {
   if (s.kind === 'snapshot') {
@@ -36,7 +41,7 @@ export function customStepToPoseStep(s: CustomStep): PoseStep {
       id: s.id,
       label: s.label,
       holdMs: s.holdMs,
-      test: snapshotTest(s.landmarks, s.minScore),
+      test: snapshotTest(s.landmarks, Math.max(RUNTIME_SCORE_MIN, s.minScore - RUNTIME_SCORE_LENIENCY)),
       guide: s.landmarks,
     }
   }
@@ -50,22 +55,4 @@ export function customToRoutine(c: CustomRoutine): HenshinRoutine {
     riderName: c.riderName,
     steps: c.steps.map(customStepToPoseStep),
   }
-}
-
-const STORAGE_KEY = 'gamen-rider:custom-routines'
-
-// localStorage は SSR では存在しないのでガードする（クライアントのイベント/effect から呼ぶこと）
-export function loadCustomRoutines(): CustomRoutine[] {
-  if (typeof localStorage === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as CustomRoutine[]) : []
-  } catch {
-    return []
-  }
-}
-
-export function saveCustomRoutines(routines: CustomRoutine[]): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(routines))
 }

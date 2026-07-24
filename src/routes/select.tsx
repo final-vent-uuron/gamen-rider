@@ -25,7 +25,6 @@ const LANGUAGE_RIDERS: Choice[] = [
   { id: 'swift', name: 'Swift', color: '#f05138' },
   { id: 'python', name: 'Python', color: '#3776ab' },
   { id: 'flutter', name: 'Flutter', color: '#54c5f8' },
-  { id: 'cpp', name: 'C++', color: '#659ad2' },
 ]
 
 const TILE_COLORS = ['#a78bfa', '#f87171', '#34d399', '#fbbf24', '#38bdf8']

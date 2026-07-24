@@ -4,7 +4,9 @@ import { LM } from './landmarks'
 import { normalizeLandmarks } from './snapshot'
 import type { RefPoint } from './snapshot'
 
-// スティックフィギュアの骨（両端の関節 index）。knee を挟むことで脚も自然に曲がって見える。
+// スティックフィギュアの骨（両端の関節 index）。ポーズ判定は上半身だけを想定している
+// （snapshot.ts の SIMILARITY_WEIGHTS も肩・肘・手首・腰のみで脚は見ていない。ウェブカメラの
+// 画角も上半身までしか映らないことが多い）ため、脚（膝・足首）は描かない。
 const GUIDE_EDGES: [number, number][] = [
   [LM.L_SHOULDER, LM.R_SHOULDER],
   [LM.L_SHOULDER, LM.L_ELBOW],
@@ -14,10 +16,6 @@ const GUIDE_EDGES: [number, number][] = [
   [LM.L_SHOULDER, LM.L_HIP],
   [LM.R_SHOULDER, LM.R_HIP],
   [LM.L_HIP, LM.R_HIP],
-  [LM.L_HIP, LM.L_KNEE],
-  [LM.L_KNEE, LM.L_ANKLE],
-  [LM.R_HIP, LM.R_KNEE],
-  [LM.R_KNEE, LM.R_ANKLE],
 ]
 
 const GUIDE_JOINTS = [...new Set(GUIDE_EDGES.flat())]

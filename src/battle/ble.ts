@@ -295,6 +295,13 @@ export interface SensorHubOptions {
   // 自動接続の両方から除外される（大文字小文字は無視）。
   // 値は R2 から非同期に決まるため getter で渡す（呼び出し時点の値を見る）。null = 制限なし。
   sensorSet?: () => string | null
+  // 両手ほぼ同時ヒットの誤パンチ抑制（振り向きジェスチャー対策）。指定すると、片手の PUNCH
+  // 検出をこの ms だけ遅らせて発火し、その間にもう片方の手も検出されていたら（＝両手を
+  // 同時に振った＝振り向きジェスチャーとみなし）両方ともパンチを出さない（emit を呼ばない。
+  // ヒットの記録自体＝onImpact は遅延なく従来どおり呼ぶので、振り向きの AND 判定には影響しない）。
+  // 片手だけなら delay 分だけ遅れて通常どおり発火する。対象は rightHand/leftHand のみ。
+  // 省略時は従来どおり即時発火（pairing 等、この抑制が要らないページはオプトアウトされる）。
+  bothHandPunchSuppressMs?: number
 }
 
 // 5部位を同時に扱うセンサーハブ。部位ごとに GATT 接続を保持し、届いた PUNCH 通知を
@@ -327,6 +334,16 @@ export function createSensorHub(
   const conns = new Map<SensorPartKey, Conn>()
   const setStatus = (key: SensorPartKey, s: BleStatus) => opts.onStatus?.(key, s)
 
+  // 両手同時サスペンド用: 直近の片手パンチ検出時刻（rightHand/leftHand のみ使う）。
+  const lastHandPunchAt: Record<'rightHand' | 'leftHand', number> = {
+    rightHand: 0,
+    leftHand: 0,
+  }
+  const isHandKey = (k: SensorPartKey): k is 'rightHand' | 'leftHand' =>
+    k === 'rightHand' || k === 'leftHand'
+  const otherHandKey = (k: 'rightHand' | 'leftHand') =>
+    k === 'rightHand' ? 'leftHand' : 'rightHand'
+
   const makeConn = (def: SensorPartDef): Conn => {
     const c: Conn = {
       def,
@@ -343,7 +360,21 @@ export function createSensorHub(
       const msg = parseSensorMessage(decoder.decode(dv))
       if (!msg) return // "Ready" 等の非数値は無視
       opts.onImpact?.(def.key, msg.impact, msg.punch)
-      if (msg.punch && active && def.emit) onInput(def.emit(msg.impact))
+      if (!msg.punch || !active || !def.emit) return
+      const suppressMs = opts.bothHandPunchSuppressMs
+      if (suppressMs && isHandKey(def.key)) {
+        const key = def.key
+        const hitAt = Date.now()
+        lastHandPunchAt[key] = hitAt
+        window.setTimeout(() => {
+          if (!active) return
+          const otherAt = lastHandPunchAt[otherHandKey(key)]
+          if (Math.abs(otherAt - hitAt) < suppressMs) return // 両手ほぼ同時＝振り向きジェスチャー扱い
+          onInput(def.emit!(msg.impact))
+        }, suppressMs)
+      } else {
+        onInput(def.emit(msg.impact))
+      }
     }
     c.onDisconnected = () => {
       c.characteristic = null
@@ -422,17 +453,22 @@ export function createSensorHub(
   }
 
   // 許可済みデバイスをダイアログ無しで自動再接続（ページを開くだけで復元）。
+  // 5部位を並列で接続する（直列だと GATT 接続の待ち時間が台数倍になり、/pairing → /battle の
+  // 画面遷移直後に「まだ何も繋がってない」空白時間が体感できるほど伸びていたため）。
   const autoConnectAll = async () => {
     const bt = bluetoothApi()
     if (!bt?.getDevices) return
     try {
-      for (const d of await bt.getDevices()) {
-        if (!active) return
-        if (!nameAllowed(d.name ?? '', mySet())) continue
-        const def = partForName(d.name ?? '')
-        if (!def || getConn(def.key).device) continue
-        await adoptAndAttach(d)
-      }
+      const devices = await bt.getDevices()
+      await Promise.all(
+        devices.map((d) => {
+          if (!active) return undefined
+          if (!nameAllowed(d.name ?? '', mySet())) return undefined
+          const def = partForName(d.name ?? '')
+          if (!def || getConn(def.key).device) return undefined
+          return adoptAndAttach(d)
+        }),
+      )
     } catch (err) {
       console.warn('[ble] autoConnectAll failed:', err)
     }

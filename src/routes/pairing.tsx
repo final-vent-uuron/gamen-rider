@@ -2,6 +2,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 
 import { SENSOR_PARTS, createKeyboardSource, createSensorHub } from '../battle'
+import { playHenshinBgm } from '../battle/bgm'
 import type { BattleInput, BleStatus, SensorHub, SensorPartKey } from '../battle'
 import type { PresenterAction, WinnerPresenter } from '../battle/winner3d'
 import { RIDER_ROUTINES } from '../pose'
@@ -13,7 +14,7 @@ import { riderSensorSet } from '../rider-registry'
 // ＝センサーが通っていることが一目で分かる。
 //   - 手/足: 加速度センサー（PunchSensor / KickSensor 系）。パンチ/キック検出。
 //   - ベルト: BeltSensor（変身/ファイナルベント検出用に予約。入力割り当ては未確定）。
-// 導線: /select・/henshin → /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
+// 導線: /select・/auth → /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
 
 export const Route = createFileRoute('/pairing')({
   validateSearch: (search: Record<string, unknown>): { rider?: string; name?: string } => ({
@@ -64,6 +65,9 @@ function PairingPage() {
   const hubRef = useRef<SensorHub | null>(null)
   // 登録ライダーに紐づくセンサーセット名（<ライダー名>）。R2 から非同期に決まるので ref + 表示用 state。
   const sensorSetRef = useRef<string | null>(null)
+
+  // 変身フロー BGM（ループ）。/auth から続けて鳴らす（画面を離れたら停止する）。
+  useEffect(() => playHenshinBgm(), [])
 
   const [sensorSet, setSensorSet] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<SensorPartKey, BleStatus>>(emptyStatuses)
@@ -177,7 +181,14 @@ function PairingPage() {
     }
   }, [riderId])
 
-  const toBattle = () => navigate({ to: '/battle', search: { rider: riderId, name: riderName } })
+  // 解決済みの sensorSet をそのまま /battle へ渡す（null は空文字にして必ず値を持たせる）。
+  // /battle 側はこれが付いていれば R2 への再フェッチをせず即座に自動再接続を始められる
+  // （フェッチ待ちで「まだ何も繋がってない」空白時間ができ、体感で切断されたように見えていた）。
+  const toBattle = () =>
+    navigate({
+      to: '/battle',
+      search: { rider: riderId, name: riderName, sensorSet: sensorSetRef.current ?? '' },
+    })
 
   const connectedCount = SENSOR_PARTS.filter((p) => statuses[p.key] === 'connected').length
 

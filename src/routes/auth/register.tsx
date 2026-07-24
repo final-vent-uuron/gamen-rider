@@ -10,24 +10,26 @@ import { RIDER_ROSTER, listRiders, saveRider } from '../../rider-registry'
 export const Route = createFileRoute('/auth/register')({ component: RegisterPage })
 
 type Status = 'loading' | 'running' | 'error'
-// name: ライダー選択 / image: カード画像登録 / pose: 変身ポーズ登録 / preview: 確認・確定
-type Phase = 'name' | 'image' | 'pose' | 'preview'
+// name: ライダー選択 / image: カード画像登録 / pose: 変身ポーズ登録 /
+// final-pose: ファイナルベントポーズ登録 / preview: 確認・確定
+type Phase = 'name' | 'image' | 'pose' | 'final-pose' | 'preview'
 type ImageSource = 'camera' | 'upload'
 
 // スナップショットポーズの既定値（pose.tsx の作成モードと同じ感覚の値）
-const DEFAULT_MIN_SCORE = 80
+const DEFAULT_MIN_SCORE = 85 // 適当なポーズでも通ってしまう問題があったため少し厳しめ（元80）
 const DEFAULT_HOLD_MS = 700
 
 // 選べるセンサーセット名（BLE 名 <ライダー名>_RH/…LF/…BELT の <ライダー名> 部分。
 // ロースターの名前と同じにしてある＝実機ラベルもこの表記に合わせること）
 const SENSOR_SETS = RIDER_ROSTER.map((r) => r.name)
 
-const PHASES: Phase[] = ['name', 'image', 'pose', 'preview']
+const PHASES: Phase[] = ['name', 'image', 'pose', 'final-pose', 'preview']
 const PHASE_LABELS: Record<Phase, string> = {
   name: '1. ライダー',
   image: '2. 画像',
-  pose: '3. ポーズ',
-  preview: '4. 確認',
+  pose: '3. 変身ポーズ',
+  'final-pose': '4. FVポーズ',
+  preview: '5. 確認',
 }
 
 function RegisterPage() {
@@ -41,7 +43,9 @@ function RegisterPage() {
   // rAF ループから最新値を読むための ref（state のミラー）
   const phaseRef = useRef<Phase>('name')
   const landmarksRef = useRef<NormalizedLandmark[] | null>(null)
-  const verifyRef = useRef<RefPoint[] | null>(null)
+  // ライブ一致度チェックの基準（直近に登録したポーズ）。変身ポーズと FV ポーズで別に持つ。
+  const henshinVerifyRef = useRef<RefPoint[] | null>(null)
+  const finalVerifyRef = useRef<RefPoint[] | null>(null)
   const lastUiRef = useRef(0)
 
   const [status, setStatus] = useState<Status>('loading')
@@ -55,6 +59,7 @@ function RegisterPage() {
   const [imageSource, setImageSource] = useState<ImageSource>('camera')
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null)
   const [steps, setSteps] = useState<CustomStep[]>([])
+  const [finalSteps, setFinalSteps] = useState<CustomStep[]>([])
   const [captureSim, setCaptureSim] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -74,8 +79,12 @@ function RegisterPage() {
   // 直近に登録したポーズを「ライブ一致度」の基準にする（撮れているかの確認用）
   useEffect(() => {
     const last = [...steps].reverse().find((s) => s.kind === 'snapshot')
-    verifyRef.current = last && last.kind === 'snapshot' ? last.landmarks : null
+    henshinVerifyRef.current = last && last.kind === 'snapshot' ? last.landmarks : null
   }, [steps])
+  useEffect(() => {
+    const last = [...finalSteps].reverse().find((s) => s.kind === 'snapshot')
+    finalVerifyRef.current = last && last.kind === 'snapshot' ? last.landmarks : null
+  }, [finalSteps])
 
   // ロード後すぐカメラを起動（撮影とポーズ登録の両方で同じストリームを使う）
   useEffect(() => {
@@ -129,14 +138,8 @@ function RegisterPage() {
     const landmarker = landmarkerRef.current
     const mp = mpRef.current
 
-    if (
-      phaseRef.current !== 'pose' ||
-      !video ||
-      !canvas ||
-      !landmarker ||
-      !mp ||
-      video.readyState < 2
-    ) {
+    const posePhase = phaseRef.current === 'pose' || phaseRef.current === 'final-pose'
+    if (!posePhase || !video || !canvas || !landmarker || !mp || video.readyState < 2) {
       rafRef.current = requestAnimationFrame(tick)
       return
     }
@@ -153,7 +156,7 @@ function RegisterPage() {
 
     // 直近登録ポーズとのライブ一致度（登録したポーズが再現できるかその場で確認する用）
     let active = false
-    const ref = verifyRef.current
+    const ref = phaseRef.current === 'final-pose' ? finalVerifyRef.current : henshinVerifyRef.current
     if (landmarks && ref) {
       const sim = poseSimilarity(landmarks, ref)
       active = sim >= DEFAULT_MIN_SCORE
@@ -230,14 +233,41 @@ function RegisterPage() {
     setSteps((prev) => prev.filter((s) => s.id !== id))
   }
 
+  // ---- ファイナルベントポーズ登録 ----
+
+  function handleCaptureFinalPose() {
+    const lm = landmarksRef.current
+    if (!lm || lm.length < 33) return
+    const landmarks: RefPoint[] = lm.map((p) => ({ x: p.x, y: p.y, z: p.z }))
+    const n = finalSteps.length + 1
+    setFinalSteps((prev) => [
+      ...prev,
+      {
+        kind: 'snapshot',
+        id: `f${Date.now()}`,
+        label: `FVポーズ${n}`,
+        minScore: DEFAULT_MIN_SCORE,
+        holdMs: DEFAULT_HOLD_MS,
+        landmarks,
+      },
+    ])
+  }
+
+  function handleRemoveFinalStep(id: string) {
+    setFinalSteps((prev) => prev.filter((s) => s.id !== id))
+  }
+
   // ---- 確定 ----
 
   async function handleConfirm() {
-    if (!imageDataUrl || steps.length === 0 || !slug || !name.trim()) return
+    if (!imageDataUrl || steps.length === 0 || finalSteps.length === 0 || !slug || !name.trim())
+      return
     setSaving(true)
     setSaveError(null)
     try {
-      await saveRider({ data: { id: slug, name: name.trim(), imageDataUrl, steps, sensorSet } })
+      await saveRider({
+        data: { id: slug, name: name.trim(), imageDataUrl, steps, finalVentSteps: finalSteps, sensorSet },
+      })
       navigate({ to: '/auth' })
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : '保存に失敗しました。通信環境を確認してください。')
@@ -307,7 +337,7 @@ function RegisterPage() {
       <canvas
         ref={canvasRef}
         style={{
-          display: phase === 'pose' ? 'block' : 'none',
+          display: phase === 'pose' || phase === 'final-pose' ? 'block' : 'none',
           height: 'min(50vh, 480px)',
           maxWidth: '100%',
           aspectRatio: '4/3',
@@ -495,9 +525,63 @@ function RegisterPage() {
             </button>
             <button
               type="button"
-              onClick={() => setPhase('preview')}
+              onClick={() => setPhase('final-pose')}
               disabled={steps.length === 0}
               style={{ ...primaryButtonStyle(steps.length > 0), marginLeft: 'auto' }}
+            >
+              次へ（FVポーズ登録）
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ---- 4. ファイナルベントポーズ ---- */}
+      {phase === 'final-pose' && (
+        <div style={panelStyle}>
+          <span style={{ fontSize: '1rem' }}>
+            バトル中「ファイナルベント」発動時に取るポーズを登録してください（変身ポーズとは別のポーズにするのがおすすめ）。複数登録すると連続ポーズ（手順）になります。
+          </span>
+          {captureSim !== null && (
+            <span style={{ color: captureSim >= DEFAULT_MIN_SCORE ? '#4ade80' : '#9ca3af', fontSize: '0.9rem' }}>
+              直前に登録したポーズとの一致度: {captureSim} / 100（再現チェック用）
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={handleCaptureFinalPose}
+            disabled={status !== 'running'}
+            style={primaryButtonStyle(status === 'running')}
+          >
+            📸 このポーズを登録
+          </button>
+
+          {finalSteps.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+              {finalSteps.map((s, i) => (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{i + 1}.</span>
+                  <span>{s.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveFinalStep(s.id)}
+                    style={{ ...secondaryButtonStyle, marginLeft: 'auto', padding: '0.2rem 0.6rem' }}
+                  >
+                    ✕ 削除
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <button type="button" onClick={() => setPhase('pose')} style={backButtonStyle}>
+              ← 戻る
+            </button>
+            <button
+              type="button"
+              onClick={() => setPhase('preview')}
+              disabled={finalSteps.length === 0}
+              style={{ ...primaryButtonStyle(finalSteps.length > 0), marginLeft: 'auto' }}
             >
               次へ（確認）
             </button>
@@ -505,7 +589,7 @@ function RegisterPage() {
         </div>
       )}
 
-      {/* ---- 4. 確認・確定 ---- */}
+      {/* ---- 5. 確認・確定 ---- */}
       {phase === 'preview' && (
         <div style={panelStyle}>
           <h2 style={{ margin: 0, fontSize: '1.2rem' }}>登録内容の確認</h2>
@@ -535,13 +619,26 @@ function RegisterPage() {
                   {i + 1}. {s.label}
                 </span>
               ))}
+              <span style={{ color: '#9ca3af', marginTop: '0.4rem' }}>
+                ファイナルベントポーズ: {finalSteps.length} ステップ
+              </span>
+              {finalSteps.map((s, i) => (
+                <span key={s.id} style={{ fontSize: '0.9rem' }}>
+                  {i + 1}. {s.label}
+                </span>
+              ))}
             </div>
           </div>
 
           {saveError && <span style={{ color: '#f87171' }}>{saveError}</span>}
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button type="button" onClick={() => setPhase('pose')} disabled={saving} style={backButtonStyle}>
+            <button
+              type="button"
+              onClick={() => setPhase('final-pose')}
+              disabled={saving}
+              style={backButtonStyle}
+            >
               ← 戻る
             </button>
             <button

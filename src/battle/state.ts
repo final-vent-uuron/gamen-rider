@@ -65,6 +65,8 @@ export interface PlayerState {
   comboBy: string | null // 誰にコンボされているか（攻撃者 id）
   comboUntil: number // この時刻を過ぎたら comboCount をリセット
   meter: number // 逆転ゲージ 0..ARENA.meterMax（満タンで Final 解禁）
+  meterFullAt: number // meter が満タンに達した時刻（0 = 未達）。Final の早撃ちダメージ計算に使う
+  finalDamageMul: number // 直近で開始した Final の速度ダメージ倍率（発動時に確定・以後固定。既定 1）
   // --- 技のフレーム状態 ---
   move: MoveKind | null // 実行中の技（null = 素の状態）
   moveSide?: 'left' | 'right' | null // パンチ/キックの左右（GLB クリップの打ち分け。null = ランダム）
@@ -146,6 +148,14 @@ export const ARENA = {
   finalRampageDamage: 7, // 1ヒットあたり。フルヒット（~5発＋締め）で従来の単発 34 相当
   finalRampageRange: 0.15, // 有効距離（表面間・左右両側）
 
+  // Final の早撃ちボーナス: ゲージが満タンになった瞬間からの経過時間でダメージ倍率を決める。
+  // 0ms（満タン即撃ち）で最大、finalSpeedWindowMs 以上待つと最小まで線形減衰。
+  // 本番の発動はカード→ポーズの一連の演出を挟むため実測は数秒かかる。それを踏まえ
+  // 「できるだけ急いで出す」のを 10 秒目安、のんびり出すと下限、という尺にしてある。
+  finalSpeedWindowMs: 10000,
+  finalSpeedMaxMul: 1.6,
+  finalSpeedMinMul: 0.7,
+
   // ガード耐久（スマブラ式シールド）
   shieldMax: 60, // 満タン耐久。フル保持で約 5 秒で割れ
   shieldDrainPerSec: 12, // 構え続けているあいだの自然減少
@@ -187,8 +197,8 @@ export const ARENA = {
   abareHitstop: 80,
 
   // 乱入（3人目以降の途中参戦）: 全員の時間を止めて WARNING を出す演出時間。
-  // クライアントの Intrusion-bgm / WARNING 表示もこの長さに合わせる。
-  intrusionFreezeMs: 4000,
+  // クライアントの Intrusion-bgm / WARNING 表示もこの長さに合わせる（元4000ms から少し延長）。
+  intrusionFreezeMs: 6000,
 
   // カード技発動のカットイン演出（全員停止＋カメラ寄せ＋バナー）の時間。
   cutinMs: 1800,
@@ -408,6 +418,8 @@ function freshPlayer(init: PlayerInit, x: number, facing: 1 | -1): PlayerState {
     comboBy: null,
     comboUntil: 0,
     meter: 0,
+    meterFullAt: 0,
+    finalDamageMul: 1,
     move: null,
     moveSide: null,
     throwVictimId: null,
@@ -617,7 +629,8 @@ export function stepBattle(
   const afterThrows = resolvePendingThrows(afterRampage, now) // 掴みの遅延ダメージ（grasp-attack 中間）
   const afterAbare = resolvePendingAbare(afterThrows, now) // あばれの遅延ヒット（モーション終わりぎわ）
   const proj = stepProjectiles(afterAbare, state.projectiles ?? [], now, dt) // 波動弾の生成・飛翔・衝突
-  return checkWinner({ ...state, players: proj.players, projectiles: proj.projectiles })
+  const players = trackMeterFullAt(proj.players, now) // meter 満タン到達時刻の記録（Final 早撃ち判定用）
+  return checkWinner({ ...state, players, projectiles: proj.projectiles })
 }
 
 // 掴みの遅延ダメージ。掴み成立（throw-hit）から hitDelay 経過した時点で、
@@ -692,6 +705,24 @@ function resolveActiveHits(players: PlayerState[], now: number): PlayerState[] {
 // 暴れさせ、一定間隔で「左右両側・範囲内の全員」へ多段ヒットを入れる。
 // 位置は moveActiveFrom からの経過時間だけで決まる決定論なので、サーバーと
 // クライアント予測（stepBattle 共有）で一致する。締めの1発だけ打ち上げて派手に終わる。
+// Final の早撃ちダメージ倍率。meterFullAt=0（満タン未記録=旧データ等）は即撃ち扱い（最大倍率）。
+function finalSpeedMultiplier(meterFullAt: number, now: number): number {
+  const elapsed = meterFullAt > 0 ? Math.max(0, now - meterFullAt) : 0
+  const t = Math.min(1, elapsed / ARENA.finalSpeedWindowMs)
+  return ARENA.finalSpeedMaxMul + (ARENA.finalSpeedMinMul - ARENA.finalSpeedMaxMul) * t
+}
+
+// meter が満タンに達した/割った瞬間を記録する（早撃ちダメージ計算の起点）。
+// meter の増減箇所は複数あるため、毎 tick 末尾でまとめて判定する。
+function trackMeterFullAt(players: PlayerState[], now: number): PlayerState[] {
+  return players.map((p) => {
+    const full = p.meter >= ARENA.meterFinalCost
+    if (full && !p.meterFullAt) return { ...p, meterFullAt: now }
+    if (!full && p.meterFullAt) return { ...p, meterFullAt: 0 }
+    return p
+  })
+}
+
 function resolveFinalRampage(players: PlayerState[], now: number): PlayerState[] {
   let out = players
   for (const src of players) {
@@ -709,7 +740,7 @@ function resolveFinalRampage(players: PlayerState[], now: number): PlayerState[]
     if (now < (a.rampageNextHitAt ?? a.moveActiveFrom)) continue
     const isFinisher = now + ARENA.finalRampageHitGapMs > a.moveActiveTo
     const def: StrikeDef = {
-      damage: ARENA.finalRampageDamage,
+      damage: ARENA.finalRampageDamage * (a.finalDamageMul ?? 1),
       knockback: isFinisher ? ARENA.finalKnockback : ARENA.knockback * 2,
       launch: isFinisher ? ARENA.finalLaunch : 0,
       hitstun: isFinisher ? 520 : 420,
@@ -783,6 +814,8 @@ function startMove(
   const activeFrom = now + cutinDelay + f.startup
   const activeTo = activeFrom + f.active
   const recoveryTo = activeTo + f.recovery
+  // Final は満タンになってからの経過時間で威力が決まる（早撃ちほど強い）。発動時に確定して固定。
+  const finalMul = kind === 'final' ? finalSpeedMultiplier(attacker.meterFullAt, now) : 1
 
   const players = state.players.map((p) =>
     p.id === id
@@ -791,6 +824,7 @@ function startMove(
           action: kind === 'throw' ? ('throw' as const) : (kind as PlayerAction),
           move: kind,
           moveSide: side ?? null,
+          finalDamageMul: kind === 'final' ? finalMul : p.finalDamageMul,
           // ストライクベント（shot）/ ファイナルベント（final）はモーション中無敵
           // （あばれ = エラーモードも発動時に全編無敵。カード技は潰されない）。
           invulnUntil:

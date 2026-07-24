@@ -57,8 +57,8 @@ export const DEFAULT_KEY_BINDINGS: KeyBindings = {
   kickRight: ['m', 'M'], // 右キック（GLB: right-kick）
   guard: ['Shift', 's', 'S', 'ArrowDown'], // ホールドでガード
   throw: ['u', 'U'],
-  shot: ['i', 'I'], // 波動弾
-  abare: ['e', 'E'], // あばれ（割り込み・被弾中でも出せる）
+  shot: [], // ストライクベントはバトルから無し（意図的に外してある）
+  abare: [], // エラーベントはバトルから無し（意図的に外してある）
   turn: ['t', 'T'], // 振り向き（カメラの向き検出のキー版）
   finalVent: ['l', 'L', 'f', 'F'],
 }

@@ -25,6 +25,9 @@ export interface StoredRider {
 	name: string;
 	imageDataUrl: string;
 	steps: unknown[];
+	// ファイナルベント発動時のポーズ手順（変身ポーズの steps とは別収録）。
+	// finalVentSteps 導入前の登録、または未登録は null（バトル側は builtin フォールバックを使う）。
+	finalVentSteps: unknown[] | null;
 	sensorSet: string | null;
 	nfcId: string | null;
 	createdAt: string;
@@ -77,10 +80,11 @@ export async function handleRiders(
 		const all = await readAllRiders(bucket);
 		const valid = all
 			.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-			.map(({ id, name, steps, imageDataUrl, sensorSet }) => ({
+			.map(({ id, name, steps, finalVentSteps, imageDataUrl, sensorSet }) => ({
 				id,
 				name,
 				steps,
+				finalVentSteps: finalVentSteps ?? null, // finalVentSteps 導入前の登録は null 扱い
 				imageDataUrl,
 				sensorSet: sensorSet ?? null, // sensorSet 導入前の登録は null 扱い
 				// nfcId はここで意図的に除外（公開 API に乗せない。上のコメント参照）
@@ -108,17 +112,21 @@ export async function handleRiders(
 			typeof input.sensorSet === "string" && input.sensorSet.trim()
 				? input.sensorSet.trim()
 				: null;
-		// 既存ライダーへの上書き登録（画像/ポーズの撮り直し）で NFC タグの紐付けを消さないよう、
-		// 既存エントリの nfcId を引き継ぐ（bind は /riders/nfc-bind の専任なのでここでは受け取らない）。
+		// 既存ライダーへの上書き登録で NFC タグの紐付け／ファイナルベントポーズ未送信時に
+		// 消さないよう、既存エントリから引き継ぐ（bind は /riders/nfc-bind の専任なのでここでは受け取らない）。
 		const existing = await bucket.get(`${RIDERS_PREFIX}${id}.json`);
-		const nfcId = existing
-			? ((await existing.json()) as StoredRider).nfcId ?? null
-			: null;
+		const prev = existing ? ((await existing.json()) as StoredRider) : null;
+		const nfcId = prev?.nfcId ?? null;
+		const finalVentSteps =
+			Array.isArray(input.finalVentSteps) && input.finalVentSteps.length > 0
+				? input.finalVentSteps
+				: (prev?.finalVentSteps ?? null);
 		const entry: StoredRider = {
 			id,
 			name: input.name.trim(),
 			imageDataUrl: input.imageDataUrl,
 			steps: input.steps,
+			finalVentSteps,
 			sensorSet,
 			nfcId,
 			createdAt: new Date().toISOString(),

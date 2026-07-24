@@ -134,8 +134,8 @@ export const DEFAULT_RIDER_MODEL: RiderModel = {
 export const RIDER_MODELS: Record<string, RiderModel> = {
 	// ライダー別に差し替えたくなったら riderId をキーにここへ登録する。
 	// 未登録のライダーは fallbackModel（あれば）→ box プレースホルダの順で描画される。
-	// キーは /select の言語ライダー id（arduino / swift / python / flutter / cpp）。
-	// swift / cpp は GLB 未用意のため未登録 → 共通モデル(python)にフォールバック。
+	// キーは /select の言語ライダー id（arduino / swift / python / flutter）。
+	// swift は GLB 未用意のため未登録 → 共通モデル(python)にフォールバック。
 	python: DEFAULT_RIDER_MODEL,
 	arduino: {
 		// モーション大量収録版（2026-07-19 R2 アップロード）。

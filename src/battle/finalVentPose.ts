@@ -1,6 +1,8 @@
-// ファイナルベント専用ポーズ手順（変身ルーチンとは別ストレージ）。
-// riderId → CustomStep[] のマップ。バトルの pose 相では createRoutineRunner で流れ判定する。
-// 未登録キャラは片腕前突き出し 1 ステップにフォールバック。
+// ファイナルベント専用ポーズ手順のフォールバック。
+// 本体は /auth/register で登録し R2（rider-registry の finalVentSteps）に載る
+// （finalVentCam.ts の getFinalVentSteps が最優先で読む）。ここはその手前の read-only な
+// 保険 2 段: localStorage に残っている旧登録（過去の /final-vent-pose、廃止済み）→
+// それも無ければ片腕前突き出し 1 ステップの builtin。
 
 import { customToRoutine, type CustomRoutine, type CustomStep } from '../pose/custom'
 import { isArmThrustForward } from '../pose/poses'
@@ -105,44 +107,9 @@ function readMap(): PoseMap {
   return {}
 }
 
-function writeMap(map: PoseMap): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(map))
-}
-
-export function listFinalVentPoses(): FinalVentPoseRecord[] {
-  return Object.values(readMap()).sort((a, b) => a.riderId.localeCompare(b.riderId))
-}
-
 export function loadFinalVentPose(riderId: string): FinalVentPoseRecord | null {
   if (!riderId) return null
   return readMap()[riderId] ?? null
-}
-
-export function saveFinalVentPose(
-  input: Omit<FinalVentPoseRecord, 'updatedAt'> & { updatedAt?: string },
-): FinalVentPoseRecord {
-  const riderId = input.riderId.trim()
-  if (!riderId) throw new Error('riderId が空です')
-  if (!input.steps?.length) throw new Error('ポーズ手順が空です')
-  const record: FinalVentPoseRecord = {
-    riderId,
-    riderName: input.riderName.trim() || riderId,
-    steps: input.steps,
-    updatedAt: input.updatedAt ?? new Date().toISOString(),
-  }
-  const map = readMap()
-  map[riderId] = record
-  writeMap(map)
-  return record
-}
-
-export function clearFinalVentPose(riderId: string): void {
-  if (!riderId) return
-  const map = readMap()
-  if (!(riderId in map)) return
-  delete map[riderId]
-  writeMap(map)
 }
 
 function builtinFallback(riderId: string): HenshinRoutine {
@@ -175,11 +142,4 @@ export function resolveFinalVentRoutine(
     return { routine: customToRoutine(custom), source: 'registered' }
   }
   return { routine: builtinFallback(riderId), source: 'builtin' }
-}
-
-/** @deprecated resolveFinalVentRoutine を使う */
-export function resolveFinalVentPose(riderId: string) {
-  const { routine, source } = resolveFinalVentRoutine(riderId)
-  const step = routine.steps[0]
-  return { test: step.test, holdMs: step.holdMs, source }
 }
