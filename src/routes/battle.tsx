@@ -118,6 +118,15 @@ const BOTH_HAND_PUNCH_SUPPRESS_MS = 100;
 const RUN_STEP_THRESHOLD = 10;
 const RUN_HOLD_MS = 450;
 
+// フルスクリーンのオーバーレイ演出の重なり順（値が大きいほど手前）。増やすときはここだけ見ればいい。
+const Z_OVERLAY = {
+	finalVentWatch: 38, // ファイナルベント溜め（SA3風・全員停止中の見守り）
+	cutin: 40, // カード技発動のカットイン
+	finalVent: 40, // ファイナルベント演出
+	intrusion: 55, // 乱入 WARNING
+	gameSet: 60, // 決着スプラッシュ（最前面）
+} as const;
+
 // 止め（最後の1人になる直前の撃墜）の演出タイミング。
 // スロー再生で倒れ切るのに実時間がかかるので、GAME SET と /result 遷移をそこへ合わせる。
 //   0ms            : 撃墜 → スローモーション開始（死亡モーションをゆっくり再生）
@@ -1211,42 +1220,6 @@ function BattlePage() {
 					padding: "0.4rem 0.7rem",
 				}}
 			>
-				{/* 左: 接続情報（2行の極小カラム。Back・全画面はステージ右上へ移動） */}
-				{/* <div
-					style={{
-						display: "flex",
-						flexDirection: "column",
-						gap: "0.2rem",
-						minWidth: "140px",
-						flexShrink: 0,
-					}}
-				>
-					<span
-						style={{
-							color: "#a78bfa",
-							fontWeight: "bold",
-							fontSize: "0.82rem",
-							whiteSpace: "nowrap",
-							overflow: "hidden",
-							textOverflow: "ellipsis",
-						}}
-					>
-						あなた: {routine.riderName}
-					</span>
-					<span
-						style={{
-							display: "inline-flex",
-							alignItems: "center",
-							gap: "0.5rem",
-							fontSize: "0.75rem",
-							color: "#9ca3af",
-						}}
-					>
-						参加 {battle.players.length}人
-						<ConnBadge status={status} />
-					</span>
-				</div> */}
-
 				{/* 左: 部位ステータス（顔=カメラ可視ゲージ、手足=センサーのペアリング＋カメラ可視）。
 				    2つのパネルを1枚の背景でまとめて「ひとつのステータス」に見せる。 */}
 				<div
@@ -1330,43 +1303,11 @@ function BattlePage() {
 	);
 }
 
-// ---- 接続状態バッジ / ヒント ---------------------------------------------
+// ---- 接続状態ヒント -------------------------------------------------------
+// 常時表示のバッジは置かず、問題があるとき（切断中・相手待ち）だけ WaitingHint /
+// DisconnectedHint で知らせる（オンライン時は何も出さない＝平常時の HUD を静かに保つ）。
 
-// HUD の接続情報カラムが一時的にコメントアウト中でも残す（export で未使用エラー回避）。
-export function ConnBadge({ status }: { status: NetStatus }) {
-	const map = {
-		connecting: { label: "接続中…", color: "#fbbf24" },
-		open: { label: "オンライン", color: "#34d399" },
-		closed: { label: "切断", color: "#f87171" },
-	} as const;
-	const { label, color } = map[status];
-	return (
-		<span
-			style={{
-				display: "inline-flex",
-				alignItems: "center",
-				gap: "5px",
-				fontSize: "0.8rem",
-				color,
-				border: `1px solid ${color}55`,
-				borderRadius: "999px",
-				padding: "2px 10px",
-			}}
-		>
-			<span
-				style={{
-					width: "7px",
-					height: "7px",
-					borderRadius: "50%",
-					background: color,
-				}}
-			/>
-			{label}
-		</span>
-	);
-}
-
-// バトル中の 5部位センサー状態＋接続ボタン（HUD 左）。各部位を絵文字ドットで状態表示し、
+// バトル中の 5部位センサー状態＋接続ボタン（HUD 左）。各部位をドットで状態表示し、
 // 未接続があれば「センサー追加」で connectAny（選んだ実機を名前から部位へ自動振り分け）。
 // ペアリング画面で許可済みなら自動再接続するので、通常このボタンは押さなくてよい。
 // 加速度センサーの生インパクト値の表示レンジ（m/s^2 相当。ファームの IMPACT_THRESHOLD=25 目安）。
@@ -1401,63 +1342,75 @@ function SensorHudPanel({
 		<div
 			style={{
 				display: "flex",
-				alignItems: "center",
-				gap: "0.4rem",
+				flexDirection: "column",
+				gap: "0.25rem",
 				flexShrink: 0,
 			}}
 		>
-			{/* 部位ドット＋加速度センサーの生インパクト値（接続中のみ、直近値で光る＝本物のBLEゲージ）。
-			    絵文字ではなく無地の丸ドットにして、他の HUD 要素とトーンを揃えている。 */}
-			<div style={{ display: "flex", gap: "5px" }}>
-				{SENSOR_PARTS.map((p) => {
-					const s = statuses[p.key];
-					const impact = impacts[p.key] ?? 0;
-					const intensity = s === "connected" ? Math.min(1, impact / SENSOR_IMPACT_MAX) : 0;
-					const c = dotColor(s);
-					return (
-						<span
-							key={p.key}
-							title={
-								s === "connected"
-									? `${p.label}: impact ${impact.toFixed(1)}`
-									: `${p.label}: ${s}`
-							}
-							style={{
-								width: "8px",
-								height: "8px",
-								borderRadius: "50%",
-								background: c,
-								opacity: s === "connected" ? 1 : 0.4,
-								boxShadow:
-									intensity > 0.15
-										? `0 0 ${Math.round(2 + intensity * 6)}px ${c}`
-										: "none",
-								transition: "box-shadow 0.08s linear",
-							}}
-						/>
-					);
-				})}
+			{/* 見出し＋接続数（ホバーしなくても一目で分かるように）。CamStatusBar の「カメラ検出」と対。 */}
+			<span
+				style={{
+					fontSize: "0.6rem",
+					color: "#64748b",
+					letterSpacing: "0.08em",
+				}}
+			>
+				センサー {connected}/{SENSOR_PARTS.length}
+			</span>
+			<div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+				{/* 部位ドット＋加速度センサーの生インパクト値（接続中のみ、直近値で光る＝本物のBLEゲージ）。
+				    絵文字ではなく無地の丸ドットにして、他の HUD 要素とトーンを揃えている。 */}
+				<div style={{ display: "flex", gap: "5px" }}>
+					{SENSOR_PARTS.map((p) => {
+						const s = statuses[p.key];
+						const impact = impacts[p.key] ?? 0;
+						const intensity = s === "connected" ? Math.min(1, impact / SENSOR_IMPACT_MAX) : 0;
+						const c = dotColor(s);
+						return (
+							<span
+								key={p.key}
+								title={
+									s === "connected"
+										? `${p.label}: impact ${impact.toFixed(1)}`
+										: `${p.label}: ${s}`
+								}
+								style={{
+									width: "8px",
+									height: "8px",
+									borderRadius: "50%",
+									background: c,
+									opacity: s === "connected" ? 1 : 0.4,
+									boxShadow:
+										intensity > 0.15
+											? `0 0 ${Math.round(2 + intensity * 6)}px ${c}`
+											: "none",
+									transition: "box-shadow 0.08s linear",
+								}}
+							/>
+						);
+					})}
+				</div>
+				{!allConnected && !unsupported && (
+					<button
+						type="button"
+						onClick={onAdd}
+						disabled={anyConnecting}
+						style={{
+							padding: "3px 9px",
+							borderRadius: "999px",
+							border: "1px solid #a78bfa",
+							background: "transparent",
+							color: anyConnecting ? "#6b7280" : "#a78bfa",
+							fontSize: "0.68rem",
+							fontWeight: 700,
+							whiteSpace: "nowrap",
+							cursor: anyConnecting ? "default" : "pointer",
+						}}
+					>
+						{anyConnecting ? "接続中…" : "＋ センサー追加"}
+					</button>
+				)}
 			</div>
-			{!allConnected && !unsupported && (
-				<button
-					type="button"
-					onClick={onAdd}
-					disabled={anyConnecting}
-					style={{
-						padding: "3px 9px",
-						borderRadius: "999px",
-						border: "1px solid #a78bfa",
-						background: "transparent",
-						color: anyConnecting ? "#6b7280" : "#a78bfa",
-						fontSize: "0.68rem",
-						fontWeight: 700,
-						whiteSpace: "nowrap",
-						cursor: anyConnecting ? "default" : "pointer",
-					}}
-				>
-					{anyConnecting ? "接続中…" : "📡 センサー追加"}
-				</button>
-			)}
 		</div>
 	);
 }
@@ -2000,16 +1953,18 @@ function ControlsHelp() {
 				type="button"
 				onClick={() => setOpen((v) => !v)}
 				style={{
-					background: "rgba(15,23,42,0.8)",
-					color: "#cbd5e1",
+					// Back / BGM / 全画面ボタンと同じトーン（ステージ右上のボタン群として統一）。
+					background: "rgba(0,0,0,0.45)",
+					color: "#e5e7eb",
 					border: "1px solid #334155",
-					borderRadius: "999px",
-					padding: "3px 12px",
-					fontSize: "0.75rem",
+					borderRadius: "6px",
+					padding: "2px 10px",
+					fontSize: "0.78rem",
 					cursor: "pointer",
+					whiteSpace: "nowrap",
 				}}
 			>
-				🎮 操作説明 {open ? "▲" : "▼"}
+				操作説明 {open ? "▲" : "▼"}
 			</button>
 			{open && (
 				<div
@@ -2079,7 +2034,7 @@ function IntrusionWarning({ name }: { name: string }) {
 				gap: "0.8rem",
 				background: "rgba(0,0,0,0.5)",
 				pointerEvents: "none",
-				zIndex: 55,
+				zIndex: Z_OVERLAY.intrusion,
 			}}
 		>
 			{/* 上下の危険ストライプ帯 */}
@@ -2142,14 +2097,14 @@ function IntrusionWarning({ name }: { name: string }) {
 // ref を読んで自分だけ再レンダーする（BattlePage 全体を 15fps で再レンダーさせない）。
 
 // [表示名, カメラのランドマーク index, 対応するセンサー部位（null = センサー無し・カメラのみ）]
-// ラベルは「📷」を付けてカメラ由来（≒可視性信頼度）だと明示する。加速度センサーの実測値は
-// 別（HUD 左の SensorHudPanel。emoji が身体部位そのもの）なので混同しないように区別している。
+// カメラ由来（≒可視性信頼度）だと分かるよう、見出し1つ（「カメラ」ラベル）で示す
+// （行ごとに絵文字を繰り返さない。加速度センサーの実測値は隣の SensorHudPanel のドット）。
 const STATUS_PARTS: [string, number, SensorPartKey | null][] = [
-	["📷顔", LM.NOSE, null],
-	["📷右手", LM.R_WRIST, "rightHand"],
-	["📷左手", LM.L_WRIST, "leftHand"],
-	["📷右足", LM.R_ANKLE, "rightFoot"],
-	["📷左足", LM.L_ANKLE, "leftFoot"],
+	["顔", LM.NOSE, null],
+	["右手", LM.R_WRIST, "rightHand"],
+	["左手", LM.L_WRIST, "leftHand"],
+	["右足", LM.R_ANKLE, "rightFoot"],
+	["左足", LM.L_ANKLE, "leftFoot"],
 ];
 
 function CamStatusBar({
@@ -2282,6 +2237,16 @@ function CamStatusBar({
 				padding: "0 0.2rem",
 			}}
 		>
+			<span
+				style={{
+					gridColumn: "1 / -1",
+					fontSize: "0.6rem",
+					color: "#64748b",
+					letterSpacing: "0.08em",
+				}}
+			>
+				カメラ検出
+			</span>
 			{STATUS_PARTS.map(([label, idx, limb]) =>
 				limb && !(paired?.[limb] ?? false)
 					? unpaired(label)
@@ -2679,7 +2644,7 @@ function FinalVentWatchBanner({
 				paddingTop: "12vh",
 				gap: "0.35rem",
 				pointerEvents: "none",
-				zIndex: 38,
+				zIndex: Z_OVERLAY.finalVentWatch,
 				background:
 					"radial-gradient(ellipse at center, rgba(88,28,135,0.35) 0%, rgba(0,0,0,0.55) 70%)",
 			}}
@@ -2744,7 +2709,7 @@ function CutinBanner({ kind, name }: { kind: string; name: string }) {
 				justifyContent: "center",
 				gap: "0.3rem",
 				pointerEvents: "none",
-				zIndex: 40,
+				zIndex: Z_OVERLAY.cutin,
 			}}
 		>
 			<span
@@ -2783,7 +2748,7 @@ function FinalVentBanner() {
 				alignItems: "center",
 				justifyContent: "center",
 				pointerEvents: "none",
-				zIndex: 40,
+				zIndex: Z_OVERLAY.finalVent,
 			}}
 		>
 			<span
@@ -2814,7 +2779,7 @@ function GameSetBanner({ mine }: { mine: boolean }) {
 				alignItems: "center",
 				justifyContent: "center",
 				gap: "0.6rem",
-				zIndex: 60,
+				zIndex: Z_OVERLAY.gameSet,
 				pointerEvents: "none",
 			}}
 		>

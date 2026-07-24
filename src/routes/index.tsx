@@ -1,5 +1,7 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
+import { useEffect } from "react";
 
+import { playHomeBgm } from "../battle/bgm";
 import { WEBWORLD_SKY, WebWorldBackdrop } from "../webworld-backdrop";
 import type { CodeFragment } from "../webworld-backdrop";
 
@@ -18,6 +20,9 @@ const TITLE_FRAGMENTS: CodeFragment[] = [
 //   [ゲームスタート] → /auth（カード認証 → ポーズ認証）→ /pairing → /battle → /result
 // 個別ページ（/pose 等）は各機能の単体検証用。開発時だけ使うので下部に小さくまとめる。
 function Home() {
+	// タイトル BGM（ループ）。画面を離れたら停止する。
+	useEffect(() => playHomeBgm(), []);
+
 	return (
 		<div
 			style={{

@@ -22,6 +22,8 @@ const INTRUSION_BASE = 0.75
 const FINAL_BASE = 0.6
 const VOICE_BASE = 0.9
 const WIN_BASE = 0.7
+const HOME_BASE = 0.5
+const HENSHIN_BASE = 0.5
 
 // ファイナルベントの掛け声（存在するファイル名そのまま。3 だけ綴りが違う）。
 const FINAL_VENT_VOICES = [
@@ -238,4 +240,30 @@ export function playWinBgm(volume?: number): () => void {
     a.pause()
     a.src = ''
   }
+}
+
+// ループ再生する単発トラック用の共通ヘルパ（home-bgm / henshin-bgm で使う）。
+// 戻り値のクリーンアップを unmount で呼ぶ。volume 未指定時は保存済みマスター × base。
+function loopingTrack(file: string, base: number, volume?: number): () => void {
+  if (typeof window === 'undefined' || typeof Audio === 'undefined') return () => {}
+  let stopped = false
+  const a = new Audio(`${BGM_DIR}/${file}`)
+  a.loop = true
+  a.volume = clamp01(volume ?? base * getStoredBgmVolume())
+  playWithUnlock(a, () => !stopped)
+  return () => {
+    stopped = true
+    a.pause()
+    a.src = ''
+  }
+}
+
+// タイトル画面（/）用のループ BGM。
+export function playHomeBgm(volume?: number): () => void {
+  return loopingTrack('home.mp3', HOME_BASE, volume)
+}
+
+// 変身フロー（/auth・/henshin。カード認証〜ポーズ認証）用のループ BGM。
+export function playHenshinBgm(volume?: number): () => void {
+  return loopingTrack('henshin.mp3', HENSHIN_BASE, volume)
 }

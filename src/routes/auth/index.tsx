@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
+import { playHenshinBgm } from '../../battle/bgm'
 import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../../card'
 import type { CardMatcher, CardRef, MatchStats } from '../../card'
 import {
@@ -62,6 +63,9 @@ function AuthPage() {
   useEffect(() => {
     import('../../battle/arena3d').then((m) => m.preloadRiderModels())
   }, [])
+
+  // 変身フロー BGM（ループ）。画面を離れたら停止する。
+  useEffect(() => playHenshinBgm(), [])
 
   // 認証成功の演出を少し見せてから、センサーペアリング画面へ自動遷移（本番フロー）。
   // /pairing がライダーの GR セットで BLE を絞り、そこから /battle へ進む。

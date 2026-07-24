@@ -38,7 +38,6 @@ const LANGUAGE_RIDERS: RiderChoice[] = [
   { id: 'swift', name: 'Swift' },
   { id: 'python', name: 'Python' },
   { id: 'flutter', name: 'Flutter' },
-  { id: 'cpp', name: 'C++' },
 ]
 
 function FinalVentPosePage() {

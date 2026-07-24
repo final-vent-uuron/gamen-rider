@@ -2,6 +2,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision'
 
+import { playHenshinBgm } from '../battle/bgm'
 import { CAMERA_HEIGHT, CAMERA_WIDTH, createCardMatcher } from '../card'
 import type { CardMatch, CardMatcher, CardRef } from '../card'
 import {
@@ -26,6 +27,7 @@ type Rider = { id: string; name: string }
 function HenshinPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const bgmStopRef = useRef<(() => void) | null>(null) // 変身フロー BGM。Start〜Stop の間だけ鳴らす
   const guideCanvasRef = useRef<HTMLCanvasElement>(null)
   const lastGuideKeyRef = useRef<string | null>(null)
   const matcherRef = useRef<CardMatcher | null>(null)
@@ -118,6 +120,8 @@ function HenshinPage() {
       matcher?.dispose()
       matcherRef.current = null
       landmarkerRef.current?.close()
+      bgmStopRef.current?.()
+      bgmStopRef.current = null
     }
   }, [])
 
@@ -266,6 +270,8 @@ function HenshinPage() {
       isRunningRef.current = true
       setStatus('running')
       rafRef.current = requestAnimationFrame(tick)
+      bgmStopRef.current?.()
+      bgmStopRef.current = playHenshinBgm()
     } catch {
       setStatus('error')
     }
@@ -282,6 +288,8 @@ function HenshinPage() {
     const canvas = canvasRef.current
     if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
     setStatus('ready')
+    bgmStopRef.current?.()
+    bgmStopRef.current = null
   }
 
   // 変身成立後、もう一度カード認証からやり直す（カメラは止めない）

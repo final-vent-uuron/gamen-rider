@@ -187,8 +187,8 @@ export const ARENA = {
   abareHitstop: 80,
 
   // 乱入（3人目以降の途中参戦）: 全員の時間を止めて WARNING を出す演出時間。
-  // クライアントの Intrusion-bgm / WARNING 表示もこの長さに合わせる。
-  intrusionFreezeMs: 4000,
+  // クライアントの Intrusion-bgm / WARNING 表示もこの長さに合わせる（元4000ms から少し延長）。
+  intrusionFreezeMs: 6000,
 
   // カード技発動のカットイン演出（全員停止＋カメラ寄せ＋バナー）の時間。
   cutinMs: 1800,
