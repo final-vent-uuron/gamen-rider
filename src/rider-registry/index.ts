@@ -33,6 +33,19 @@ export async function listRiders(): Promise<RegisteredRiderWithImage[]> {
   return (await res.json()) as RegisteredRiderWithImage[]
 }
 
+/** NFC タグを登録ライダーへ紐付ける（POST /riders/nfc）。対象ライダーは登録済みである必要がある。 */
+export async function bindRiderNfc(riderId: string, nfcId: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/riders/nfc`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ riderId, nfcId }),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null)
+    throw new Error((detail as { error?: string } | null)?.error ?? `紐付けに失敗しました (${res.status})`)
+  }
+}
+
 /** ライダーを新規登録する（R2 の riders/<id>.json に保存）。 */
 export async function saveRider({ data }: { data: SaveRiderInput }): Promise<{ id: string }> {
   const res = await fetch(`${apiBase()}/riders`, {
