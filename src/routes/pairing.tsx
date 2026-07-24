@@ -62,10 +62,10 @@ function PairingPage() {
   const idleTimerRef = useRef(0)
   const flashTimerRef = useRef<Partial<Record<SensorPartKey, number>>>({})
   const hubRef = useRef<SensorHub | null>(null)
-  // 登録ライダーに紐づくセンサーセット番号（GR<n>）。R2 から非同期に決まるので ref + 表示用 state。
-  const sensorSetRef = useRef<number | null>(null)
+  // 登録ライダーに紐づくセンサーセット名（<ライダー名>）。R2 から非同期に決まるので ref + 表示用 state。
+  const sensorSetRef = useRef<string | null>(null)
 
-  const [sensorSet, setSensorSet] = useState<number | null>(null)
+  const [sensorSet, setSensorSet] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<SensorPartKey, BleStatus>>(emptyStatuses)
   const [impacts, setImpacts] = useState<Partial<Record<SensorPartKey, number>>>({})
   const [flash, setFlash] = useState<Partial<Record<SensorPartKey, boolean>>>({})
@@ -134,8 +134,8 @@ function PairingPage() {
       },
     )
     hubRef.current = hub
-    // 自分のライダーのセンサーセット（GR 番号）を R2 から引いてから自動接続を始める
-    //（先に始めると他セットの許可済みデバイスを拾い得るため）。
+    // 自分のライダーのセンサーセット名を R2 から引いてから自動接続を始める
+    //（先に始めると他ライダー名の許可済みデバイスを拾い得るため）。
     let cancelled = false
     void riderSensorSet(riderId).then((set) => {
       sensorSetRef.current = set
@@ -218,7 +218,7 @@ function PairingPage() {
               padding: '2px 10px',
             }}
           >
-            センサーセット GR{sensorSet}（他セットは選択不可）
+            センサーセット {sensorSet}（他は選択不可）
           </span>
         )}
         <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: '#9ca3af' }}>

@@ -197,8 +197,8 @@ function BattlePage() {
 	const finalActiveRef = useRef(false); // rAF ループから読む finalActive のミラー
 	const netRef = useRef<BattleNet | null>(null);
 	const hubRef = useRef<SensorHub | null>(null); // バトル中の 5部位センサーハブ（接続ボタンから connectAny() を呼ぶ）
-	// 自分のライダーのセンサーセット番号（GR<n>。R2 から非同期に取得）。他セットの GR デバイス除外用。
-	const sensorSetRef = useRef<number | null>(null);
+	// 自分のライダーのセンサーセット名（<ライダー名>。R2 から非同期に取得）。他ライダー名のデバイス除外用。
+	const sensorSetRef = useRef<string | null>(null);
 	// 振り向き判定用: 両手加速度センサーの直近ヒット時刻（パンチ検出＝ble.ts 側のしきい値と同じ判定を流用）。
 	// カメラで横向きを検知した瞬間、両方が TURN_HAND_WINDOW_MS 以内に振られていたら振り向く。
 	const lastHandHitAtRef = useRef<{ rightHand: number; leftHand: number }>({
@@ -690,8 +690,8 @@ function BattlePage() {
 			sensorSet: () => sensorSetRef.current,
 		});
 		hubRef.current = hub;
-		// 自分のライダーのセンサーセット（GR 番号）を R2 から引いてから自動接続を始める
-		//（先に始めると他セットの許可済みデバイスを拾い得るため）。
+		// 自分のライダーのセンサーセット名を R2 から引いてから自動接続を始める
+		//（先に始めると他ライダー名の許可済みデバイスを拾い得るため）。
 		let hubCancelled = false;
 		void riderSensorSet(routine.riderId).then((set) => {
 			sensorSetRef.current = set;

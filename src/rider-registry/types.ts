@@ -1,13 +1,14 @@
 import type { CustomStep } from '../pose/custom'
 
 // R2（riders/<id>.json）に保存する登録ライダー1件分。画像は data URL のまま同梱する。
-// sensorSet: このライダーが使う BLE センサーセット番号（GR<n>_… 命名の n）。null = 紐付けなし。
+// sensorSet: このライダーが使う BLE センサー名（<ライダー名>_<部位> 命名の <ライダー名> 部分。
+// 例: "Arduino"）。null = 紐付けなし。
 export interface RegisteredRider {
   id: string
   name: string
   imageDataUrl: string
   steps: CustomStep[]
-  sensorSet: number | null
+  sensorSet: string | null
   createdAt: string
 }
 
@@ -17,7 +18,7 @@ export interface RegisteredRiderWithImage {
   name: string
   steps: CustomStep[]
   imageDataUrl: string
-  sensorSet: number | null
+  sensorSet: string | null
 }
 
 export interface SaveRiderInput {
@@ -27,5 +28,5 @@ export interface SaveRiderInput {
   name: string
   imageDataUrl: string // data:image/png;base64,... 形式
   steps: CustomStep[]
-  sensorSet: number | null
+  sensorSet: string | null
 }
