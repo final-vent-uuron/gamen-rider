@@ -61,7 +61,7 @@ type ClientMsg =
   // riderId は送らせない（公開済みの固定4文字列を誰でも打ててしまうため）。物理タグの固有ID
   // だけを受け取り、事前に /riders/nfc で紐付け済みのライダーをサーバー側で引き当てる
   // ＝実際にタグを持っている人にしか撃てない。
-  | { t: 'nfc-final'; nfcId?: unknown }
+  | { t: 'nfc-final'; nfcId?: unknown; tagId?: unknown }
 
 export class BattleRoom extends DurableObject<Env> {
   private sockets = new Map<WebSocket, Conn>()
@@ -187,7 +187,7 @@ export class BattleRoom extends DurableObject<Env> {
       case 'ping':
         break // lastSeen の更新（上で実施）だけが目的
       case 'nfc-final': {
-        const nfcId = String(msg.nfcId ?? '')
+        const nfcId = String(msg.nfcId ?? msg.tagId ?? '')
         const result = await this.triggerNfcFinal(nfcId)
         ws.send(JSON.stringify({ t: 'nfc-final-ack', ...result }))
         break
@@ -212,15 +212,18 @@ export class BattleRoom extends DurableObject<Env> {
         headers,
       })
     }
-    let body: { nfcId?: unknown }
+    let body: { nfcId?: unknown; tagId?: unknown }
     try {
-      body = (await request.json()) as { nfcId?: unknown }
+      body = (await request.json()) as { nfcId?: unknown; tagId?: unknown }
     } catch {
       console.log('[nfc-final] HTTP body が JSON として読めなかった')
       return new Response(JSON.stringify({ ok: false, reason: 'bad-request' }), { status: 400, headers })
     }
-    console.log(`[nfc-final] HTTP received nfcId="${String(body.nfcId ?? '')}"`)
-    const result = await this.triggerNfcFinal(String(body.nfcId ?? ''))
+    // Swift アプリ側は "tagId" というキー名で送ってくる（web 側が合わせる方針）。
+    // nfcId を優先しつつ tagId も同じものとして受け付ける。
+    const nfcId = String(body.nfcId ?? body.tagId ?? '')
+    console.log(`[nfc-final] HTTP received nfcId="${nfcId}"`)
+    const result = await this.triggerNfcFinal(nfcId)
     return new Response(JSON.stringify(result), { status: 200, headers })
   }
 
