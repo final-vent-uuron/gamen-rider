@@ -77,6 +77,10 @@ export class BattleRoom extends DurableObject<Env> {
   private nfcCache = new Map<string, string>()
   private nfcCacheAt = 0
   private static readonly NFC_CACHE_TTL_MS = 15_000
+  // 直近の nfc-final 結果（検証ページ /nfc-test が GET /riders/nfc-final でポーリングする）。
+  // Swift アプリの実際のリクエストが「届いたか・何が起きたか」をブラウザ側でも見えるようにする。
+  private nfcLog: { at: number; nfcId: string; riderId?: string; ok: boolean; reason?: string }[] = []
+  private static readonly NFC_LOG_MAX = 30
 
   // WebSocket のアップグレードに加え、/riders/nfc-final だけは常時接続を持たない
   // 呼び出し元（受信ループを書きたくない Swift アプリ等）向けに素の POST でも受ける。
@@ -190,10 +194,16 @@ export class BattleRoom extends DurableObject<Env> {
     }
   }
 
-  // POST /riders/nfc-final のハンドラ。常時接続を持たない呼び出し元（受信ループ不要にしたい
-  // Swift アプリ等）向けの一撃版。処理内容は WS の 'nfc-final' と同じ（triggerNfcFinal 共有）。
+  // /riders/nfc-final のハンドラ。
+  //   POST: 常時接続を持たない呼び出し元（受信ループ不要にしたい Swift アプリ等）向けの発動一撃版。
+  //         処理内容は WS の 'nfc-final' と同じ（triggerNfcFinal 共有）。
+  //   GET : 直近の結果ログを返す。検証ページ（/nfc-test）がポーリングして、実際に届いた
+  //         リクエストの結果をブラウザ側でも見えるようにするため。
   private async handleNfcFinalHttp(request: Request): Promise<Response> {
     const headers = { 'content-type': 'application/json; charset=utf-8' }
+    if (request.method === 'GET') {
+      return new Response(JSON.stringify({ log: this.nfcLog }), { status: 200, headers })
+    }
     if (request.method !== 'POST') {
       console.log(`[nfc-final] HTTP ${request.method} -> method-not-allowed`)
       return new Response(JSON.stringify({ ok: false, reason: 'method-not-allowed' }), {
@@ -213,9 +223,16 @@ export class BattleRoom extends DurableObject<Env> {
     return new Response(JSON.stringify(result), { status: 200, headers })
   }
 
+  // 直近の nfc-final 結果を記録する（検証ページ用のログ。最大 NFC_LOG_MAX 件で古いものから捨てる）。
+  private logNfc(nfcId: string, result: { ok: boolean; riderId?: string; reason?: string }) {
+    this.nfcLog.push({ at: Date.now(), nfcId, ...result })
+    if (this.nfcLog.length > BattleRoom.NFC_LOG_MAX) this.nfcLog.shift()
+  }
+
   // nfc-final の中身（WS メッセージ・HTTP POST 共通）。
   // nfcId → 紐付け済みライダー → 対戦中の該当プレイヤーを引き当て、ゲージ満タンなら
-  // Final Vent を適用する。理由がわかるよう毎回 console.log する（wrangler tail で見える）。
+  // Final Vent を適用する。理由がわかるよう毎回 console.log ＋ nfcLog に記録する
+  //（wrangler tail でも /nfc-test のポーリングでも見える）。
   private async triggerNfcFinal(
     nfcId: string,
   ): Promise<{ ok: boolean; riderId?: string; reason?: string }> {
@@ -223,7 +240,9 @@ export class BattleRoom extends DurableObject<Env> {
     if (!riderId) {
       const known = [...this.nfcCache.keys()]
       console.log(`[nfc-final] nfcId="${nfcId}" -> unknown-tag（紐付け済み: ${known.join(', ') || 'なし'}）`)
-      return { ok: false, reason: 'unknown-tag' }
+      const result = { ok: false, reason: 'unknown-tag' }
+      this.logNfc(nfcId, result)
+      return result
     }
     const target = [...this.sockets.values()].find((c) => c.riderId === riderId)
     const player = target ? this.battle.players.find((p) => p.id === target.id) : null
@@ -232,15 +251,21 @@ export class BattleRoom extends DurableObject<Env> {
       console.log(
         `[nfc-final] riderId=${riderId} -> not-found（今この部屋に居るriderId: ${connected || 'なし'}）`,
       )
-      return { ok: false, riderId, reason: 'not-found' }
+      const result = { ok: false, riderId, reason: 'not-found' }
+      this.logNfc(nfcId, result)
+      return result
     }
     if (player.meter < ARENA.meterFinalCost) {
       console.log(`[nfc-final] riderId=${riderId} -> low-meter（meter=${player.meter}/${ARENA.meterFinalCost}）`)
-      return { ok: false, riderId, reason: 'low-meter' }
+      const result = { ok: false, riderId, reason: 'low-meter' }
+      this.logNfc(nfcId, result)
+      return result
     }
     this.battle = applyAttack(this.battle, player.id, 'final', Date.now())
     console.log(`[nfc-final] riderId=${riderId} -> OK 発動`)
-    return { ok: true, riderId }
+    const result = { ok: true, riderId }
+    this.logNfc(nfcId, result)
+    return result
   }
 
   // nfcId → riderId。R2（riders/*.json の nfcId フィールド）で事前に /riders/nfc から

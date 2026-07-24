@@ -24,6 +24,18 @@ interface LogEntry {
   kind: 'send' | 'recv' | 'info' | 'error'
 }
 
+// サーバー（BattleRoom）が記録している直近の nfc-final 結果。GET /riders/nfc-final でポーリングする。
+// DO がアイドルで退避されるとサーバー側の履歴はリセットされる（インメモリ・デバッグ用途のため）。
+interface ServerNfcLogEntry {
+  at: number
+  nfcId: string
+  riderId?: string
+  ok: boolean
+  reason?: string
+}
+
+const POLL_MS = 1500
+
 const API_BASE_PRESETS = [
   { label: '本番 (gamen-rider.com)', value: 'https://gamen-rider.com' },
   { label: 'workers.dev', value: 'https://gamen-rider-battle.pachi.workers.dev' },
@@ -50,6 +62,8 @@ function NfcTestPage() {
   const [registered, setRegistered] = useState<RegisteredRiderWithImage[]>([])
   const [battle, setBattle] = useState<BattleState | null>(null)
   const [log, setLog] = useState<LogEntry[]>([])
+  const [serverLog, setServerLog] = useState<ServerNfcLogEntry[]>([])
+  const [pollError, setPollError] = useState<string | null>(null)
 
   const pushLog = (text: string, kind: LogEntry['kind'] = 'info') => {
     setLog((prev) => [...prev.slice(-49), { id: ++logSeq, at: new Date().toLocaleTimeString(), text, kind }])
@@ -66,6 +80,31 @@ function NfcTestPage() {
   useEffect(() => {
     return () => wsRef.current?.close()
   }, [])
+
+  // サーバー側の直近 nfc-final 結果を定期ポーリング（実機からの本物のリクエストを見るのが目的）。
+  useEffect(() => {
+    let cancelled = false
+    const url = `${apiBase}/riders/nfc-final?room=${encodeURIComponent(room.trim() || 'room')}`
+    const tick = async () => {
+      try {
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`${res.status}`)
+        const data = (await res.json()) as { log: ServerNfcLogEntry[] }
+        if (!cancelled) {
+          setServerLog(data.log ?? [])
+          setPollError(null)
+        }
+      } catch (err) {
+        if (!cancelled) setPollError(err instanceof Error ? err.message : String(err))
+      }
+    }
+    tick()
+    const id = window.setInterval(tick, POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [apiBase, room])
 
   async function handleBind() {
     if (!bindRiderId || !nfcId.trim()) return
@@ -185,6 +224,43 @@ function NfcTestPage() {
         Swift アプリが叩く2本（① 紐付け、② 発動）をブラウザから代わりに叩いて確認する開発用ページ。
         どの URL を叩いたかは各ボタンの直下に必ず表示される。
       </p>
+
+      {/* 実機からの本物のリクエスト結果（自動更新）。これが今回の本題: サーバーが記録した
+          直近の nfc-final 結果を定期的に取りに行くだけなので、Swift アプリが本当に叩いた
+          ときの ok/reason がここに出る（ページ側で何か送信する必要はない）。 */}
+      <section style={panelStyle}>
+        <h2 style={h2Style}>📡 実際に届いたリクエスト（{POLL_MS / 1000}秒ごと自動更新）</h2>
+        <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
+          Swift アプリが実際に POST した結果がここに出る。何も操作しなくていい。
+          サーバーが一定時間アイドルだと履歴は消える（インメモリのデバッグ用ログのため）。
+        </span>
+        {pollError && <span style={{ color: '#f87171', fontSize: '0.8rem' }}>ポーリング失敗: {pollError}</span>}
+        {serverLog.length === 0 ? (
+          <span style={{ color: '#6b7280', fontSize: '0.85rem' }}>（まだ届いてない）</span>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            {[...serverLog].reverse().map((e, i) => (
+              <div
+                key={`${e.at}-${i}`}
+                style={{
+                  display: 'flex',
+                  gap: '0.75rem',
+                  fontFamily: 'monospace',
+                  fontSize: '0.8rem',
+                  color: e.ok ? '#4ade80' : '#f87171',
+                }}
+              >
+                <span style={{ color: '#6b7280', width: '90px' }}>
+                  {new Date(e.at).toLocaleTimeString()}
+                </span>
+                <span style={{ width: '90px' }}>{e.riderId ?? '?'}</span>
+                <span>{e.ok ? 'ok' : e.reason}</span>
+                <span style={{ color: '#6b7280' }}>nfcId={e.nfcId}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* API ベース選択（ここが今回の肝: 実際に叩く先を明示する） */}
       <section style={panelStyle}>
