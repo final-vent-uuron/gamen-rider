@@ -82,11 +82,12 @@ export class BattleRoom extends DurableObject<Env> {
   private nfcLog: { at: number; nfcId: string; riderId?: string; ok: boolean; reason?: string }[] = []
   private static readonly NFC_LOG_MAX = 30
 
-  // WebSocket のアップグレードに加え、/riders/nfc-final だけは常時接続を持たない
+  // WebSocket のアップグレードに加え、/riders/nfc（発動）だけは常時接続を持たない
   // 呼び出し元（受信ループを書きたくない Swift アプリ等）向けに素の POST でも受ける。
+  // /riders/nfc-final は旧パスの後方互換エイリアス。
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
-    if (url.pathname === '/riders/nfc-final') {
+    if (url.pathname === '/riders/nfc' || url.pathname === '/riders/nfc-final') {
       return this.handleNfcFinalHttp(request)
     }
     if (request.headers.get('Upgrade') !== 'websocket') {
@@ -194,7 +195,7 @@ export class BattleRoom extends DurableObject<Env> {
     }
   }
 
-  // /riders/nfc-final のハンドラ。
+  // /riders/nfc（発動）のハンドラ。/riders/nfc-final は同じ処理への後方互換エイリアス。
   //   POST: 常時接続を持たない呼び出し元（受信ループ不要にしたい Swift アプリ等）向けの発動一撃版。
   //         処理内容は WS の 'nfc-final' と同じ（triggerNfcFinal 共有）。
   //   GET : 直近の結果ログを返す。検証ページ（/nfc-test）がポーリングして、実際に届いた
