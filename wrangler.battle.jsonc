@@ -13,6 +13,15 @@
   "account_id": "b7e33c313027642691f2088285bec4e2",
   "main": "worker/index.ts",
   "compatibility_date": "2025-05-05",
+  // gamen-rider.com のうち /riders* と /ws* だけをこの Worker に向ける（Cloudflare の
+  // ルートはより具体的なパターンが優先されるので、アプリ本体側の gamen-rider.com/* 設定は
+  // 変更不要）。既定の gamen-rider-battle.pachi.workers.dev も引き続き使える（両方生きる）。
+  // routes を足すと workers_dev が既定で無効化される（Cloudflare の仕様）ので明示的に維持する。
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "gamen-rider.com/riders*", "zone_name": "gamen-rider.com" },
+    { "pattern": "gamen-rider.com/ws*", "zone_name": "gamen-rider.com" }
+  ],
   "durable_objects": {
     "bindings": [{ "name": "BATTLE_ROOM", "class_name": "BattleRoom" }]
   },

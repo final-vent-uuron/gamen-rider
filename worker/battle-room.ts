@@ -78,8 +78,13 @@ export class BattleRoom extends DurableObject<Env> {
   private nfcCacheAt = 0
   private static readonly NFC_CACHE_TTL_MS = 15_000
 
-  // WebSocket のアップグレードだけを受ける（プロトコルは Node 版と同一 JSON）。
+  // WebSocket のアップグレードに加え、/riders/nfc-final だけは常時接続を持たない
+  // 呼び出し元（受信ループを書きたくない Swift アプリ等）向けに素の POST でも受ける。
   override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+    if (url.pathname === '/riders/nfc-final') {
+      return this.handleNfcFinalHttp(request)
+    }
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('expected websocket', { status: 426 })
     }
@@ -178,26 +183,47 @@ export class BattleRoom extends DurableObject<Env> {
         break // lastSeen の更新（上で実施）だけが目的
       case 'nfc-final': {
         const nfcId = String(msg.nfcId ?? '')
-        const riderId = await this.resolveRiderIdByNfc(nfcId)
-        if (!riderId) {
-          ws.send(JSON.stringify({ t: 'nfc-final-ack', ok: false, reason: 'unknown-tag' }))
-          break
-        }
-        const target = [...this.sockets.values()].find((c) => c.riderId === riderId)
-        const player = target ? this.battle.players.find((p) => p.id === target.id) : null
-        if (!player) {
-          ws.send(JSON.stringify({ t: 'nfc-final-ack', riderId, ok: false, reason: 'not-found' }))
-          break
-        }
-        if (player.meter < ARENA.meterFinalCost) {
-          ws.send(JSON.stringify({ t: 'nfc-final-ack', riderId, ok: false, reason: 'low-meter' }))
-          break
-        }
-        this.battle = applyAttack(this.battle, player.id, 'final', Date.now())
-        ws.send(JSON.stringify({ t: 'nfc-final-ack', riderId, ok: true }))
+        const result = await this.triggerNfcFinal(nfcId)
+        ws.send(JSON.stringify({ t: 'nfc-final-ack', ...result }))
         break
       }
     }
+  }
+
+  // POST /riders/nfc-final のハンドラ。常時接続を持たない呼び出し元（受信ループ不要にしたい
+  // Swift アプリ等）向けの一撃版。処理内容は WS の 'nfc-final' と同じ（triggerNfcFinal 共有）。
+  private async handleNfcFinalHttp(request: Request): Promise<Response> {
+    const headers = { 'content-type': 'application/json; charset=utf-8' }
+    if (request.method !== 'POST') {
+      return new Response(JSON.stringify({ ok: false, reason: 'method-not-allowed' }), {
+        status: 405,
+        headers,
+      })
+    }
+    let body: { nfcId?: unknown }
+    try {
+      body = (await request.json()) as { nfcId?: unknown }
+    } catch {
+      return new Response(JSON.stringify({ ok: false, reason: 'bad-request' }), { status: 400, headers })
+    }
+    const result = await this.triggerNfcFinal(String(body.nfcId ?? ''))
+    return new Response(JSON.stringify(result), { status: 200, headers })
+  }
+
+  // nfc-final の中身（WS メッセージ・HTTP POST 共通）。
+  // nfcId → 紐付け済みライダー → 対戦中の該当プレイヤーを引き当て、ゲージ満タンなら
+  // Final Vent を適用する。
+  private async triggerNfcFinal(
+    nfcId: string,
+  ): Promise<{ ok: boolean; riderId?: string; reason?: string }> {
+    const riderId = await this.resolveRiderIdByNfc(nfcId)
+    if (!riderId) return { ok: false, reason: 'unknown-tag' }
+    const target = [...this.sockets.values()].find((c) => c.riderId === riderId)
+    const player = target ? this.battle.players.find((p) => p.id === target.id) : null
+    if (!player) return { ok: false, riderId, reason: 'not-found' }
+    if (player.meter < ARENA.meterFinalCost) return { ok: false, riderId, reason: 'low-meter' }
+    this.battle = applyAttack(this.battle, player.id, 'final', Date.now())
+    return { ok: true, riderId }
   }
 
   // nfcId → riderId。R2（riders/*.json の nfcId フィールド）で事前に /riders/nfc から
