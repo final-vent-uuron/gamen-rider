@@ -1,15 +1,16 @@
 // NFC ファイナルベント連携の検証ページ（開発用）。
-// Swift アプリが本来やること（① 紐付け: POST /riders/nfc、② 発動: WS で {t:'nfc-final', nfcId}）を
-// ブラウザから素振りできる。バトルの player としては参加しない「観測専用」接続なので、
-// battle/net.ts の connectBattle は使わず（onopen で自動 join してしまうため）、生の
-// WebSocket を直接張って nfc-final だけ送る。
+// Swift アプリが本来やること（① 紐付け: POST /riders/nfc、② 発動: POST /riders/nfc-final。
+// WS の {t:'nfc-final'} でも同じことができるが HTTP 版が本命）をブラウザから素振りできる。
+//
+// API ベース URL は画面上で明示的に選べるようにしてある（rider-registry の bindRiderNfc や
+// battle/net.ts の defaultWsUrl は環境から自動判定するため、実際にどこを叩いたか分かりにくい
+// ＝検証ページとしては不向き。ここでは常に「今から叩く URL」をそのまま画面に出す）。
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 
-import { defaultWsUrl } from '../battle/net'
 import type { BattleState } from '../battle/state'
-import { RIDER_ROSTER, bindRiderNfc, listRiders } from '../rider-registry'
+import { RIDER_ROSTER, listRiders } from '../rider-registry'
 import type { RegisteredRiderWithImage } from '../rider-registry'
 
 export const Route = createFileRoute('/nfc-test')({ component: NfcTestPage })
@@ -23,16 +24,29 @@ interface LogEntry {
   kind: 'send' | 'recv' | 'info' | 'error'
 }
 
+const API_BASE_PRESETS = [
+  { label: '本番 (gamen-rider.com)', value: 'https://gamen-rider.com' },
+  { label: 'workers.dev', value: 'https://gamen-rider-battle.pachi.workers.dev' },
+  { label: 'ローカル (:8787)', value: 'http://localhost:8787' },
+]
+
 let logSeq = 0
+
+function toWs(httpBase: string): string {
+  return httpBase.replace(/^http/, 'ws')
+}
 
 function NfcTestPage() {
   const wsRef = useRef<WebSocket | null>(null)
+  const [apiBase, setApiBase] = useState(API_BASE_PRESETS[0].value)
   const [wsStatus, setWsStatus] = useState<WsStatus>('idle')
   const [room, setRoom] = useState('room')
   const [nfcId, setNfcId] = useState('demo-tag-001')
   const [bindRiderId, setBindRiderId] = useState(RIDER_ROSTER[0]?.slug ?? '')
   const [binding, setBinding] = useState(false)
-  const [bindMsg, setBindMsg] = useState<string | null>(null)
+  const [firing, setFiring] = useState(false)
+  const [bindResult, setBindResult] = useState<{ url: string; body: string; ok: boolean } | null>(null)
+  const [fireResult, setFireResult] = useState<{ url: string; body: string; ok: boolean } | null>(null)
   const [registered, setRegistered] = useState<RegisteredRiderWithImage[]>([])
   const [battle, setBattle] = useState<BattleState | null>(null)
   const [log, setLog] = useState<LogEntry[]>([])
@@ -41,7 +55,8 @@ function NfcTestPage() {
     setLog((prev) => [...prev.slice(-49), { id: ++logSeq, at: new Date().toLocaleTimeString(), text, kind }])
   }
 
-  // 登録済みライダー一覧（紐付け先の選択肢＆確認用）
+  // 登録済みライダー一覧（紐付け先の選択肢＆確認用。listRiders は現状 workers.dev 固定だが
+  // 表示専用なので実害なし。実際の紐付け/発動は下の apiBase を必ず経由する）。
   useEffect(() => {
     listRiders()
       .then(setRegistered)
@@ -54,24 +69,55 @@ function NfcTestPage() {
 
   async function handleBind() {
     if (!bindRiderId || !nfcId.trim()) return
+    const url = `${apiBase}/riders/nfc`
     setBinding(true)
-    setBindMsg(null)
+    setBindResult(null)
+    pushLog(`POST ${url} body={riderId:"${bindRiderId}",nfcId:"${nfcId.trim()}"}`, 'send')
     try {
-      await bindRiderNfc(bindRiderId, nfcId.trim())
-      setBindMsg(`✅ 紐付け成功: ${bindRiderId} ← ${nfcId.trim()}`)
-      pushLog(`bind ok: riderId=${bindRiderId} nfcId=${nfcId.trim()}`, 'info')
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ riderId: bindRiderId, nfcId: nfcId.trim() }),
+      })
+      const bodyText = await res.text()
+      setBindResult({ url, body: bodyText, ok: res.ok })
+      pushLog(`${res.status} ${bodyText}`, res.ok ? 'recv' : 'error')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      setBindMsg(`❌ 紐付け失敗: ${message}`)
-      pushLog(`bind failed: ${message}`, 'error')
+      setBindResult({ url, body: message, ok: false })
+      pushLog(`fetch failed: ${message}`, 'error')
     } finally {
       setBinding(false)
     }
   }
 
+  async function handleFireHttp() {
+    if (!nfcId.trim()) return
+    const url = `${apiBase}/riders/nfc-final`
+    setFiring(true)
+    setFireResult(null)
+    pushLog(`POST ${url} body={nfcId:"${nfcId.trim()}"}`, 'send')
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nfcId: nfcId.trim() }),
+      })
+      const bodyText = await res.text()
+      setFireResult({ url, body: bodyText, ok: res.ok })
+      pushLog(`${res.status} ${bodyText}`, res.ok ? 'recv' : 'error')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setFireResult({ url, body: message, ok: false })
+      pushLog(`fetch failed: ${message}`, 'error')
+    } finally {
+      setFiring(false)
+    }
+  }
+
   function handleConnect() {
     if (wsRef.current) return
-    const base = defaultWsUrl()
+    const base = `${toWs(apiBase)}/ws`
     const url = room.trim() ? `${base}?room=${encodeURIComponent(room.trim())}` : base
     setWsStatus('connecting')
     pushLog(`connecting: ${url}`, 'info')
@@ -109,7 +155,7 @@ function NfcTestPage() {
     setWsStatus('closed')
   }
 
-  function handleFire() {
+  function handleFireWs() {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !nfcId.trim()) return
     const payload = { t: 'nfc-final', nfcId: nfcId.trim() }
@@ -136,13 +182,35 @@ function NfcTestPage() {
         <h1 style={{ margin: 0, fontSize: '1.4rem' }}>NFC ファイナルベント 検証ページ</h1>
       </div>
       <p style={{ width: '100%', maxWidth: '820px', color: '#9ca3af', fontSize: '0.85rem', margin: 0 }}>
-        Swift アプリが本来やること（① 紐付け、② 発動）をブラウザから代わりに叩いて確認する開発用ページ。
-        このページ自体はバトルに参加しない（player として join しない）。
+        Swift アプリが叩く2本（① 紐付け、② 発動）をブラウザから代わりに叩いて確認する開発用ページ。
+        どの URL を叩いたかは各ボタンの直下に必ず表示される。
       </p>
+
+      {/* API ベース選択（ここが今回の肝: 実際に叩く先を明示する） */}
+      <section style={panelStyle}>
+        <h2 style={h2Style}>叩き先（API ベース）</h2>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {API_BASE_PRESETS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => setApiBase(p.value)}
+              style={tabStyle(apiBase === p.value)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} style={inputStyle} />
+        <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
+          今の設定なら POST 先は <code>{apiBase}/riders/nfc</code> と <code>{apiBase}/riders/nfc-final</code>
+        </span>
+      </section>
 
       {/* 1. 紐付け */}
       <section style={panelStyle}>
-        <h2 style={h2Style}>① NFC タグの紐付け（POST /riders/nfc）</h2>
+        <h2 style={h2Style}>① NFC タグの紐付け</h2>
+        <code style={urlStyle}>POST {apiBase}/riders/nfc</code>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label style={fieldStyle}>
             <span style={labelStyle}>対象ライダー</span>
@@ -163,18 +231,45 @@ function NfcTestPage() {
             <input value={nfcId} onChange={(e) => setNfcId(e.target.value)} style={inputStyle} />
           </label>
           <button type="button" onClick={handleBind} disabled={binding} style={btnStyle('#4ade80', binding)}>
-            {binding ? '紐付け中…' : '紐付ける'}
+            {binding ? '送信中…' : 'このURLに送信する'}
           </button>
         </div>
-        {bindMsg && <span style={{ fontSize: '0.85rem' }}>{bindMsg}</span>}
+        {bindResult && (
+          <div style={resultBoxStyle(bindResult.ok)}>
+            <div style={{ color: '#9ca3af' }}>{bindResult.url}</div>
+            <div>{bindResult.body}</div>
+          </div>
+        )}
         <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
           登録済みライダー: {registered.length > 0 ? registered.map((r) => r.name).join(' / ') : '(取得中/なし)'}
         </span>
       </section>
 
-      {/* 2. 発動 */}
+      {/* 2-A. 発動（HTTP・本命） */}
       <section style={panelStyle}>
-        <h2 style={h2Style}>② 発動テスト（WS: nfc-final）</h2>
+        <h2 style={h2Style}>② 発動（HTTP・Swift アプリが実際に使う版）</h2>
+        <code style={urlStyle}>POST {apiBase}/riders/nfc-final</code>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <label style={{ ...fieldStyle, flex: '1 1 220px' }}>
+            <span style={labelStyle}>送信する nfcId（上と共通）</span>
+            <input value={nfcId} onChange={(e) => setNfcId(e.target.value)} style={inputStyle} />
+          </label>
+          <button type="button" onClick={handleFireHttp} disabled={firing} style={btnStyle('#a78bfa', firing)}>
+            {firing ? '送信中…' : '📡 このURLに送信する'}
+          </button>
+        </div>
+        {fireResult && (
+          <div style={resultBoxStyle(fireResult.ok)}>
+            <div style={{ color: '#9ca3af' }}>{fireResult.url}</div>
+            <div>{fireResult.body}</div>
+          </div>
+        )}
+      </section>
+
+      {/* 2-B. 発動（WS・任意。対戦状況をリアルタイムで見たいときだけ） */}
+      <section style={panelStyle}>
+        <h2 style={h2Style}>② 発動（WS・任意 / 対戦状況のライブ確認用）</h2>
+        <code style={urlStyle}>WS {toWs(apiBase)}/ws</code>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label style={fieldStyle}>
             <span style={labelStyle}>room</span>
@@ -196,23 +291,17 @@ function NfcTestPage() {
           )}
           <span style={{ fontSize: '0.8rem', color: statusColor(wsStatus) }}>status: {wsStatus}</span>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
-          <label style={{ ...fieldStyle, flex: '1 1 220px' }}>
-            <span style={labelStyle}>送信する nfcId（上と共通）</span>
-            <input value={nfcId} onChange={(e) => setNfcId(e.target.value)} style={inputStyle} />
-          </label>
-          <button
-            type="button"
-            onClick={handleFire}
-            disabled={wsStatus !== 'open'}
-            style={btnStyle('#a78bfa', wsStatus !== 'open')}
-          >
-            📡 NFC タップ（nfc-final 送信）
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={handleFireWs}
+          disabled={wsStatus !== 'open' || !nfcId.trim()}
+          style={{ ...btnStyle('#38bdf8', wsStatus !== 'open' || !nfcId.trim()), alignSelf: 'flex-start' }}
+        >
+          📡 WS で nfc-final 送信
+        </button>
       </section>
 
-      {/* 3. バトル状況（発動条件＝ゲージ満タンの確認用） */}
+      {/* 3. バトル状況（発動条件＝ゲージ満タンの確認用。WS 接続中のみ） */}
       {battle && (
         <section style={panelStyle}>
           <h2 style={h2Style}>現在の対戦状況（ゲージ満タンか確認用）</h2>
@@ -290,6 +379,16 @@ const fieldStyle: CSSProperties = { display: 'flex', flexDirection: 'column', ga
 
 const labelStyle: CSSProperties = { color: '#9ca3af', fontSize: '0.78rem' }
 
+const urlStyle: CSSProperties = {
+  fontFamily: 'monospace',
+  fontSize: '0.85rem',
+  color: '#4ade80',
+  background: '#111827',
+  padding: '0.4rem 0.6rem',
+  borderRadius: '6px',
+  wordBreak: 'break-all',
+}
+
 const inputStyle: CSSProperties = {
   padding: '0.45rem 0.6rem',
   borderRadius: '6px',
@@ -297,6 +396,30 @@ const inputStyle: CSSProperties = {
   background: '#111827',
   color: '#fff',
   fontSize: '0.9rem',
+}
+
+function tabStyle(active: boolean): CSSProperties {
+  return {
+    padding: '0.4rem 0.9rem',
+    borderRadius: '999px',
+    border: `1px solid ${active ? '#a78bfa' : '#374151'}`,
+    background: active ? '#a78bfa22' : 'transparent',
+    color: active ? '#a78bfa' : '#9ca3af',
+    fontSize: '0.8rem',
+    cursor: 'pointer',
+  }
+}
+
+function resultBoxStyle(ok: boolean): CSSProperties {
+  return {
+    fontFamily: 'monospace',
+    fontSize: '0.8rem',
+    color: ok ? '#4ade80' : '#f87171',
+    background: '#111827',
+    padding: '0.5rem 0.7rem',
+    borderRadius: '6px',
+    wordBreak: 'break-all',
+  }
 }
 
 function btnStyle(color: string, disabled: boolean): CSSProperties {

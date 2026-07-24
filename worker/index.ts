@@ -1,9 +1,15 @@
 // バトル用 Cloudflare Worker のエントリ。
 // アプリ本体（TanStack Start が出力する gamen-rider ワーカー）とは別立ての小さな Worker。
-// 役割は3つ:
-//   - /ws         : WebSocket アップグレードを Durable Object（対戦部屋）へ橋渡し
-//   - /riders     : 登録ライダーの保存/一覧（R2）
-//   - /riders/nfc : ファイナルベント用 NFC タグの紐付け（Swift アプリの enroll から）
+// 役割は4つ:
+//   - /ws               : WebSocket アップグレードを Durable Object（対戦部屋）へ橋渡し
+//   - /riders           : 登録ライダーの保存/一覧（R2）
+//   - /riders/nfc       : ファイナルベント用 NFC タグの紐付け（Swift アプリの enroll から）
+//   - /riders/nfc-final : NFC タップでの Final Vent 発動（POST 一発版。常時接続を持ちたく
+//                          ない呼び出し元向け。同じことは WS の {t:'nfc-final'} でもできる）
+//
+// /riders/nfc-final と /ws はどちらも対戦中の生きた状態（接続中プレイヤー・ゲージ等）を持つ
+// Durable Object 本体への橋渡しが必要なので、R2 だけで完結する /riders 系とは別に
+// Durable Object（BattleRoom）へ forward する。
 //
 // ルーム: 固定 1 部屋（CLAUDE.md: ルーム作成不要、固有ルームに参加するだけ）。
 //   将来複数ルームにしたければ ?room=<id> で分ければよい（idFromName で別インスタンスになる）。
@@ -19,13 +25,16 @@ export interface Env {
   RIDER_BUCKET: R2Bucket
 }
 
+function battleRoom(env: Env, url: URL): DurableObjectStub {
+  const room = url.searchParams.get('room') ?? 'room'
+  return env.BATTLE_ROOM.get(env.BATTLE_ROOM.idFromName(room))
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
-    if (url.pathname === '/ws') {
-      const room = url.searchParams.get('room') ?? 'room'
-      const id = env.BATTLE_ROOM.idFromName(room)
-      return env.BATTLE_ROOM.get(id).fetch(request)
+    if (url.pathname === '/ws' || url.pathname === '/riders/nfc-final') {
+      return battleRoom(env, url).fetch(request)
     }
     if (url.pathname === '/riders/nfc') {
       return handleNfcBind(request, env.RIDER_BUCKET)
