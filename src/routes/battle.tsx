@@ -289,11 +289,11 @@ function BattlePage() {
 			const prevAbare = new Set(
 				prev.players.filter((p) => p.action === "abare").map((p) => p.id),
 			);
-			let newFinal = false;
+			let newFinalRider: string | null = null; // 発動者のライダー（掛け声の出し分け用）
 
 			for (const np of next.players) {
 				if (np.comboCount > maxCombo) maxCombo = np.comboCount;
-				if (np.action === "final" && !prevFinal.has(np.id)) newFinal = true;
+				if (np.action === "final" && !prevFinal.has(np.id)) newFinalRider = np.riderId;
 				// あばれ発動: 誰かが割り込んだ瞬間、紫の衝撃波＋シェイクで「弾けた」ことを見せる。
 				if (np.action === "abare" && !prevAbare.has(np.id)) {
 					sfx?.burst();
@@ -374,9 +374,9 @@ function BattlePage() {
 				}
 			}
 
-			if (newFinal) {
+			if (newFinalRider) {
 				flashFinal();
-				bgmRef.current?.finalVent(); // 掛け声＋ファイナルベント BGM（main は自動で復帰）
+				bgmRef.current?.finalVent(newFinalRider); // 発動ライダーの掛け声＋FV BGM（main は自動で復帰）
 			}
 
 			// 乱入（3人目以降の途中参戦）: サーバーが intrusionUntil を立てて全員を停止させる。
@@ -1454,7 +1454,7 @@ function HpBars({ players }: { players: PlayerState[] }) {
 	);
 }
 
-// 龍騎(PS) 風の格ゲー HP バー: 斜めのパララインバー＋黄→赤グラデ＋黒帯ネーム。
+// PS格ゲー風の HP バー: 斜めのパララインバー＋黄→赤グラデ＋黒帯ネーム。
 function HpBar({
 	player,
 	color,

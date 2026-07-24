@@ -10,7 +10,7 @@ const TITLE_FRAGMENTS: CodeFragment[] = [
 	{ text: "await henshin(card);", top: "18%", left: "3%" },
 	{ text: "on('punch', attack)", top: "34%", right: "4%" },
 	{ text: "final_vent --charge 5", top: "56%", left: "2%" },
-	{ text: '<rider deck="ryuki" />', top: "12%", right: "24%" },
+	{ text: '<rider deck="arduino" />', top: "12%", right: "24%" },
 	{ text: "battle.royale(4);", top: "48%", right: "8%" },
 ];
 

@@ -52,10 +52,10 @@ export type AvatarAction =
 	| "abare";
 
 // ライダー別 GLB モデルの登録。ここに 1 行足すだけで box プレースホルダから差し替わる。
-//   例) GLB を用意したら（Vite なら import url from '#/assets/models/ryuki.glb?url'）:
+//   例) GLB を用意したら（Vite なら import url from '#/assets/models/swift.glb?url'）:
 //   export const RIDER_MODELS = {
-//     ryuki: {
-//       url: ryukiUrl,
+//     swift: {
+//       url: swiftUrl,
 //       scale: 1,
 //       clips: { idle:'Idle', walk:'Walk', punch:'Punch', kick:'Kick', hit:'Hit', down:'Down', final:'Final', jump:'Jump' },
 //     },
@@ -125,6 +125,9 @@ export const DEFAULT_RIDER_MODEL: RiderModel = {
 	// 走り・ジャンプ・ガードは位置をゲーム側が管理する（クリップ側の腰移動は二重になる）。
 	// run はこれでルートモーション除去も兼ねる。
 	freezeHipsTranslation: ["run", "jump", "guard"],
+	// punch は腰の基準回転ごと斜めに焼き込まれている（arduino モデルのパンチと同じ症状）ため、
+	// まず平均姿勢を idle に揃え（align）、残る左右の傾きを毎キー除去する（flatten）。
+	alignHipsToIdle: ["punch"],
 	flattenLateralTilt: ["run", "punch", "guard"],
 };
 
@@ -556,7 +559,7 @@ const ONESHOT_DURATION: Partial<Record<AvatarAction, number>> = {
 	throw: 1.2, // = MOVES.throw 合計 1200ms（掴みかかり grasp。空振り時はこのまま振り切る）
 	"throw-hit": 1.8, // = MOVES.throw recoveryOnHit 1800ms（grasp-attack 素の尺 2.07s → 1.15倍速）
 	thrown: 0.9, // grasp-reaction の再生尺。hitstun(1200ms) の残りは倒れ姿勢で保持（clamp）
-	final: 1.2,
+	final: 3.1, // = MOVES.final 合計 3100ms（暴れ範囲技。special クリップをゆっくり再生して尺を合わせる）
 	hit: 0.5,
 	"hit-air": 0.9, // Final の打ち上げ hitstun(520ms)＋滞空のなじみ分
 	turn: 0.45, // renderer の振り向き補間(~0.25s)＋踏み替えの余韻（素の尺 0.93s → 2倍速）
@@ -2147,7 +2150,7 @@ function makeTerminalTexture(accent: string): THREE.CanvasTexture {
 		"$ pnpm dev",
 		"VITE ready in 312 ms",
 		"-> ws://arena connected",
-		"$ henshin --rider ryuki",
+		"$ henshin --rider arduino",
 		"[ok] card matched (ORB)",
 		"[ok] pose verified",
 		"$ final-vent --charge 100",

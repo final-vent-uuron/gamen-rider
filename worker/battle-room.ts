@@ -13,6 +13,7 @@
 
 import { DurableObject } from 'cloudflare:workers'
 import {
+  ARENA,
   addPlayer,
   applyAbare,
   applyAttack,
@@ -25,6 +26,8 @@ import {
   removePlayer,
   stepBattle,
 } from '../src/battle/state.ts'
+import { readAllRiders } from './riders.ts'
+import type { Env } from './index.ts'
 
 const TICK_MS = 1000 / 60 // シミュレーション更新（60Hz）
 const BROADCAST_MS = 1000 / 60 // 状態配信（60Hz）。量子化遅延を減らして体感を軽く（ペイロードは小さい）
@@ -54,8 +57,13 @@ type ClientMsg =
   | { t: 'final-vent'; on?: unknown; phase?: unknown } // SA3 風溜め開始/更新/解除
   | { t: 'reset' }
   | { t: 'ping' } // ハートビート（生存確認のみ。ゲームへの影響なし）
+  // NFC 連携（Swift 製スマホアプリ）: カード＋ポーズの代わりに NFC タップで Final Vent を撃つ。
+  // riderId は送らせない（公開済みの固定4文字列を誰でも打ててしまうため）。物理タグの固有ID
+  // だけを受け取り、事前に /riders/nfc で紐付け済みのライダーをサーバー側で引き当てる
+  // ＝実際にタグを持っている人にしか撃てない。
+  | { t: 'nfc-final'; nfcId?: unknown }
 
-export class BattleRoom extends DurableObject {
+export class BattleRoom extends DurableObject<Env> {
   private sockets = new Map<WebSocket, Conn>()
   private battle = createBattle([])
   private moveIntent: Record<string, -1 | 0 | 1> = {}
@@ -64,6 +72,11 @@ export class BattleRoom extends DurableObject {
   private lastSweep = 0 // 直近のゴースト掃除時刻（SWEEP_MS 間隔で間引く）
   private simTimer: number | null = null
   private broadcastTimer: number | null = null
+  // nfcId → riderId のキャッシュ（R2 の riders/*.json から）。NFC トリガー毎に R2 を
+  // 読みに行かないよう短時間だけ使い回す。
+  private nfcCache = new Map<string, string>()
+  private nfcCacheAt = 0
+  private static readonly NFC_CACHE_TTL_MS = 15_000
 
   // WebSocket のアップグレードだけを受ける（プロトコルは Node 版と同一 JSON）。
   override async fetch(request: Request): Promise<Response> {
@@ -79,7 +92,7 @@ export class BattleRoom extends DurableObject {
     server.send(JSON.stringify({ t: 'welcome', youId: id }))
     this.ensureLoop()
 
-    server.addEventListener('message', (ev) => this.onMessage(server, ev.data))
+    server.addEventListener('message', (ev) => void this.onMessage(server, ev.data))
     const drop = () => this.onClose(server)
     server.addEventListener('close', drop)
     server.addEventListener('error', drop)
@@ -87,7 +100,7 @@ export class BattleRoom extends DurableObject {
     return new Response(null, { status: 101, webSocket: client })
   }
 
-  private onMessage(ws: WebSocket, data: string | ArrayBuffer) {
+  private async onMessage(ws: WebSocket, data: string | ArrayBuffer) {
     let msg: ClientMsg
     try {
       msg = JSON.parse(typeof data === 'string' ? data : new TextDecoder().decode(data))
@@ -163,7 +176,47 @@ export class BattleRoom extends DurableObject {
         break
       case 'ping':
         break // lastSeen の更新（上で実施）だけが目的
+      case 'nfc-final': {
+        const nfcId = String(msg.nfcId ?? '')
+        const riderId = await this.resolveRiderIdByNfc(nfcId)
+        if (!riderId) {
+          ws.send(JSON.stringify({ t: 'nfc-final-ack', ok: false, reason: 'unknown-tag' }))
+          break
+        }
+        const target = [...this.sockets.values()].find((c) => c.riderId === riderId)
+        const player = target ? this.battle.players.find((p) => p.id === target.id) : null
+        if (!player) {
+          ws.send(JSON.stringify({ t: 'nfc-final-ack', riderId, ok: false, reason: 'not-found' }))
+          break
+        }
+        if (player.meter < ARENA.meterFinalCost) {
+          ws.send(JSON.stringify({ t: 'nfc-final-ack', riderId, ok: false, reason: 'low-meter' }))
+          break
+        }
+        this.battle = applyAttack(this.battle, player.id, 'final', Date.now())
+        ws.send(JSON.stringify({ t: 'nfc-final-ack', riderId, ok: true }))
+        break
+      }
     }
+  }
+
+  // nfcId → riderId。R2（riders/*.json の nfcId フィールド）で事前に /riders/nfc から
+  // 紐付け済みのものだけを引き当てる。未紐付けの nfcId・taken されていないタグは null。
+  private async resolveRiderIdByNfc(nfcId: string): Promise<string | null> {
+    if (!nfcId) return null
+    const stale = Date.now() - this.nfcCacheAt > BattleRoom.NFC_CACHE_TTL_MS
+    if (stale || !this.nfcCache.has(nfcId)) {
+      try {
+        const riders = await readAllRiders(this.env.RIDER_BUCKET)
+        this.nfcCache = new Map(
+          riders.filter((r): r is typeof r & { nfcId: string } => !!r.nfcId).map((r) => [r.nfcId, r.id]),
+        )
+        this.nfcCacheAt = Date.now()
+      } catch (err) {
+        console.warn('[battle-room] nfc cache refresh failed:', err)
+      }
+    }
+    return this.nfcCache.get(nfcId) ?? null
   }
 
   // 現在つながっている全員でバトルをフルHPから作り直す（再戦 / 明示リセット共通）。

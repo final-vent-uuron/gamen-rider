@@ -13,6 +13,7 @@ import { Route as SelectRouteImport } from './routes/select'
 import { Route as ResultRouteImport } from './routes/result'
 import { Route as PoseRouteImport } from './routes/pose'
 import { Route as PairingRouteImport } from './routes/pairing'
+import { Route as NfcTestRouteImport } from './routes/nfc-test'
 import { Route as ModelCheckRouteImport } from './routes/model-check'
 import { Route as HenshinRouteImport } from './routes/henshin'
 import { Route as FinalVentPoseRouteImport } from './routes/final-vent-pose'
@@ -41,6 +42,11 @@ const PoseRoute = PoseRouteImport.update({
 const PairingRoute = PairingRouteImport.update({
   id: '/pairing',
   path: '/pairing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NfcTestRoute = NfcTestRouteImport.update({
+  id: '/nfc-test',
+  path: '/nfc-test',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModelCheckRoute = ModelCheckRouteImport.update({
@@ -97,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/final-vent-pose': typeof FinalVentPoseRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
+  '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
@@ -112,6 +119,7 @@ export interface FileRoutesByTo {
   '/final-vent-pose': typeof FinalVentPoseRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
+  '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
@@ -128,6 +136,7 @@ export interface FileRoutesById {
   '/final-vent-pose': typeof FinalVentPoseRoute
   '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
+  '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
   '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
@@ -145,6 +154,7 @@ export interface FileRouteTypes {
     | '/final-vent-pose'
     | '/henshin'
     | '/model-check'
+    | '/nfc-test'
     | '/pairing'
     | '/pose'
     | '/result'
@@ -160,6 +170,7 @@ export interface FileRouteTypes {
     | '/final-vent-pose'
     | '/henshin'
     | '/model-check'
+    | '/nfc-test'
     | '/pairing'
     | '/pose'
     | '/result'
@@ -175,6 +186,7 @@ export interface FileRouteTypes {
     | '/final-vent-pose'
     | '/henshin'
     | '/model-check'
+    | '/nfc-test'
     | '/pairing'
     | '/pose'
     | '/result'
@@ -191,6 +203,7 @@ export interface RootRouteChildren {
   FinalVentPoseRoute: typeof FinalVentPoseRoute
   HenshinRoute: typeof HenshinRoute
   ModelCheckRoute: typeof ModelCheckRoute
+  NfcTestRoute: typeof NfcTestRoute
   PairingRoute: typeof PairingRoute
   PoseRoute: typeof PoseRoute
   ResultRoute: typeof ResultRoute
@@ -227,6 +240,13 @@ declare module '@tanstack/react-router' {
       path: '/pairing'
       fullPath: '/pairing'
       preLoaderRoute: typeof PairingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/nfc-test': {
+      id: '/nfc-test'
+      path: '/nfc-test'
+      fullPath: '/nfc-test'
+      preLoaderRoute: typeof NfcTestRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/model-check': {
@@ -303,6 +323,7 @@ const rootRouteChildren: RootRouteChildren = {
   FinalVentPoseRoute: FinalVentPoseRoute,
   HenshinRoute: HenshinRoute,
   ModelCheckRoute: ModelCheckRoute,
+  NfcTestRoute: NfcTestRoute,
   PairingRoute: PairingRoute,
   PoseRoute: PoseRoute,
   ResultRoute: ResultRoute,
