@@ -195,6 +195,7 @@ export class BattleRoom extends DurableObject<Env> {
   private async handleNfcFinalHttp(request: Request): Promise<Response> {
     const headers = { 'content-type': 'application/json; charset=utf-8' }
     if (request.method !== 'POST') {
+      console.log(`[nfc-final] HTTP ${request.method} -> method-not-allowed`)
       return new Response(JSON.stringify({ ok: false, reason: 'method-not-allowed' }), {
         status: 405,
         headers,
@@ -204,25 +205,41 @@ export class BattleRoom extends DurableObject<Env> {
     try {
       body = (await request.json()) as { nfcId?: unknown }
     } catch {
+      console.log('[nfc-final] HTTP body が JSON として読めなかった')
       return new Response(JSON.stringify({ ok: false, reason: 'bad-request' }), { status: 400, headers })
     }
+    console.log(`[nfc-final] HTTP received nfcId="${String(body.nfcId ?? '')}"`)
     const result = await this.triggerNfcFinal(String(body.nfcId ?? ''))
     return new Response(JSON.stringify(result), { status: 200, headers })
   }
 
   // nfc-final の中身（WS メッセージ・HTTP POST 共通）。
   // nfcId → 紐付け済みライダー → 対戦中の該当プレイヤーを引き当て、ゲージ満タンなら
-  // Final Vent を適用する。
+  // Final Vent を適用する。理由がわかるよう毎回 console.log する（wrangler tail で見える）。
   private async triggerNfcFinal(
     nfcId: string,
   ): Promise<{ ok: boolean; riderId?: string; reason?: string }> {
     const riderId = await this.resolveRiderIdByNfc(nfcId)
-    if (!riderId) return { ok: false, reason: 'unknown-tag' }
+    if (!riderId) {
+      const known = [...this.nfcCache.keys()]
+      console.log(`[nfc-final] nfcId="${nfcId}" -> unknown-tag（紐付け済み: ${known.join(', ') || 'なし'}）`)
+      return { ok: false, reason: 'unknown-tag' }
+    }
     const target = [...this.sockets.values()].find((c) => c.riderId === riderId)
     const player = target ? this.battle.players.find((p) => p.id === target.id) : null
-    if (!player) return { ok: false, riderId, reason: 'not-found' }
-    if (player.meter < ARENA.meterFinalCost) return { ok: false, riderId, reason: 'low-meter' }
+    if (!player) {
+      const connected = [...this.sockets.values()].map((c) => c.riderId ?? '(未join)').join(', ')
+      console.log(
+        `[nfc-final] riderId=${riderId} -> not-found（今この部屋に居るriderId: ${connected || 'なし'}）`,
+      )
+      return { ok: false, riderId, reason: 'not-found' }
+    }
+    if (player.meter < ARENA.meterFinalCost) {
+      console.log(`[nfc-final] riderId=${riderId} -> low-meter（meter=${player.meter}/${ARENA.meterFinalCost}）`)
+      return { ok: false, riderId, reason: 'low-meter' }
+    }
     this.battle = applyAttack(this.battle, player.id, 'final', Date.now())
+    console.log(`[nfc-final] riderId=${riderId} -> OK 発動`)
     return { ok: true, riderId }
   }
 
