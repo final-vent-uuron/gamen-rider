@@ -72,7 +72,8 @@ export const Route = createFileRoute("/battle")({
 		name: typeof search.name === "string" ? search.name : undefined,
 		// /pairing が解決済みの値を渡してくる（空文字 = 制限なし）。undefined なら
 		// /pairing を経由していない（直接 /battle を開いた等）ので下で自前フェッチする。
-		sensorSet: typeof search.sensorSet === "string" ? search.sensorSet : undefined,
+		sensorSet:
+			typeof search.sensorSet === "string" ? search.sensorSet : undefined,
 	}),
 	component: BattlePage,
 });
@@ -190,9 +191,8 @@ function BattlePage() {
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
 	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
 	const [fvPhase, setFvPhase] = useState<FinalVentPhase>("idle"); // 右下カメラの FV シーケンス
-	const [fvPoseProgress, setFvPoseProgress] = useState<FinalVentPoseProgress | null>(
-		null,
-	);
+	const [fvPoseProgress, setFvPoseProgress] =
+		useState<FinalVentPoseProgress | null>(null);
 	// 5部位（右手/左手/右足/左足/ベルト）のペアリング有無。null = 確認中
 	const [pairedParts, setPairedParts] = useState<PairedParts | null>(null);
 	// バトル中の各部位の BLE 接続状態（自動再接続・接続ボタンの結果を反映）
@@ -256,7 +256,10 @@ function BattlePage() {
 	// 離している間だけ足踏みが移動を担う（両方 0 なら停止）。変化した時だけ送信する。
 	// ref だけを参照する純粋な合成なので、入力側（handleInput）・描画ループ側の両方から呼べる。
 	const applyEffectiveMove = () => {
-		const dir = keyboardDirRef.current !== 0 ? keyboardDirRef.current : sensorDirRef.current;
+		const dir =
+			keyboardDirRef.current !== 0
+				? keyboardDirRef.current
+				: sensorDirRef.current;
 		if (dir === moveDirRef.current) return;
 		moveDirRef.current = dir;
 		netRef.current?.sendMove(dir);
@@ -269,7 +272,9 @@ function BattlePage() {
 	const ventVideoRef = useRef<HTMLVideoElement>(null); // 右下カメラの <video>（ポーズ解析と共有）
 	const ventCanvasRef = useRef<HTMLCanvasElement>(null); // 右下カメラの骨格オーバーレイ
 	const camLmRef = useRef<NormalizedLandmark[] | null>(null); // 最新の検出ランドマーク（画面下ステータス用）
-	const fvRef = useRef<ReturnType<typeof createFinalVentController> | null>(null);
+	const fvRef = useRef<ReturnType<typeof createFinalVentController> | null>(
+		null,
+	);
 	const comboTimerRef = useRef(0);
 	const popupKeyRef = useRef(0);
 	const koOrderRef = useRef<string[]>([]); // 撃墜された順（順位付け用。先頭＝最初に落ちた＝下位）
@@ -360,7 +365,8 @@ function BattlePage() {
 
 			for (const np of next.players) {
 				if (np.comboCount > maxCombo) maxCombo = np.comboCount;
-				if (np.action === "final" && !prevFinal.has(np.id)) newFinalRider = np.riderId;
+				if (np.action === "final" && !prevFinal.has(np.id))
+					newFinalRider = np.riderId;
 				// あばれ発動: 誰かが割り込んだ瞬間、紫の衝撃波＋シェイクで「弾けた」ことを見せる。
 				if (np.action === "abare" && !prevAbare.has(np.id)) {
 					sfx?.burst();
@@ -728,7 +734,9 @@ function BattlePage() {
 		fv.start();
 		// 接続時点ですでに満タンなら即アーム（meter useEffect より先に作られる場合がある）
 		{
-			const me = battleRef.current.players.find((p) => p.id === youIdRef.current);
+			const me = battleRef.current.players.find(
+				(p) => p.id === youIdRef.current,
+			);
 			fv.setMeterFull((me?.meter ?? 0) >= ARENA.meterFinalCost);
 		}
 
@@ -740,15 +748,20 @@ function BattlePage() {
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
 			onImpact: (key, impact, hit) => {
 				// HUD ゲージ用の生値（高頻度なので ref に貯め、UI 反映は ~100ms に間引く）。
-				sensorImpactsRef.current = { ...sensorImpactsRef.current, [key]: impact };
+				sensorImpactsRef.current = {
+					...sensorImpactsRef.current,
+					[key]: impact,
+				};
 				const uiNow = performance.now();
 				if (uiNow - lastImpactUiRef.current >= 100) {
 					lastImpactUiRef.current = uiNow;
 					setSensorImpacts(sensorImpactsRef.current);
 				}
 				// 振り向き判定（両手同時パンチ AND カメラ横向き）用に、手のヒット時刻を記録する。
-				if (hit && key === "rightHand") lastHandHitAtRef.current.rightHand = Date.now();
-				if (hit && key === "leftHand") lastHandHitAtRef.current.leftHand = Date.now();
+				if (hit && key === "rightHand")
+					lastHandHitAtRef.current.rightHand = Date.now();
+				if (hit && key === "leftHand")
+					lastHandHitAtRef.current.leftHand = Date.now();
 				// 走行判定用: パンチ/キック判定(hit)を待たず、生インパクトが軽い閾値を超えた
 				// 時点で「その肢が動いた」とみなす（パンチ/キック検出＝firmware側の別経路なので
 				// 干渉しない。turn 判定の hit ベース記録とは独立に並行して記録する）。
@@ -862,12 +875,18 @@ function BattlePage() {
 				const stepNow = Date.now();
 				const limb = lastLimbStepAtRef.current;
 				const rightHandLeftFoot =
-					stepNow - limb.rightHand < RUN_HOLD_MS && stepNow - limb.leftFoot < RUN_HOLD_MS;
+					stepNow - limb.rightHand < RUN_HOLD_MS &&
+					stepNow - limb.leftFoot < RUN_HOLD_MS;
 				const leftHandRightFoot =
-					stepNow - limb.leftHand < RUN_HOLD_MS && stepNow - limb.rightFoot < RUN_HOLD_MS;
+					stepNow - limb.leftHand < RUN_HOLD_MS &&
+					stepNow - limb.rightFoot < RUN_HOLD_MS;
 				const stepping = rightHandLeftFoot || leftHandRightFoot;
 				const selfFacing = predRef.current?.players[0]?.facing ?? 1;
-				const nextSensorDir: -1 | 0 | 1 = stepping ? (selfFacing >= 0 ? 1 : -1) : 0;
+				const nextSensorDir: -1 | 0 | 1 = stepping
+					? selfFacing >= 0
+						? 1
+						: -1
+					: 0;
 				if (nextSensorDir !== sensorDirRef.current) {
 					sensorDirRef.current = nextSensorDir;
 					applyEffectiveMove();
@@ -1066,11 +1085,8 @@ function BattlePage() {
 	useEffect(() => {
 		const vent = battle.finalVent;
 		const ventingOther =
-			vent &&
-			Date.now() < vent.until &&
-			vent.playerId !== youIdRef.current;
-		const full =
-			!ventingOther && (self?.meter ?? 0) >= ARENA.meterFinalCost;
+			vent && Date.now() < vent.until && vent.playerId !== youIdRef.current;
+		const full = !ventingOther && (self?.meter ?? 0) >= ARENA.meterFinalCost;
 		fvRef.current?.setMeterFull(full);
 	}, [self?.meter, battle.finalVent]);
 
@@ -1240,7 +1256,13 @@ function BattlePage() {
 						pose={camPose}
 						paired={effectivePaired}
 					/>
-					<div style={{ width: "1px", alignSelf: "stretch", background: "#1e293b" }} />
+					<div
+						style={{
+							width: "1px",
+							alignSelf: "stretch",
+							background: "#1e293b",
+						}}
+					/>
 					<SensorHudPanel
 						statuses={sensorStatuses}
 						impacts={sensorImpacts}
@@ -1364,7 +1386,8 @@ function SensorHudPanel({
 					{SENSOR_PARTS.map((p) => {
 						const s = statuses[p.key];
 						const impact = impacts[p.key] ?? 0;
-						const intensity = s === "connected" ? Math.min(1, impact / SENSOR_IMPACT_MAX) : 0;
+						const intensity =
+							s === "connected" ? Math.min(1, impact / SENSOR_IMPACT_MAX) : 0;
 						const c = dotColor(s);
 						return (
 							<span
@@ -2003,7 +2026,8 @@ function ControlsHelp() {
 						))}
 					</div>
 					<span style={{ fontSize: "0.72rem", color: "#fbbf24" }}>
-						技は<strong>出し切り</strong>制: モーション中は次の技を出せない（連打非対応）
+						技は<strong>出し切り</strong>制:
+						モーション中は次の技を出せない（連打非対応）
 					</span>
 					<span style={{ fontSize: "0.72rem", color: "#7fdfff" }}>
 						ピンチ: <strong>E でエラーモード</strong>（ゲージ3本）→
@@ -2218,12 +2242,18 @@ function CamStatusBar({
 					padding: "0 0.2rem",
 				}}
 			>
-				<span style={{ fontSize: "0.66rem", color: "#9ca3af", whiteSpace: "nowrap" }}>
+				<span
+					style={{
+						fontSize: "0.66rem",
+						color: "#9ca3af",
+						whiteSpace: "nowrap",
+					}}
+				>
 					ポーズ解析 {pose === "error" ? "エラー" : "準備中…"}
 				</span>
-				{STATUS_PARTS.filter(([, , limb]) => limb && !(paired?.[limb] ?? false)).map(
-					([label]) => unpaired(label),
-				)}
+				{STATUS_PARTS.filter(
+					([, , limb]) => limb && !(paired?.[limb] ?? false),
+				).map(([label]) => unpaired(label))}
 			</div>
 		);
 	}
@@ -2311,7 +2341,9 @@ function FinalVentCam({
 
 	const poseHint =
 		poseProgress != null
-			? `${poseProgress.stepIndex + 1}/${poseProgress.stepCount} ${poseProgress.label}`
+			? `${poseProgress.stepIndex + 1}/${poseProgress.stepCount} ${
+					poseProgress.label
+				}`
 			: poseRegistered
 				? "登録手順を取れ！"
 				: "ポーズ！（腕を前へ）";
@@ -2432,7 +2464,7 @@ function FinalVentCam({
 					pointerEvents: "none",
 				}}
 			/>
-			<span
+			{/* <span
 				style={{
 					position: "absolute",
 					left: "6px",
@@ -2445,7 +2477,7 @@ function FinalVentCam({
 				}}
 			>
 				FINAL VENT CAM
-			</span>
+			</span> */}
 			{/* ポーズ未登録時は登録画面への導線（シーケンス中は邪魔なので隠す） */}
 			{!phaseChrome && (
 				<Link
@@ -2458,9 +2490,7 @@ function FinalVentCam({
 						fontSize: "0.65rem",
 						fontWeight: 700,
 						color: poseRegistered ? "#cbd5e1" : "#1e1b4b",
-						background: poseRegistered
-							? "rgba(15,23,42,0.7)"
-							: "#c4b5fd",
+						background: poseRegistered ? "rgba(15,23,42,0.7)" : "#c4b5fd",
 						padding: "1px 6px",
 						borderRadius: "4px",
 						textDecoration: "none",

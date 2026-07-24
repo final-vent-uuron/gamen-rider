@@ -24,6 +24,26 @@ type Status = 'loading' | 'running' | 'error'
 type Phase = 'card' | 'pose' | 'done'
 type Rider = { id: string; name: string }
 
+// 説明表示（フェーズインジケータ・ステータス文言・ステップ一覧）の ON/OFF。
+// 既定は OFF（シンプルに変身するだけ）。ON にした状態は端末ごとに localStorage で覚えておく。
+const SHOW_EXPLAIN_KEY = 'gamen-rider:auth-show-explain'
+function getStoredShowExplain(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(SHOW_EXPLAIN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function setStoredShowExplain(v: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SHOW_EXPLAIN_KEY, v ? '1' : '0')
+  } catch {
+    /* quota / private mode */
+  }
+}
+
 function AuthPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -54,6 +74,9 @@ function AuthPage() {
   const [uiState, setUiState] = useState<RunnerState | null>(null)
   // お手本パネルにフォールバック文言を出すかどうか（canvas への描画自体は tick から命令的に行う）。
   const [hasGuide, setHasGuide] = useState(false)
+  // 説明表示（フェーズインジケータ・ステータス文言）の ON/OFF。既定 OFF はここで localStorage から
+  // 同期的に読む（lazy initializer なので SSR は false、クライアントでは即座に前回値が反映される）。
+  const [showExplain, setShowExplain] = useState(() => getStoredShowExplain())
 
   const navigate = useNavigate()
 
@@ -315,6 +338,7 @@ function AuthPage() {
   return (
     <div
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -323,12 +347,36 @@ function AuthPage() {
         gap: '1rem',
       }}
     >
-      {/* ヘッダー */}
-      <div style={{ width: '100%', maxWidth: '800px', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.5rem' }}>ライダー認証</h1>
-      </div>
+      {/* 説明表示の ON/OFF（右上）。既定は OFF＝シンプルに変身するだけ。値は localStorage に覚える。 */}
+      <button
+        type="button"
+        onClick={() => {
+          setShowExplain((v) => {
+            const next = !v
+            setStoredShowExplain(next)
+            return next
+          })
+        }}
+        style={{
+          position: 'fixed',
+          top: '10px',
+          right: '10px',
+          zIndex: 5,
+          background: 'rgba(0,0,0,0.45)',
+          color: '#e5e7eb',
+          border: '1px solid #334155',
+          borderRadius: '6px',
+          padding: '2px 10px',
+          fontSize: '0.78rem',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        説明 {showExplain ? 'ON' : 'OFF'}
+      </button>
 
-      {/* フェーズインジケータ */}
+      {/* フェーズインジケータ（説明 ON のときだけ） */}
+      {showExplain && (
       <div style={{ width: '100%', maxWidth: '800px', display: 'flex', gap: '0.5rem' }}>
         {(['card', 'pose', 'done'] as Phase[]).map((p, i) => {
           const order: Phase[] = ['card', 'pose', 'done']
@@ -355,8 +403,10 @@ function AuthPage() {
           )
         })}
       </div>
+      )}
 
-      {/* ステータスパネル */}
+      {/* ステータスパネル（説明 ON のときだけ） */}
+      {showExplain && (
       <div
         style={{
           width: '100%',
@@ -441,16 +491,15 @@ function AuthPage() {
           </>
         )}
       </div>
+      )}
 
-      {/* カメラ映像（ポーズフェーズはお手本パネルを横に並べる） */}
+      {/* カメラ映像。お手本パネルはカメラの右にはみ出す形で添えるだけにして、
+          カメラ自体の中心位置がフェーズによってズレないようにしてある。 */}
       <div
         style={{
-          display: 'flex',
-          gap: '1rem',
-          flexWrap: 'wrap',
-          justifyContent: 'center',
+          position: 'relative',
           width: '100%',
-          maxWidth: phase === 'pose' ? '1040px' : '800px',
+          maxWidth: '780px',
         }}
       >
         <div
@@ -459,8 +508,6 @@ function AuthPage() {
             background: '#1f2937',
             borderRadius: '12px',
             overflow: 'hidden',
-            flex: '1 1 420px',
-            maxWidth: phase === 'pose' ? '620px' : '800px',
             aspectRatio: '4/3',
             display: 'flex',
             alignItems: 'center',
@@ -499,8 +546,11 @@ function AuthPage() {
         {phase === 'pose' && (
           <div
             style={{
-              flex: '1 1 220px',
-              maxWidth: '320px',
+              position: 'absolute',
+              top: 0,
+              left: '100%',
+              marginLeft: '1rem',
+              width: '260px',
               background: '#1f2937',
               borderRadius: '12px',
               padding: '0.75rem',
@@ -510,7 +560,7 @@ function AuthPage() {
             }}
           >
             <span style={{ color: '#a78bfa', fontWeight: 'bold', fontSize: '0.9rem' }}>
-              👉 お手本ポーズ
+              👉 お手本ポーズ（上半身）
             </span>
             <div
               style={{
@@ -546,10 +596,6 @@ function AuthPage() {
           </div>
         )}
       </div>
-
-      <p style={{ color: '#6b7280', fontSize: '0.8rem', margin: 0 }}>
-        カード認証（ORB）→ ポーズ認証（MediaPipe）→ 認証成功で onHenshin を発火。
-      </p>
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 
 import { SENSOR_PARTS, createKeyboardSource, createSensorHub } from '../battle'
+import { playHenshinBgm } from '../battle/bgm'
 import type { BattleInput, BleStatus, SensorHub, SensorPartKey } from '../battle'
 import type { PresenterAction, WinnerPresenter } from '../battle/winner3d'
 import { RIDER_ROUTINES } from '../pose'
@@ -64,6 +65,9 @@ function PairingPage() {
   const hubRef = useRef<SensorHub | null>(null)
   // 登録ライダーに紐づくセンサーセット名（<ライダー名>）。R2 から非同期に決まるので ref + 表示用 state。
   const sensorSetRef = useRef<string | null>(null)
+
+  // 変身フロー BGM（ループ）。/auth から続けて鳴らす（画面を離れたら停止する）。
+  useEffect(() => playHenshinBgm(), [])
 
   const [sensorSet, setSensorSet] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<SensorPartKey, BleStatus>>(emptyStatuses)
