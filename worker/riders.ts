@@ -14,7 +14,8 @@ const RIDERS_PREFIX = "riders/";
 
 // steps（ポーズ手順）は src/pose/custom.ts の CustomStep[]。Worker 側では中身に
 // 関知せず JSON として素通しする。
-// sensorSet: BLE センサーセット番号（GR<n>_… 命名の n）。null = 紐付けなし。
+// sensorSet: BLE センサー名（<ライダー名>_<部位> 命名の <ライダー名> 部分。例: "Arduino"）。
+//   null = 紐付けなし。
 // nfcId: ファイナルベント用 NFC タグの固有ID（Swift アプリの enroll で紐付け）。null = 未紐付け。
 //   GET /riders のレスポンスには含めない（誰でも取得できる公開 API に乗せると、タグを
 //   持たない第三者でも他人のライダーの必殺を撃てる「誰でも打てる」問題がそのまま残るため）。
@@ -24,7 +25,7 @@ export interface StoredRider {
 	name: string;
 	imageDataUrl: string;
 	steps: unknown[];
-	sensorSet: number | null;
+	sensorSet: string | null;
 	nfcId: string | null;
 	createdAt: string;
 }
@@ -104,10 +105,8 @@ export async function handleRiders(
 
 		const id = input.id ?? `rider-${Date.now().toString(36)}`;
 		const sensorSet =
-			typeof input.sensorSet === "number" &&
-			Number.isInteger(input.sensorSet) &&
-			input.sensorSet > 0
-				? input.sensorSet
+			typeof input.sensorSet === "string" && input.sensorSet.trim()
+				? input.sensorSet.trim()
 				: null;
 		// 既存ライダーへの上書き登録（画像/ポーズの撮り直し）で NFC タグの紐付けを消さないよう、
 		// 既存エントリの nfcId を引き継ぐ（bind は /riders/nfc-bind の専任なのでここでは受け取らない）。

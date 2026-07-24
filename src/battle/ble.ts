@@ -135,17 +135,18 @@ export async function getPairedLimbs(): Promise<PairedLimbs> {
 // マッピングする。各リングは BLE 名で部位を判別するため、ファーム書き込み時に部位ごとの
 // 名前を付ける必要がある（下表）。UUID は当面すべて PunchSensor と同じ想定（同ファーム流用）。
 //
-//   部位     BLE 名                                バトル入力
-//   右手     GR<n>_RH / PunchSensor                パンチ（右）
-//   左手     GR<n>_LH / PunchSensor-L              パンチ（左）
-//   右足     GR<n>_RF / KickSensor / Punch_RF      キック（右）
-//   左足     GR<n>_LF / KickSensor-L / Punch_LF    キック（左）
-//   ベルト   GR<n>_BELT / BeltSensor               （未割当。変身/ファイナルベント検出用に予約）
+//   部位     BLE 名                                     バトル入力
+//   右手     <ライダー名>_RH / PunchSensor              パンチ（右）
+//   左手     <ライダー名>_LH / PunchSensor-L            パンチ（左）
+//   右足     <ライダー名>_RF / KickSensor / Punch_RF    キック（右）
+//   左足     <ライダー名>_LF / KickSensor-L / Punch_LF  キック（左）
+//   ベルト   <ライダー名>_BELT / BeltSensor             （未割当。変身/ファイナルベント検出用に予約）
 //
-// GR 命名（GR<セット番号>_<部位コード>。例: GR1_LF）が本番の量産センサーの正式命名。
-// セット番号は登録ライダーの sensorSet（R2 保存）と紐づき、SensorHub の sensorSet オプションで
-// 「自分のライダーのセット以外の GR デバイスは選択・自動接続できない」ように絞れる。
-// 旧命名（PunchSensor / KickSensor / Punch_RF 等）はセット情報が無いので制限の対象外（試作機用）。
+// 命名規則（<ライダー名>_<部位コード>。例: Arduino_LF）が本番の量産センサーの正式命名。
+// <ライダー名> は登録ライダーの sensorSet（R2 保存。例: "Arduino"）と紐づき、SensorHub の
+// sensorSet オプションで「自分のライダー名以外のデバイスは選択・自動接続できない」ように絞れる。
+// 比較は大文字小文字を無視する（現場でファーム書き込み時の表記ゆれを吸収するため）。
+// 旧命名（PunchSensor / KickSensor / Punch_RF 等）はライダー名を持たないので制限の対象外（試作機用）。
 //
 // ※ ハード/動作は未確定（CLAUDE.md）。入力の割り当ては SENSOR_PARTS の emit 1 か所で変えられる。
 
@@ -155,7 +156,7 @@ export interface SensorPartDef {
   key: SensorPartKey
   label: string // 表示名（右手 等）
   emoji: string // タイル用アイコン
-  grCode: string // GR 命名の部位コード（GR1_RH の RH 部分）
+  partCode: string // <ライダー名>_<部位コード> 命名の部位コード（Arduino_RH の RH 部分）
   namePrefix: string | string[] // BLE 名の前方一致（複数命名を許容: 例 KickSensor / Punch_RF）
   excludePrefix?: string // 同名衝突の除外（右手=PunchSensor は PunchSensor-L を除外）
   serviceUuid: string
@@ -170,7 +171,7 @@ export const SENSOR_PARTS: SensorPartDef[] = [
     key: 'rightHand',
     label: '右手',
     emoji: '🤜',
-    grCode: 'RH',
+    partCode: 'RH',
     namePrefix: 'PunchSensor',
     excludePrefix: 'PunchSensor-L',
     serviceUuid: PUNCH_SERVICE_UUID,
@@ -181,7 +182,7 @@ export const SENSOR_PARTS: SensorPartDef[] = [
     key: 'leftHand',
     label: '左手',
     emoji: '🤛',
-    grCode: 'LH',
+    partCode: 'LH',
     namePrefix: 'PunchSensor-L',
     serviceUuid: PUNCH_SERVICE_UUID,
     charUuid: PUNCH_CHAR_UUID,
@@ -191,7 +192,7 @@ export const SENSOR_PARTS: SensorPartDef[] = [
     key: 'rightFoot',
     label: '右足',
     emoji: '🦵',
-    grCode: 'RF',
+    partCode: 'RF',
     namePrefix: ['KickSensor', 'Punch_RF'], // Punch_RF = Right Foot ファーム（DEVICE_NAME）
     excludePrefix: 'KickSensor-L',
     serviceUuid: PUNCH_SERVICE_UUID,
@@ -202,7 +203,7 @@ export const SENSOR_PARTS: SensorPartDef[] = [
     key: 'leftFoot',
     label: '左足',
     emoji: '🦶',
-    grCode: 'LF',
+    partCode: 'LF',
     namePrefix: ['KickSensor-L', 'Punch_LF'], // Punch_LF = Left Foot ファーム（DEVICE_NAME）
     serviceUuid: PUNCH_SERVICE_UUID,
     charUuid: PUNCH_CHAR_UUID,
@@ -212,7 +213,7 @@ export const SENSOR_PARTS: SensorPartDef[] = [
     key: 'belt',
     label: 'ベルト',
     emoji: '🔶',
-    grCode: 'BELT',
+    partCode: 'BELT',
     namePrefix: 'BeltSensor',
     serviceUuid: PUNCH_SERVICE_UUID,
     charUuid: PUNCH_CHAR_UUID,
@@ -231,20 +232,20 @@ function namePrefixes(def: SensorPartDef): string[] {
   return Array.isArray(def.namePrefix) ? def.namePrefix : [def.namePrefix]
 }
 
-// GR 命名（GR<セット番号>_<部位コード>。例: GR1_LF）の解析。
-const GR_NAME_RE = /^GR(\d+)_(RH|LH|RF|LF|BELT)/
+// <ライダー名>_<部位コード> 命名（例: Arduino_LF）の解析。
+const SENSOR_NAME_RE = /^([A-Za-z]+)_(RH|LH|RF|LF|BELT)/
 
-export function parseGrName(name: string): { set: number; key: SensorPartKey } | null {
-  const m = GR_NAME_RE.exec(name)
+export function parseSensorName(name: string): { rider: string; key: SensorPartKey } | null {
+  const m = SENSOR_NAME_RE.exec(name)
   if (!m) return null
-  const def = SENSOR_PARTS.find((p) => p.grCode === m[2])
-  return def ? { set: Number.parseInt(m[1], 10), key: def.key } : null
+  const def = SENSOR_PARTS.find((p) => p.partCode === m[2])
+  return def ? { rider: m[1], key: def.key } : null
 }
 
-// BLE 名 → 部位定義。GR 命名を優先し、旧命名は前方一致（＋除外）で判別する。
+// BLE 名 → 部位定義。<ライダー名>_<部位コード> 命名を優先し、旧命名は前方一致（＋除外）で判別する。
 function partForName(name: string): SensorPartDef | null {
-  const gr = parseGrName(name)
-  if (gr) return partDef(gr.key)
+  const parsed = parseSensorName(name)
+  if (parsed) return partDef(parsed.key)
   for (const p of SENSOR_PARTS) {
     if (!namePrefixes(p).some((pre) => name.startsWith(pre))) continue
     if (p.excludePrefix && name.startsWith(p.excludePrefix)) continue
@@ -253,12 +254,12 @@ function partForName(name: string): SensorPartDef | null {
   return null
 }
 
-// セット制限の判定。sensorSet 指定時、他セットの GR デバイスだけを弾く
-// （GR 命名でない旧センサーはセット情報が無いので通す）。
-function nameAllowed(name: string, sensorSet: number | null): boolean {
-  if (sensorSet == null) return true
-  const gr = parseGrName(name)
-  return !gr || gr.set === sensorSet
+// ライダー名制限の判定。riderPrefix 指定時、他ライダー名を持つデバイスだけを弾く
+// （<ライダー名>_ 命名でない旧センサーはライダー情報が無いので通す）。大文字小文字は無視する。
+function nameAllowed(name: string, riderPrefix: string | null): boolean {
+  if (riderPrefix == null) return true
+  const parsed = parseSensorName(name)
+  return !parsed || parsed.rider.toLowerCase() === riderPrefix.toLowerCase()
 }
 
 function partDef(key: SensorPartKey): SensorPartDef {
@@ -268,8 +269,8 @@ function partDef(key: SensorPartKey): SensorPartDef {
 }
 
 // 5部位それぞれの「ペアリング（許可）済みか」。接続はせず、許可済みデバイスの名前を見るだけ。
-// sensorSet を渡すと他セットの GR デバイスは数えない（自分のライダーのセットだけ表示）。
-export async function getPairedParts(sensorSet: number | null = null): Promise<PairedParts> {
+// sensorSet（ライダー名。例: "Arduino"）を渡すと他ライダー名のデバイスは数えない。
+export async function getPairedParts(sensorSet: string | null = null): Promise<PairedParts> {
   const out = emptyPaired()
   const bt = bluetoothApi()
   if (!bt?.getDevices) return out
@@ -289,10 +290,11 @@ export interface SensorHubOptions {
   onStatus?: (key: SensorPartKey, status: BleStatus) => void
   // 生のインパクト値（メーター用）。hit=true はパンチ/キック検出時。
   onImpact?: (key: SensorPartKey, impact: number, hit: boolean) => void
-  // 自分のセンサーセット番号（GR 命名のセット。登録ライダーの sensorSet）。指定すると
-  // 他セットの GR デバイスは選択ダイアログ・自動接続の両方から除外される。
+  // 自分のセンサーセット名（<ライダー名>_<部位> 命名のライダー名部分。登録ライダーの
+  // sensorSet。例: "Arduino"）。指定すると他ライダー名のデバイスは選択ダイアログ・
+  // 自動接続の両方から除外される（大文字小文字は無視）。
   // 値は R2 から非同期に決まるため getter で渡す（呼び出し時点の値を見る）。null = 制限なし。
-  sensorSet?: () => number | null
+  sensorSet?: () => string | null
 }
 
 // 5部位を同時に扱うセンサーハブ。部位ごとに GATT 接続を保持し、届いた PUNCH 通知を
@@ -406,7 +408,7 @@ export function createSensorHub(
   const mySet = () => opts.sensorSet?.() ?? null
 
   // 選ばれた（または許可済みの）デバイスを名前で部位へ振り分けて接続する。
-  // 採用した部位キーを返す（他セットの GR デバイス等、採用しなかったときは null）。
+  // 採用した部位キーを返す（他ライダー名のデバイス等、採用しなかったときは null）。
   const adoptAndAttach = async (d: BleDevice): Promise<SensorPartKey | null> => {
     const name = d.name ?? ''
     const def = partForName(name)
@@ -471,11 +473,11 @@ export function createSensorHub(
     connect(key) {
       const def = partDef(key)
       const set = mySet()
-      // セット制限中はサービス UUID フィルタを外す（UUID は全セット共通なので、
-      // 入れると他セットの GR デバイスまでダイアログに並んでしまう）。
+      // セット制限中はサービス UUID フィルタを外す（UUID は全ライダー共通なので、
+      // 入れると他ライダー名のデバイスまでダイアログに並んでしまう）。
       const filters = [
         ...(set != null
-          ? [{ namePrefix: `GR${set}_${def.grCode}` }]
+          ? [{ namePrefix: `${set}_${def.partCode}` }]
           : [{ services: [def.serviceUuid] }]),
         ...namePrefixes(def).map((namePrefix) => ({ namePrefix })),
       ]
@@ -484,8 +486,10 @@ export function createSensorHub(
     connectAny() {
       const services = [...new Set(SENSOR_PARTS.map((p) => p.serviceUuid))]
       const set = mySet()
+      // セット制限中は "<ライダー名>_" 前方一致、無制限時はサービス UUID で広く拾う
+      // （<ライダー名> は任意文字列なので、制限が無いときの共通マーカーが無い）。
       const filters = [
-        { namePrefix: set != null ? `GR${set}_` : 'GR' },
+        ...(set != null ? [{ namePrefix: `${set}_` }] : [{ services }]),
         ...SENSOR_PARTS.flatMap((p) => namePrefixes(p).map((namePrefix) => ({ namePrefix }))),
       ]
       return requestAndAttach(null, filters, services)

@@ -18,8 +18,9 @@ type ImageSource = 'camera' | 'upload'
 const DEFAULT_MIN_SCORE = 80
 const DEFAULT_HOLD_MS = 700
 
-// 選べるセンサーセット番号（BLE 名 GR<n>_RH/…LF/…BELT の n。実機ラベルと合わせる）
-const SENSOR_SETS = [1, 2, 3, 4]
+// 選べるセンサーセット名（BLE 名 <ライダー名>_RH/…LF/…BELT の <ライダー名> 部分。
+// ロースターの名前と同じにしてある＝実機ラベルもこの表記に合わせること）
+const SENSOR_SETS = RIDER_ROSTER.map((r) => r.name)
 
 const PHASES: Phase[] = ['name', 'image', 'pose', 'preview']
 const PHASE_LABELS: Record<Phase, string> = {
@@ -48,7 +49,7 @@ function RegisterPage() {
   // ロースター（Arduino / Python / Swift / Flutter）から選ぶ。slug が登録ID＝R2 のファイル名。
   const [slug, setSlug] = useState<string | null>(null)
   const [name, setName] = useState('')
-  const [sensorSet, setSensorSet] = useState<number | null>(null)
+  const [sensorSet, setSensorSet] = useState<string | null>(null)
   // 登録済みライダーの ID（選択ボタンに「上書きになる」印を出すため）。取得失敗は空でよい。
   const [registeredIds, setRegisteredIds] = useState<string[]>([])
   const [imageSource, setImageSource] = useState<ImageSource>('camera')
@@ -336,24 +337,25 @@ function RegisterPage() {
                 onClick={() => {
                   setSlug(r.slug)
                   setName(r.name)
-                  setSensorSet(r.sensorSet) // 既定の GR セット。下で変更可
+                  setSensorSet(r.sensorSet) // 既定のセンサー名（= ライダー名）。下で変更可
                 }}
                 style={{ ...tabButtonStyle(slug === r.slug), flex: '1 1 140px', padding: '0.9rem' }}
               >
                 {r.name}
                 <span style={{ display: 'block', fontSize: '0.7rem', marginTop: '2px' }}>
-                  GR{r.sensorSet}
+                  {r.sensorSet}
                   {registeredIds.includes(r.slug) ? '・登録済み（上書き）' : ''}
                 </span>
               </button>
             ))}
           </div>
 
-          {/* センサーセット（GR 番号）。選ぶと変身後はそのセットの BLE デバイスしか接続候補に出ない */}
+          {/* センサーセット（BLE 名の <ライダー名>_ 部分）。選ぶと変身後はそのセンサー名の
+              BLE デバイスしか接続候補に出ない */}
           {slug && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <span style={{ color: '#9ca3af', fontSize: '0.9rem' }}>
-                センサーセット（実機ラベルの GR 番号。近くの他プレイヤーのセンサーを拾わないための紐付け）
+                センサーセット（実機ラベルの「ライダー名_」部分。近くの他プレイヤーのセンサーを拾わないための紐付け）
               </span>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {SENSOR_SETS.map((n) => (
@@ -363,7 +365,7 @@ function RegisterPage() {
                     onClick={() => setSensorSet(n)}
                     style={tabButtonStyle(sensorSet === n)}
                   >
-                    GR{n}
+                    {n}
                   </button>
                 ))}
                 <button
@@ -525,7 +527,7 @@ function RegisterPage() {
                 )}
               </span>
               <span style={{ color: '#9ca3af' }}>
-                センサーセット: {sensorSet != null ? `GR${sensorSet}` : 'なし（制限しない）'}
+                センサーセット: {sensorSet ?? 'なし（制限しない）'}
               </span>
               <span style={{ color: '#9ca3af' }}>変身ポーズ: {steps.length} ステップ</span>
               {steps.map((s, i) => (

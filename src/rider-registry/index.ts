@@ -16,8 +16,8 @@ function apiBase(): string {
   return (fromEnv?.trim() || PROD_API_BASE).replace(/\/$/, '')
 }
 
-/** 登録ライダーの BLE センサーセット番号（GR<n>_… の n）。未登録 ID・未設定・取得失敗は null。 */
-export async function riderSensorSet(riderId: string): Promise<number | null> {
+/** 登録ライダーの BLE センサー名（<ライダー名>_<部位> 命名の <ライダー名> 部分）。未登録 ID・未設定・取得失敗は null。 */
+export async function riderSensorSet(riderId: string): Promise<string | null> {
   try {
     const riders = await listRiders()
     return riders.find((r) => r.id === riderId)?.sensorSet ?? null
@@ -33,9 +33,9 @@ export async function listRiders(): Promise<RegisteredRiderWithImage[]> {
   return (await res.json()) as RegisteredRiderWithImage[]
 }
 
-/** NFC タグを登録ライダーへ紐付ける（POST /riders/nfc）。対象ライダーは登録済みである必要がある。 */
+/** NFC タグを登録ライダーへ紐付ける（POST /riders/nfc-bind）。対象ライダーは登録済みである必要がある。 */
 export async function bindRiderNfc(riderId: string, nfcId: string): Promise<void> {
-  const res = await fetch(`${apiBase()}/riders/nfc`, {
+  const res = await fetch(`${apiBase()}/riders/nfc-bind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ riderId, nfcId }),
