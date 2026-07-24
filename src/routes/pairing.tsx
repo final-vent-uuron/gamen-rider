@@ -14,7 +14,7 @@ import { riderSensorSet } from '../rider-registry'
 // ＝センサーが通っていることが一目で分かる。
 //   - 手/足: 加速度センサー（PunchSensor / KickSensor 系）。パンチ/キック検出。
 //   - ベルト: BeltSensor（変身/ファイナルベント検出用に予約。入力割り当ては未確定）。
-// 導線: /select・/henshin → /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
+// 導線: /select・/auth → /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
 
 export const Route = createFileRoute('/pairing')({
   validateSearch: (search: Record<string, unknown>): { rider?: string; name?: string } => ({

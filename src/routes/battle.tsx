@@ -26,7 +26,6 @@ import {
 	endFinalVent,
 	getPairedParts,
 	getStoredBgmVolume,
-	loadFinalVentPose,
 	meterStocks,
 	resolveFinalVentCardRefs,
 	setStoredBgmVolume,
@@ -1313,7 +1312,6 @@ function BattlePage() {
 						facingSide={camSide}
 						phase={fvPhase}
 						poseProgress={fvPoseProgress}
-						riderId={routine.riderId}
 						videoRef={ventVideoRef}
 						canvasRef={ventCanvasRef}
 					/>
@@ -2337,7 +2335,6 @@ function FinalVentCam({
 	facingSide,
 	phase,
 	poseProgress,
-	riderId,
 	videoRef,
 	canvasRef,
 }: {
@@ -2347,25 +2344,17 @@ function FinalVentCam({
 	facingSide: boolean; // カメラに対して横向き（向き検出）
 	phase: FinalVentPhase; // カード→ポーズ→発動のシーケンス
 	poseProgress: FinalVentPoseProgress | null;
-	riderId: string;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
 	const [state, setState] = useState<"idle" | "on" | "error">("idle");
-	// 登録の有無はマウント時に読む（登録画面から戻って再入場すれば反映）
-	const poseRegistered = useMemo(
-		() => loadFinalVentPose(riderId) != null,
-		[riderId],
-	);
 
 	const poseHint =
 		poseProgress != null
 			? `${poseProgress.stepIndex + 1}/${poseProgress.stepCount} ${
 					poseProgress.label
 				}`
-			: poseRegistered
-				? "登録手順を取れ！"
-				: "ポーズ！（腕を前へ）";
+			: "登録手順を取れ！";
 
 	const phaseChrome =
 		phase === "card"
@@ -2483,42 +2472,6 @@ function FinalVentCam({
 					pointerEvents: "none",
 				}}
 			/>
-			{/* <span
-				style={{
-					position: "absolute",
-					left: "6px",
-					top: "4px",
-					fontSize: "0.65rem",
-					color: "#fff",
-					background: "rgba(0,0,0,0.5)",
-					padding: "1px 6px",
-					borderRadius: "4px",
-				}}
-			>
-				FINAL VENT CAM
-			</span> */}
-			{/* ポーズ未登録時は登録画面への導線（シーケンス中は邪魔なので隠す） */}
-			{!phaseChrome && (
-				<Link
-					to="/final-vent-pose"
-					search={{ rider: riderId }}
-					style={{
-						position: "absolute",
-						right: "6px",
-						top: facingSide ? "26px" : "4px",
-						fontSize: "0.65rem",
-						fontWeight: 700,
-						color: poseRegistered ? "#cbd5e1" : "#1e1b4b",
-						background: poseRegistered ? "rgba(15,23,42,0.7)" : "#c4b5fd",
-						padding: "1px 6px",
-						borderRadius: "4px",
-						textDecoration: "none",
-						zIndex: 2,
-					}}
-				>
-					{poseRegistered ? "ポーズ変更" : "ポーズ登録"}
-				</Link>
-			)}
 			{/* FV シーケンス（カード→ポーズ）。ガード／横向き表示より優先 */}
 			{phaseChrome && (
 				<>

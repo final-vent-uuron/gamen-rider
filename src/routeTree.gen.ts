@@ -11,12 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SelectRouteImport } from './routes/select'
 import { Route as ResultRouteImport } from './routes/result'
-import { Route as PoseRouteImport } from './routes/pose'
 import { Route as PairingRouteImport } from './routes/pairing'
 import { Route as NfcTestRouteImport } from './routes/nfc-test'
 import { Route as ModelCheckRouteImport } from './routes/model-check'
-import { Route as HenshinRouteImport } from './routes/henshin'
-import { Route as FinalVentPoseRouteImport } from './routes/final-vent-pose'
 import { Route as DetectRouteImport } from './routes/detect'
 import { Route as BattleTestRouteImport } from './routes/battle-test'
 import { Route as BattleRouteImport } from './routes/battle'
@@ -34,11 +31,6 @@ const ResultRoute = ResultRouteImport.update({
   path: '/result',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PoseRoute = PoseRouteImport.update({
-  id: '/pose',
-  path: '/pose',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const PairingRoute = PairingRouteImport.update({
   id: '/pairing',
   path: '/pairing',
@@ -52,16 +44,6 @@ const NfcTestRoute = NfcTestRouteImport.update({
 const ModelCheckRoute = ModelCheckRouteImport.update({
   id: '/model-check',
   path: '/model-check',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const HenshinRoute = HenshinRouteImport.update({
-  id: '/henshin',
-  path: '/henshin',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FinalVentPoseRoute = FinalVentPoseRouteImport.update({
-  id: '/final-vent-pose',
-  path: '/final-vent-pose',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DetectRoute = DetectRouteImport.update({
@@ -100,12 +82,9 @@ export interface FileRoutesByFullPath {
   '/battle': typeof BattleRoute
   '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
-  '/final-vent-pose': typeof FinalVentPoseRoute
-  '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
   '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
-  '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -116,12 +95,9 @@ export interface FileRoutesByTo {
   '/battle': typeof BattleRoute
   '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
-  '/final-vent-pose': typeof FinalVentPoseRoute
-  '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
   '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
-  '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -133,12 +109,9 @@ export interface FileRoutesById {
   '/battle': typeof BattleRoute
   '/battle-test': typeof BattleTestRoute
   '/detect': typeof DetectRoute
-  '/final-vent-pose': typeof FinalVentPoseRoute
-  '/henshin': typeof HenshinRoute
   '/model-check': typeof ModelCheckRoute
   '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
-  '/pose': typeof PoseRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -151,12 +124,9 @@ export interface FileRouteTypes {
     | '/battle'
     | '/battle-test'
     | '/detect'
-    | '/final-vent-pose'
-    | '/henshin'
     | '/model-check'
     | '/nfc-test'
     | '/pairing'
-    | '/pose'
     | '/result'
     | '/select'
     | '/auth/register'
@@ -167,12 +137,9 @@ export interface FileRouteTypes {
     | '/battle'
     | '/battle-test'
     | '/detect'
-    | '/final-vent-pose'
-    | '/henshin'
     | '/model-check'
     | '/nfc-test'
     | '/pairing'
-    | '/pose'
     | '/result'
     | '/select'
     | '/auth/register'
@@ -183,12 +150,9 @@ export interface FileRouteTypes {
     | '/battle'
     | '/battle-test'
     | '/detect'
-    | '/final-vent-pose'
-    | '/henshin'
     | '/model-check'
     | '/nfc-test'
     | '/pairing'
-    | '/pose'
     | '/result'
     | '/select'
     | '/auth/register'
@@ -200,12 +164,9 @@ export interface RootRouteChildren {
   BattleRoute: typeof BattleRoute
   BattleTestRoute: typeof BattleTestRoute
   DetectRoute: typeof DetectRoute
-  FinalVentPoseRoute: typeof FinalVentPoseRoute
-  HenshinRoute: typeof HenshinRoute
   ModelCheckRoute: typeof ModelCheckRoute
   NfcTestRoute: typeof NfcTestRoute
   PairingRoute: typeof PairingRoute
-  PoseRoute: typeof PoseRoute
   ResultRoute: typeof ResultRoute
   SelectRoute: typeof SelectRoute
   AuthRegisterRoute: typeof AuthRegisterRoute
@@ -228,13 +189,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResultRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/pose': {
-      id: '/pose'
-      path: '/pose'
-      fullPath: '/pose'
-      preLoaderRoute: typeof PoseRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/pairing': {
       id: '/pairing'
       path: '/pairing'
@@ -254,20 +208,6 @@ declare module '@tanstack/react-router' {
       path: '/model-check'
       fullPath: '/model-check'
       preLoaderRoute: typeof ModelCheckRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/henshin': {
-      id: '/henshin'
-      path: '/henshin'
-      fullPath: '/henshin'
-      preLoaderRoute: typeof HenshinRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/final-vent-pose': {
-      id: '/final-vent-pose'
-      path: '/final-vent-pose'
-      fullPath: '/final-vent-pose'
-      preLoaderRoute: typeof FinalVentPoseRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/detect': {
@@ -320,12 +260,9 @@ const rootRouteChildren: RootRouteChildren = {
   BattleRoute: BattleRoute,
   BattleTestRoute: BattleTestRoute,
   DetectRoute: DetectRoute,
-  FinalVentPoseRoute: FinalVentPoseRoute,
-  HenshinRoute: HenshinRoute,
   ModelCheckRoute: ModelCheckRoute,
   NfcTestRoute: NfcTestRoute,
   PairingRoute: PairingRoute,
-  PoseRoute: PoseRoute,
   ResultRoute: ResultRoute,
   SelectRoute: SelectRoute,
   AuthRegisterRoute: AuthRegisterRoute,

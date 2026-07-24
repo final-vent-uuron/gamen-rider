@@ -141,7 +141,6 @@ function Home() {
 						[
 							{ to: "/select", label: "キャラ選択（デモ）" },
 							{ to: "/auth/register", label: "ライダー登録" },
-							{ to: "/final-vent-pose", label: "FVポーズ登録" },
 						] as const
 					).map((l) => (
 						<Link
