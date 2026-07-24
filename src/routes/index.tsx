@@ -53,7 +53,7 @@ function Home() {
 					animation: "winnerPop 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.2) both",
 				}}
 			>
-				<span
+				{/* <span
 					style={{
 						fontFamily: "monospace",
 						fontSize: "clamp(0.7rem, 1.6vw, 0.9rem)",
@@ -63,7 +63,7 @@ function Home() {
 					}}
 				>
 					FINAL VENT PROJECT
-				</span>
+				</span> */}
 				<h1
 					style={{
 						margin: 0,
@@ -106,7 +106,7 @@ function Home() {
 					animation: "titlePulse 1.8s ease-in-out infinite",
 				}}
 			>
-				▶ ゲームスタート
+				戦う
 			</Link>
 
 			{/* 開発用（即座にテストするための入口）。本番フローには含まれない。 */}

@@ -22,7 +22,9 @@ export const Route = createFileRoute('/auth/')({ component: AuthPage })
 type Status = 'loading' | 'running' | 'error'
 // card: カードをかざす / pose: 認証したライダーの変身ポーズ / done: 認証成功
 type Phase = 'card' | 'pose' | 'done'
-type Rider = { id: string; name: string }
+// imageDataUrl は登録ライダーのみ（RIDER_ROUTINES の既定ライダーには無い）。
+// 成功画面でのカード演出に使う。無ければアイコンにフォールバックする。
+type Rider = { id: string; name: string; imageDataUrl?: string }
 
 // 説明表示（フェーズインジケータ・ステータス文言・ステップ一覧）の ON/OFF。
 // 既定は OFF（シンプルに変身するだけ）。ON にした状態は端末ごとに localStorage で覚えておく。
@@ -60,6 +62,8 @@ function AuthPage() {
   // rAF ループから最新フェーズ／ライダーを読むための ref（state のミラー）
   const phaseRef = useRef<Phase>('card')
   const riderRef = useRef<Rider | null>(null)
+  // riderId → 登録カード画像（data URL）。成功画面でのカード演出用。init で確定。
+  const riderImagesRef = useRef<Record<string, string>>({})
   const doneHandledRef = useRef(false)
   const lastUiRef = useRef(0)
   const lastCardLabelRef = useRef<string | null>(null)
@@ -121,6 +125,7 @@ function AuthPage() {
           label: r.name,
           url: r.imageDataUrl,
         }))
+        riderImagesRef.current = Object.fromEntries(registered.map((r) => [r.id, r.imageDataUrl]))
         routinesRef.current = [
           ...RIDER_ROUTINES,
           ...registered.map((r) =>
@@ -187,7 +192,7 @@ function AuthPage() {
     if (!riderId) return // 対応するライダーが無いカード（果物の他種など）は無視
     const routine = routines.find((r) => r.riderId === riderId)
     if (!routine) return
-    const r: Rider = { id: riderId, name: routine.riderName }
+    const r: Rider = { id: riderId, name: routine.riderName, imageDataUrl: riderImagesRef.current[riderId] }
     riderRef.current = r
     runnerRef.current = createRoutineRunner(routines, riderId)
     lastGuideKeyRef.current = null
@@ -307,25 +312,120 @@ function AuthPage() {
   }
 
   // ---- 認証成功画面（同一ページ内で切替） ----
+  // /pairing への自動遷移は 1400ms 後（別 useEffect）。進捗バーもその長さに合わせてある。
   if (phase === 'done') {
     return (
       <div
         style={{
+          position: 'relative',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
           minHeight: '100vh',
-          gap: '1.5rem',
-          background: '#022c22',
+          gap: '1.2rem',
+          overflow: 'hidden',
+          background: 'radial-gradient(ellipse at 50% 45%, #0d3b2e 0%, #022c22 55%, #01120e 100%)',
         }}
       >
-        <div style={{ fontSize: '5rem' }}>✅</div>
-        <h1 style={{ margin: 0, fontSize: '2.5rem', color: '#4ade80' }}>認証成功</h1>
-        <p style={{ margin: 0, fontSize: '1.5rem', color: '#fff' }}>
-          変身: <strong style={{ color: '#a78bfa' }}>{rider?.name}</strong>
+        {/* 背景の光の輪（発動の瞬間に一気に広がって消える） */}
+        <div
+          style={{
+            position: 'absolute',
+            width: '60vmin',
+            height: '60vmin',
+            borderRadius: '50%',
+            border: '2px solid #4ade80',
+            animation: 'henshinRingBurst 1s ease-out both',
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            width: '60vmin',
+            height: '60vmin',
+            borderRadius: '50%',
+            border: '2px solid #a78bfa',
+            animation: 'henshinRingBurst 1s ease-out 0.15s both',
+            pointerEvents: 'none',
+          }}
+        />
+
+        {/* カード（登録画像があれば実物、無ければアイコン） */}
+        <div
+          style={{
+            position: 'relative',
+            animation: 'winnerPop 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
+          }}
+        >
+          {rider?.imageDataUrl ? (
+            <img
+              src={rider.imageDataUrl}
+              alt={rider.name}
+              style={{
+                width: '180px',
+                height: '180px',
+                objectFit: 'cover',
+                borderRadius: '16px',
+                border: '3px solid #4ade80',
+                color: '#4ade80', // henshinGlow の currentColor 参照先
+                animation: 'henshinGlow 1.6s ease-in-out infinite',
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                fontSize: '5rem',
+                color: '#4ade80',
+                animation: 'henshinGlow 1.6s ease-in-out infinite',
+              }}
+            >
+              ✅
+            </div>
+          )}
+        </div>
+
+        <h1
+          style={{
+            margin: 0,
+            fontSize: '2.5rem',
+            color: '#4ade80',
+            animation: 'winnerPop 0.6s 0.1s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
+          }}
+        >
+          変身完了
+        </h1>
+        <p
+          style={{
+            margin: 0,
+            fontSize: '1.5rem',
+            color: '#fff',
+            animation: 'winnerPop 0.6s 0.15s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
+          }}
+        >
+          <strong style={{ color: '#a78bfa' }}>{rider?.name}</strong> にライダーチェンジ！
         </p>
-        <p style={{ margin: 0, color: '#9ca3af', fontSize: '1rem' }}>
+
+        {/* バトルへの移行待ちを可視化する進捗バー（1400ms = 自動遷移までの時間と同期） */}
+        <div
+          style={{
+            width: '220px',
+            height: '5px',
+            borderRadius: '3px',
+            background: 'rgba(255,255,255,0.15)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              height: '100%',
+              background: 'linear-gradient(90deg, #4ade80, #a78bfa)',
+              animation: 'henshinProgress 1.4s linear both',
+            }}
+          />
+        </div>
+        <p style={{ margin: 0, color: '#9ca3af', fontSize: '0.9rem' }}>
           まもなくバトルへ移行します…
         </p>
       </div>

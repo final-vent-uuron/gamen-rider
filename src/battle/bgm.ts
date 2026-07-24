@@ -14,7 +14,7 @@
 
 const BGM_DIR = "/bgm";
 const VOLUME_KEY = "gamen-rider:bgm-volume";
-const DEFAULT_MASTER = 0.5;
+const DEFAULT_MASTER = 0.7;
 
 // トラックごとの相対音量（マスター 1.0 のときの目標値）
 const MAIN_BASE = 0.35;

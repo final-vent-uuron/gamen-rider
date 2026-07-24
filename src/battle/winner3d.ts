@@ -60,6 +60,8 @@ function standPose(riderId: string, action: PlayerAction): PlayerState {
     comboBy: null,
     comboUntil: 0,
     meter: 0,
+    meterFullAt: 0,
+    finalDamageMul: 1,
     move: null,
     moveActiveFrom: 0,
     moveActiveTo: 0,

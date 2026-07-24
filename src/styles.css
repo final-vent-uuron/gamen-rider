@@ -210,3 +210,39 @@ body,
     transform: translateY(105vh);
   }
 }
+
+/* 変身成功: 背景の光の輪が一気に広がって消える */
+@keyframes henshinRingBurst {
+  0% {
+    transform: scale(0.2);
+    opacity: 0.9;
+  }
+  70% {
+    opacity: 0.3;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+/* 変身成功: カード/アイコンの縁が呼吸するように光る */
+@keyframes henshinGlow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 14px currentColor) drop-shadow(0 0 28px currentColor);
+  }
+  50% {
+    filter: drop-shadow(0 0 26px currentColor) drop-shadow(0 0 52px currentColor);
+  }
+}
+
+/* 変身成功: 次の画面へ進むまでの待ち時間を可視化する進捗バー */
+@keyframes henshinProgress {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}

@@ -33,8 +33,6 @@ export const RIDER_ROUTINES: HenshinRoutine[] = [
 
 // 検出のブレを吸収する猶予。これ以内の一瞬の非成立では hold を巻き戻さない。
 const STEP_GRACE_MS = 300
-// 現 step が連続で非成立のまま続いたら手順を最初からやり直す。
-const SEQUENCE_RESET_MS = 1500
 
 interface RoutineProgress {
   routine: HenshinRoutine
@@ -135,13 +133,10 @@ export function createRoutineRunner(
         }
       } else {
         p.graceMs += dt
-        // 猶予を超えたら hold を巻き戻す（ブレ吸収）
+        // 猶予を超えたら「現在の step」の hold だけ巻き戻す（ブレ吸収）。
+        // 連続で決める必要はない＝1枚ずつポーズできれば良いので、既に完走した step
+        // （stepIndex）まで巻き戻すことはしない（以前は長く崩れると最初からやり直しだった）。
         if (p.graceMs > STEP_GRACE_MS) p.heldMs = 0
-        // さらに長く崩れたら手順を最初からやり直す
-        if (p.stepIndex > 0 && p.graceMs >= SEQUENCE_RESET_MS) {
-          p.stepIndex = 0
-          p.heldMs = 0
-        }
       }
     }
 
