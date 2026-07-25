@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SelectRouteImport } from './routes/select'
 import { Route as ResultRouteImport } from './routes/result'
+import { Route as PairingTestRouteImport } from './routes/pairing-test'
 import { Route as PairingRouteImport } from './routes/pairing'
 import { Route as NfcTestRouteImport } from './routes/nfc-test'
 import { Route as ModelCheckRouteImport } from './routes/model-check'
@@ -29,6 +30,11 @@ const SelectRoute = SelectRouteImport.update({
 const ResultRoute = ResultRouteImport.update({
   id: '/result',
   path: '/result',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PairingTestRoute = PairingTestRouteImport.update({
+  id: '/pairing-test',
+  path: '/pairing-test',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PairingRoute = PairingRouteImport.update({
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/model-check': typeof ModelCheckRoute
   '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
+  '/pairing-test': typeof PairingTestRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -98,6 +105,7 @@ export interface FileRoutesByTo {
   '/model-check': typeof ModelCheckRoute
   '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
+  '/pairing-test': typeof PairingTestRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -112,6 +120,7 @@ export interface FileRoutesById {
   '/model-check': typeof ModelCheckRoute
   '/nfc-test': typeof NfcTestRoute
   '/pairing': typeof PairingRoute
+  '/pairing-test': typeof PairingTestRoute
   '/result': typeof ResultRoute
   '/select': typeof SelectRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -127,6 +136,7 @@ export interface FileRouteTypes {
     | '/model-check'
     | '/nfc-test'
     | '/pairing'
+    | '/pairing-test'
     | '/result'
     | '/select'
     | '/auth/register'
@@ -140,6 +150,7 @@ export interface FileRouteTypes {
     | '/model-check'
     | '/nfc-test'
     | '/pairing'
+    | '/pairing-test'
     | '/result'
     | '/select'
     | '/auth/register'
@@ -153,6 +164,7 @@ export interface FileRouteTypes {
     | '/model-check'
     | '/nfc-test'
     | '/pairing'
+    | '/pairing-test'
     | '/result'
     | '/select'
     | '/auth/register'
@@ -167,6 +179,7 @@ export interface RootRouteChildren {
   ModelCheckRoute: typeof ModelCheckRoute
   NfcTestRoute: typeof NfcTestRoute
   PairingRoute: typeof PairingRoute
+  PairingTestRoute: typeof PairingTestRoute
   ResultRoute: typeof ResultRoute
   SelectRoute: typeof SelectRoute
   AuthRegisterRoute: typeof AuthRegisterRoute
@@ -187,6 +200,13 @@ declare module '@tanstack/react-router' {
       path: '/result'
       fullPath: '/result'
       preLoaderRoute: typeof ResultRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pairing-test': {
+      id: '/pairing-test'
+      path: '/pairing-test'
+      fullPath: '/pairing-test'
+      preLoaderRoute: typeof PairingTestRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pairing': {
@@ -263,6 +283,7 @@ const rootRouteChildren: RootRouteChildren = {
   ModelCheckRoute: ModelCheckRoute,
   NfcTestRoute: NfcTestRoute,
   PairingRoute: PairingRoute,
+  PairingTestRoute: PairingTestRoute,
   ResultRoute: ResultRoute,
   SelectRoute: SelectRoute,
   AuthRegisterRoute: AuthRegisterRoute,

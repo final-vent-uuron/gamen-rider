@@ -6,7 +6,7 @@ import { WEBWORLD_SKY, WebWorldBackdrop } from '../webworld-backdrop'
 import type { WinnerPresenter } from '../battle/winner3d'
 
 // 勝者（リザルト）ページ。バトルロワイヤルの決着後シーン。
-//   - 勝者は画面中央に大きく（王冠＋後光＋月桂樹の「1」＋巨大な名前）
+//   - 勝者は画面中央に大きく（後光＋順位の「1」＋巨大な名前）
 //   - 敗者は death モーションで倒れたまま周囲に散らばる（暗め・低彩度）
 //   - 背景はバトルと同じ「Webワールド（電脳空間）」: 星ノイズ・コード片・遠近グリッドの床
 //
@@ -61,6 +61,10 @@ const CODE_FRAGMENTS: { text: string; top: string; left?: string; right?: string
   { text: 'GAME_SET = true;', top: '44%', right: '3%' },
   { text: 'respawn --lobby', top: '62%', right: '12%' },
 ]
+
+// 勝者・敗者に共通の接地ライン。勝者だけ持ち上げると敗者だけ画面端に張り付いたまま浮いて
+// 見えてしまうため、両方ここを基準にして揃える（詳細は FALLEN_SPOTS のコメント）。
+const GROUND_BOTTOM = 'clamp(1rem, 7vh, 4.5rem)'
 
 // 順位バッジの色（1=金 / 2=銀 / 3=銅 / 以降=青）。数字テキストのメタリック塗り。
 const RANK_METAL: Record<number, [string, string, string]> = {
@@ -137,17 +141,18 @@ function ResultPage() {
         )
       })}
 
-      {/* 勝者（画面中央・大きく。王冠＋後光つき）。
-          センタリングは margin auto（winnerPop が transform を上書きするため translateX は使えない） */}
+      {/* 勝者（画面中央・大きく。後光つき）。
+          センタリングは margin auto（winnerPop が transform を上書きするため translateX は使えない）。
+          bottom は 0 にせず少し持ち上げて、縦方向も画面の中央寄りにバランスさせる。 */}
       <div
         style={{
           position: 'absolute',
           left: 0,
           right: 0,
           marginInline: 'auto',
-          bottom: 0,
+          bottom: GROUND_BOTTOM,
           width: 'clamp(260px, 34vw, 480px)',
-          height: 'clamp(360px, 66vh, 640px)',
+          height: 'clamp(360px, 60vh, 600px)',
           zIndex: 1,
           animation: 'winnerPop 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
         }}
@@ -175,7 +180,7 @@ function ResultPage() {
           pointerEvents: 'none',
         }}
       >
-        {/* Pペナント ＋ 月桂樹の「1」 */}
+        {/* Pペナント ＋ 順位の「1」 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
           <Pennant p={winner.p} />
           <LaurelRank rank={1} />
@@ -216,14 +221,11 @@ function ResultPage() {
               marginTop: '0.2rem',
               fontSize: 'clamp(1rem, 2.6vw, 1.4rem)',
               fontWeight: 800,
-              color: '#166534',
-              background: '#bbf7d0',
-              padding: '2px 14px',
-              borderRadius: '999px',
-              transform: 'skewX(-6deg)',
+              color: '#4ade80',
+              textShadow: '0 1px 6px rgba(0,0,0,0.6)',
             }}
           >
-            🎉 あなたの勝利！
+            あなたの勝利！
           </span>
         )}
       </div>
@@ -301,58 +303,75 @@ function Pennant({ p }: { p: number }) {
 function LaurelRank({ rank }: { rank: number }) {
   const [c0, c1, c2] = metalOf(rank)
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.1rem', lineHeight: 1 }}>
-      <span style={{ fontSize: 'clamp(1.8rem, 4.5vw, 3rem)', transform: 'scaleX(-1) rotate(8deg)', filter: 'saturate(0.6) brightness(0.9)' }}>
-        🌿
-      </span>
-      <span
-        style={{
-          fontSize: 'clamp(2.6rem, 7vw, 5rem)',
-          fontWeight: 900,
-          fontStyle: 'italic',
-          backgroundImage: `linear-gradient(180deg, ${c0} 0%, ${c1} 52%, ${c2} 100%)`,
-          WebkitBackgroundClip: 'text',
-          backgroundClip: 'text',
-          color: 'transparent',
-          WebkitTextStroke: '1.5px rgba(60,40,0,0.55)',
-          filter: 'drop-shadow(0 3px 3px rgba(0,0,0,0.4))',
-          padding: '0 0.1em',
-        }}
-      >
-        {rank}
-      </span>
-      <span style={{ fontSize: 'clamp(1.8rem, 4.5vw, 3rem)', transform: 'rotate(8deg)', filter: 'saturate(0.6) brightness(0.9)' }}>
-        🌿
-      </span>
+    <span
+      style={{
+        display: 'inline-flex',
+        fontSize: 'clamp(2.6rem, 7vw, 5rem)',
+        fontWeight: 900,
+        fontStyle: 'italic',
+        lineHeight: 1,
+        backgroundImage: `linear-gradient(180deg, ${c0} 0%, ${c1} 52%, ${c2} 100%)`,
+        WebkitBackgroundClip: 'text',
+        backgroundClip: 'text',
+        color: 'transparent',
+        WebkitTextStroke: '1.5px rgba(60,40,0,0.55)',
+        filter: 'drop-shadow(0 3px 3px rgba(0,0,0,0.4))',
+        padding: '0 0.1em',
+      }}
+    >
+      {rank}
     </span>
   )
 }
 
 // 敗者の配置スポット（散らばり方。順位 2位から順に使う）。
 // 中央の勝者を避けて左右へ、手前/奥で大きさに変化をつける。facingDeg で倒れる向きも散らす。
+// bottom は勝者と同じ GROUND_BOTTOM を基準にする（手前 2 体はそのまま＝勝者と同じ接地ライン、
+// 奥 2 体はそこへ少し足して一段上に＝奥行きの遠近感）。勝者だけ持ち上げていた頃は敗者が
+// 画面の下端に張り付いたままで浮いて見えたため、揃えた。
 const FALLEN_SPOTS: {
   style: React.CSSProperties
   facingDeg: number
 }[] = [
   {
-    style: { left: '4%', bottom: '1%', width: 'clamp(170px, 20vw, 280px)', height: 'clamp(140px, 26vh, 240px)' },
+    style: {
+      left: '4%',
+      bottom: GROUND_BOTTOM,
+      width: 'clamp(170px, 20vw, 280px)',
+      height: 'clamp(140px, 26vh, 240px)',
+    },
     facingDeg: -35,
   },
   {
-    style: { right: '4%', bottom: '2%', width: 'clamp(160px, 19vw, 260px)', height: 'clamp(130px, 24vh, 220px)' },
+    style: {
+      right: '4%',
+      bottom: `calc(${GROUND_BOTTOM} + 0.6vh)`,
+      width: 'clamp(160px, 19vw, 260px)',
+      height: 'clamp(130px, 24vh, 220px)',
+    },
     facingDeg: 40,
   },
   {
-    style: { left: '20%', bottom: '14%', width: 'clamp(120px, 14vw, 200px)', height: 'clamp(100px, 18vh, 170px)' },
+    style: {
+      left: '20%',
+      bottom: `calc(${GROUND_BOTTOM} + 12vh)`,
+      width: 'clamp(120px, 14vw, 200px)',
+      height: 'clamp(100px, 18vh, 170px)',
+    },
     facingDeg: 75,
   },
   {
-    style: { right: '20%', bottom: '15%', width: 'clamp(115px, 13vw, 190px)', height: 'clamp(95px, 17vh, 160px)' },
+    style: {
+      right: '20%',
+      bottom: `calc(${GROUND_BOTTOM} + 12.6vh)`,
+      width: 'clamp(115px, 13vw, 190px)',
+      height: 'clamp(95px, 17vh, 160px)',
+    },
     facingDeg: -70,
   },
 ]
 
-// 勝者の 3D 立ち絵（中央・王冠＋後光つき）。名前は上部中央のクラスタが出すのでここは絵だけ。
+// 勝者の 3D 立ち絵（中央・後光つき）。名前は上部中央のクラスタが出すのでここは絵だけ。
 function WinnerStandee({ entry }: { entry: RankEntry }) {
   const hostRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -391,22 +410,6 @@ function WinnerStandee({ entry }: { entry: RankEntry }) {
       />
       {/* 3D キャンバスのホスト（背景透過なので CSS の電脳空間の上にキャラだけ乗る） */}
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
-      {/* 王冠（3D キャラの頭上あたり） */}
-      <span
-        style={{
-          position: 'absolute',
-          top: '3%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          fontSize: '3.4rem',
-          filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
-          animation: 'winnerFloat 3.4s ease-in-out infinite',
-          pointerEvents: 'none',
-          zIndex: 1,
-        }}
-      >
-        👑
-      </span>
     </div>
   )
 }
