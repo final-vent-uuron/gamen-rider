@@ -156,11 +156,6 @@ function SelectPage() {
       {loading && (
         <span style={{ color: '#6b7280', fontSize: '0.8rem' }}>登録ライダーを読み込み中…</span>
       )}
-      {!loading && (
-        <span style={{ color: '#6b7280', fontSize: '0.8rem' }}>
-          ライダーを増やすには <Link to="/auth/register" style={{ color: '#9ca3af' }}>ライダー登録</Link> でカードを追加
-        </span>
-      )}
     </div>
   )
 }

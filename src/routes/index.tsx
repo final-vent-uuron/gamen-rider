@@ -138,10 +138,9 @@ function Home() {
 					}}
 				>
 					{(
-						[
-							{ to: "/select", label: "キャラ選択（デモ）" },
-							{ to: "/auth/register", label: "ライダー登録" },
-						] as const
+						// ライダー登録（/auth/register）への遷移ボタンは意図的に置かない
+						//（URL 直打ち＋簡易パスワードでのみ入れる運営用画面）。
+						[{ to: "/select", label: "キャラ選択（デモ）" }] as const
 					).map((l) => (
 						<Link
 							key={l.to}

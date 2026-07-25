@@ -7,7 +7,90 @@ import { createPoseLandmarker, poseSimilarity } from '../../pose'
 import type { CustomStep, MediaPipeModules, RefPoint } from '../../pose'
 import { RIDER_ROSTER, listRiders, saveRider } from '../../rider-registry'
 
-export const Route = createFileRoute('/auth/register')({ component: RegisterPage })
+export const Route = createFileRoute('/auth/register')({ component: RegisterGate })
+
+// 簡易パスワードゲート。画面からの遷移ボタンは無く、URL 直打ち＋パスワードでだけ入れる
+// （ハッカソン運用: 来場者が誤ってライダー登録をいじらないための軽い柵。セキュリティ目的ではない）。
+const REGISTER_PASSWORD = 'final-vent'
+const UNLOCK_KEY = 'register-unlock' // sessionStorage（タブを閉じるまで再入力不要）
+
+function RegisterGate() {
+  const [unlocked, setUnlocked] = useState(
+    () => typeof window !== 'undefined' && sessionStorage.getItem(UNLOCK_KEY) === '1',
+  )
+  const [input, setInput] = useState('')
+  const [wrong, setWrong] = useState(false)
+
+  if (unlocked) return <RegisterPage />
+
+  const submit = () => {
+    if (input === REGISTER_PASSWORD) {
+      sessionStorage.setItem(UNLOCK_KEY, '1')
+      setUnlocked(true)
+    } else {
+      setWrong(true)
+    }
+  }
+
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '1rem',
+        background: '#0b1220',
+        color: '#fff',
+      }}
+    >
+      <h1 style={{ margin: 0, fontSize: '1.1rem' }}>ライダー登録（運営用）</h1>
+      <input
+        type="password"
+        value={input}
+        autoFocus
+        placeholder="パスワード"
+        onChange={(e) => {
+          setInput(e.target.value)
+          setWrong(false)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') submit()
+        }}
+        style={{
+          padding: '0.6rem 1rem',
+          borderRadius: '8px',
+          border: `1px solid ${wrong ? '#f87171' : '#334155'}`,
+          background: 'rgba(15,23,42,0.8)',
+          color: '#fff',
+          fontSize: '1rem',
+          width: '220px',
+          textAlign: 'center',
+        }}
+      />
+      {wrong && <span style={{ color: '#f87171', fontSize: '0.8rem' }}>パスワードが違います</span>}
+      <button
+        type="button"
+        onClick={submit}
+        style={{
+          padding: '0.55rem 2rem',
+          borderRadius: '8px',
+          border: 'none',
+          background: 'linear-gradient(90deg, #a78bfa, #7c3aed)',
+          color: '#fff',
+          fontWeight: 700,
+          cursor: 'pointer',
+        }}
+      >
+        入る
+      </button>
+      <Link to="/" style={{ color: '#64748b', fontSize: '0.8rem', textDecoration: 'none' }}>
+        ← トップへ戻る
+      </Link>
+    </div>
+  )
+}
 
 type Status = 'loading' | 'running' | 'error'
 // name: ライダー選択 / image: カード画像登録 / pose: 変身ポーズ登録 /
