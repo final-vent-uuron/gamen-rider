@@ -192,7 +192,7 @@ function BattlePage() {
 	const [fvPhase, setFvPhase] = useState<FinalVentPhase>("idle"); // 右下カメラの FV シーケンス
 	const [fvPoseProgress, setFvPoseProgress] =
 		useState<FinalVentPoseProgress | null>(null);
-	// 5部位（右手/左手/右足/左足/ベルト）のペアリング有無。null = 確認中
+	// 4部位（右手/左手/右足/左足）のペアリング有無。null = 確認中
 	const [pairedParts, setPairedParts] = useState<PairedParts | null>(null);
 	// バトル中の各部位の BLE 接続状態（自動再接続・接続ボタンの結果を反映）
 	const [sensorStatuses, setSensorStatuses] = useState<
@@ -202,7 +202,6 @@ function BattlePage() {
 		leftHand: "idle",
 		rightFoot: "idle",
 		leftFoot: "idle",
-		belt: "idle",
 	}));
 	// 各部位の直近インパクト値（HUD のゲージ表示用。~100ms 間引きで反映）
 	const [sensorImpacts, setSensorImpacts] = useState<
@@ -227,7 +226,7 @@ function BattlePage() {
 	const rendererRef = useRef<ArenaRenderer | null>(null);
 	const finalActiveRef = useRef(false); // rAF ループから読む finalActive のミラー
 	const netRef = useRef<BattleNet | null>(null);
-	const hubRef = useRef<SensorHub | null>(null); // バトル中の 5部位センサーハブ（接続ボタンから connectAny() を呼ぶ）
+	const hubRef = useRef<SensorHub | null>(null); // バトル中の 4部位センサーハブ（接続ボタンから connectAny() を呼ぶ）
 	// 自分のライダーのセンサーセット名（<ライダー名>。R2 から非同期に取得）。他ライダー名のデバイス除外用。
 	const sensorSetRef = useRef<string | null>(null);
 	// 振り向き判定用: 両手加速度センサーの直近ヒット時刻（パンチ検出＝ble.ts 側のしきい値と同じ判定を流用）。
@@ -675,8 +674,10 @@ function BattlePage() {
 		const source = createKeyboardSource(handleInput);
 		source.start();
 
-		// ファイナルベント: メーター満タン時に右下カメラでカード→ポーズ→発動。
-		// キーボード L/F とカード UI は開発用バイパスとして残す。
+		// ファイナルベント: メーター満タンの間、右下カメラでカードを探し続ける（この間は
+		// 誰も凍結しない＝自動発動ではない）。実際にカードをかざして認識できた瞬間に
+		// ポーズ相へ進み、そこで初めて SA3 風に全員凍結して発動シーケンスへ入る。
+		// キーボード L/F とカード UI は開発用バイパス（カード無しで即発動）として残す。
 		const fireFinal = () => {
 			const now = Date.now();
 			const selfId = youIdRef.current;
@@ -725,8 +726,11 @@ function BattlePage() {
 				setFvPhase(p);
 				const selfId = youIdRef.current;
 				const now = Date.now();
-				// SA3 風: 溜め開始で全員凍結をサーバーへ通知（＋ローカル予測）
-				if (p === "card" || p === "pose") {
+				// メーター満タン＝即発動ではなく、自分がカードを実際にかざして認識されるまでは
+				// 誰も凍結しない（card 相＝カード探索中はこのプレイヤーのカメラがローカルで
+				// 探しているだけ。他プレイヤーは通常通り動ける）。カードが通って pose 相に
+				// 進んだ、まさに「かざした」瞬間から SA3 風に全員凍結してサーバーへ通知する。
+				if (p === "pose") {
 					net.sendFinalVent(true, p);
 					applyPred((s) => beginFinalVent(s, selfId, p, now));
 				} else if (p === "idle") {
@@ -758,7 +762,7 @@ function BattlePage() {
 			fv.setMeterFull((me?.meter ?? 0) >= ARENA.meterFinalCost);
 		}
 
-		// BLE 加速度センサー（5部位）。ペアリング画面で許可済みなら getDevices で
+		// BLE 加速度センサー（4部位）。ペアリング画面で許可済みなら getDevices で
 		// ダイアログ無しに自動再接続する。非対応環境・未許可のときは HUD の「センサー追加」
 		// ボタン（hubRef.connectAny()）から手動で繋ぐ。届いた入力はキーボードと同じ handleInput へ。
 		const hub = createSensorHub(handleInput, {
@@ -1128,7 +1132,6 @@ function BattlePage() {
 		leftHand: !!pairedParts?.leftHand || liveConnected("leftHand"),
 		rightFoot: !!pairedParts?.rightFoot || liveConnected("rightFoot"),
 		leftFoot: !!pairedParts?.leftFoot || liveConnected("leftFoot"),
-		belt: !!pairedParts?.belt || liveConnected("belt"),
 	};
 
 	return (
@@ -1346,7 +1349,7 @@ function BattlePage() {
 // 常時表示のバッジは置かず、問題があるとき（切断中・相手待ち）だけ WaitingHint /
 // DisconnectedHint で知らせる（オンライン時は何も出さない＝平常時の HUD を静かに保つ）。
 
-// バトル中の 5部位センサー状態＋接続ボタン（HUD 左）。各部位をドットで状態表示し、
+// バトル中の 4部位センサー状態＋接続ボタン（HUD 左）。各部位をドットで状態表示し、
 // 未接続があれば「センサー追加」で connectAny（選んだ実機を名前から部位へ自動振り分け）。
 // ペアリング画面で許可済みなら自動再接続するので、通常このボタンは押さなくてよい。
 // 加速度センサーの生インパクト値の表示レンジ（m/s^2 相当。ファームの IMPACT_THRESHOLD=25 目安）。

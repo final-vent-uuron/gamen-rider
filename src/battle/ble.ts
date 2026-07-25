@@ -128,10 +128,10 @@ export async function getPairedLimbs(): Promise<PairedLimbs> {
 }
 
 // ===========================================================================
-// 5部位（両手・両足・ベルト）マルチデバイス版
+// 4部位（両手・両足）マルチデバイス版
 // ===========================================================================
 // 上の createBleSensorSource は「1本の PunchSensor だけ」を扱う旧 API（battle-test 用に残す）。
-// こちらは右手/左手/右足/左足/ベルトの計5デバイスを同時に扱い、部位ごとにバトル入力へ
+// こちらは右手/左手/右足/左足の計4デバイスを同時に扱い、部位ごとにバトル入力へ
 // マッピングする。各リングは BLE 名で部位を判別するため、ファーム書き込み時に部位ごとの
 // 名前を付ける必要がある（下表）。UUID は当面すべて PunchSensor と同じ想定（同ファーム流用）。
 //
@@ -140,7 +140,6 @@ export async function getPairedLimbs(): Promise<PairedLimbs> {
 //   左手     <ライダー名>_LH / PunchSensor-L            パンチ（左）
 //   右足     <ライダー名>_RF / KickSensor / Punch_RF    キック（右）
 //   左足     <ライダー名>_LF / KickSensor-L / Punch_LF  キック（左）
-//   ベルト   <ライダー名>_BELT / BeltSensor             （未割当。変身/ファイナルベント検出用に予約）
 //
 // 命名規則（<ライダー名>_<部位コード>。例: Arduino_LF）が本番の量産センサーの正式命名。
 // <ライダー名> は登録ライダーの sensorSet（R2 保存。例: "Arduino"）と紐づき、SensorHub の
@@ -150,7 +149,7 @@ export async function getPairedLimbs(): Promise<PairedLimbs> {
 //
 // ※ ハード/動作は未確定（CLAUDE.md）。入力の割り当ては SENSOR_PARTS の emit 1 か所で変えられる。
 
-export type SensorPartKey = 'rightHand' | 'leftHand' | 'rightFoot' | 'leftFoot' | 'belt'
+export type SensorPartKey = 'rightHand' | 'leftHand' | 'rightFoot' | 'leftFoot'
 
 export interface SensorPartDef {
   key: SensorPartKey
@@ -209,22 +208,12 @@ export const SENSOR_PARTS: SensorPartDef[] = [
     charUuid: PUNCH_CHAR_UUID,
     emit: () => ({ kind: 'kick', side: 'left' }),
   },
-  {
-    key: 'belt',
-    label: 'ベルト',
-    emoji: '🔶',
-    partCode: 'BELT',
-    namePrefix: 'BeltSensor',
-    serviceUuid: PUNCH_SERVICE_UUID,
-    charUuid: PUNCH_CHAR_UUID,
-    emit: null, // 変身/ファイナルベント検出用に予約（バトル入力は未割当）
-  },
 ]
 
 export type PairedParts = Record<SensorPartKey, boolean>
 
 function emptyPaired(): PairedParts {
-  return { rightHand: false, leftHand: false, rightFoot: false, leftFoot: false, belt: false }
+  return { rightHand: false, leftHand: false, rightFoot: false, leftFoot: false }
 }
 
 // namePrefix を配列へ正規化（単一文字列も許容）。
@@ -233,7 +222,7 @@ function namePrefixes(def: SensorPartDef): string[] {
 }
 
 // <ライダー名>_<部位コード> 命名（例: Arduino_LF）の解析。
-const SENSOR_NAME_RE = /^([A-Za-z]+)_(RH|LH|RF|LF|BELT)/
+const SENSOR_NAME_RE = /^([A-Za-z]+)_(RH|LH|RF|LF)/
 
 export function parseSensorName(name: string): { rider: string; key: SensorPartKey } | null {
   const m = SENSOR_NAME_RE.exec(name)
@@ -268,7 +257,7 @@ function partDef(key: SensorPartKey): SensorPartDef {
   return d
 }
 
-// 5部位それぞれの「ペアリング（許可）済みか」。接続はせず、許可済みデバイスの名前を見るだけ。
+// 4部位それぞれの「ペアリング（許可）済みか」。接続はせず、許可済みデバイスの名前を見るだけ。
 // sensorSet（ライダー名。例: "Arduino"）を渡すと他ライダー名のデバイスは数えない。
 export async function getPairedParts(sensorSet: string | null = null): Promise<PairedParts> {
   const out = emptyPaired()
@@ -304,7 +293,7 @@ export interface SensorHubOptions {
   bothHandPunchSuppressMs?: number
 }
 
-// 5部位を同時に扱うセンサーハブ。部位ごとに GATT 接続を保持し、届いた PUNCH 通知を
+// 4部位を同時に扱うセンサーハブ。部位ごとに GATT 接続を保持し、届いた PUNCH 通知を
 // SENSOR_PARTS.emit でバトル入力へ変換して onInput へ流す（キーボードと同じ InputHandler）。
 export interface SensorHub extends InputSource {
   // 特定部位を接続（初回のみ必要・ユーザー操作から）。選ばれた実機の名前で部位を自動振り分け。
@@ -453,7 +442,7 @@ export function createSensorHub(
   }
 
   // 許可済みデバイスをダイアログ無しで自動再接続（ページを開くだけで復元）。
-  // 5部位を並列で接続する（直列だと GATT 接続の待ち時間が台数倍になり、/pairing → /battle の
+  // 4部位を並列で接続する（直列だと GATT 接続の待ち時間が台数倍になり、/pairing → /battle の
   // 画面遷移直後に「まだ何も繋がってない」空白時間が体感できるほど伸びていたため）。
   const autoConnectAll = async () => {
     const bt = bluetoothApi()

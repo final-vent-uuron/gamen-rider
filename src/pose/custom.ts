@@ -31,7 +31,7 @@ export interface CustomRoutine {
 
 // 実プレイでの判定は登録時のしきい値より少し緩める（登録済みライダー分にも即反映されるよう、
 // ここで一律に下げる。登録し直さないと効かない minScore 自体は変えない）。
-const RUNTIME_SCORE_LENIENCY = 6
+const RUNTIME_SCORE_LENIENCY = 10
 const RUNTIME_SCORE_MIN = 50 // どれだけ緩めても下回らない下限（何でも通ってしまう事故防止）
 
 // CustomStep を実行可能な PoseStep（test 関数つき）へ変換

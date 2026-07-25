@@ -16,10 +16,10 @@ type Phase = 'name' | 'image' | 'pose' | 'final-pose' | 'preview'
 type ImageSource = 'camera' | 'upload'
 
 // スナップショットポーズの既定値（pose.tsx の作成モードと同じ感覚の値）
-const DEFAULT_MIN_SCORE = 85 // 適当なポーズでも通ってしまう問題があったため少し厳しめ（元80）
+const DEFAULT_MIN_SCORE = 80 // 読み取りやすさ優先で 80（一時 85 に上げていたが認証が通りにくくなったため戻した）
 const DEFAULT_HOLD_MS = 700
 
-// 選べるセンサーセット名（BLE 名 <ライダー名>_RH/…LF/…BELT の <ライダー名> 部分。
+// 選べるセンサーセット名（BLE 名 <ライダー名>_RH/…LF の <ライダー名> 部分。
 // ロースターの名前と同じにしてある＝実機ラベルもこの表記に合わせること）
 const SENSOR_SETS = RIDER_ROSTER.map((r) => r.name)
 

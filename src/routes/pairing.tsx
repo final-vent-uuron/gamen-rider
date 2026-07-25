@@ -10,11 +10,10 @@ import { RIDER_ROUTINES } from '../pose'
 import { riderSensorSet } from '../rider-registry'
 
 // センサーペアリング画面（変身成立 → バトルの間のステップ）。
-// 右手・左手・右足・左足・ベルトの計5デバイスを、それぞれ BLE でペアリングして試す。
+// 右手・左手・右足・左足の計4デバイスを、それぞれ BLE でペアリングして試す。
 // 入力が届くと対応するリングが光り、中央のモデルがその技のモーションを再生する
 // ＝センサーが通っていることが一目で分かる。
 //   - 手/足: 加速度センサー（PunchSensor / KickSensor 系）。パンチ/キック検出。
-//   - ベルト: BeltSensor（変身/ファイナルベント検出用に予約。入力割り当ては未確定）。
 // 導線: /select・/auth → /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
 
 export const Route = createFileRoute('/pairing')({
@@ -25,13 +24,12 @@ export const Route = createFileRoute('/pairing')({
   component: PairingPage,
 })
 
-// 部位 → 入力テスト時にモデルへ振らせるモーション（ベルトは専用モーション無し）。
+// 部位 → 入力テスト時にモデルへ振らせるモーション。
 const ACTION_BY_PART: Record<SensorPartKey, PresenterAction | null> = {
   rightHand: 'punch',
   leftHand: 'punch',
   rightFoot: 'kick',
   leftFoot: 'kick',
-  belt: null,
 }
 
 const PART_TILE_COLOR: Record<SensorPartKey, string> = {
@@ -39,7 +37,6 @@ const PART_TILE_COLOR: Record<SensorPartKey, string> = {
   leftHand: '#fb923c',
   rightFoot: '#38bdf8',
   leftFoot: '#22d3ee',
-  belt: '#a78bfa',
 }
 
 function emptyStatuses(): Record<SensorPartKey, BleStatus> {
@@ -48,7 +45,6 @@ function emptyStatuses(): Record<SensorPartKey, BleStatus> {
     leftHand: 'idle',
     rightFoot: 'idle',
     leftFoot: 'idle',
-    belt: 'idle',
   }
 }
 
@@ -97,7 +93,7 @@ function PairingPage() {
     }
   }, [riderId])
 
-  // 入力（5部位の BLE センサー＋キーボード）→ リング発光＋モデルのモーション再生。
+  // 入力（4部位の BLE センサー＋キーボード）→ リング発光＋モデルのモーション再生。
   useEffect(() => {
     // 部位のタイルを一瞬光らせる。
     const flashPart = (key: SensorPartKey) => {
@@ -122,7 +118,7 @@ function PairingPage() {
       }
     }
 
-    // BLE センサー（5部位）。ペアリング済みなら start で自動再接続。各部位の接続は下のタイルの
+    // BLE センサー（4部位）。ペアリング済みなら start で自動再接続。各部位の接続は下のタイルの
     // 「接続」ボタン（hub.connect(key)）から。届いた入力はモデルとタイルへ反映する。
     const hub = createSensorHub(
       // onInput はモデルの向き等に使わず、per 部位の onImpact 側で見た目を焚くのでここは空。
@@ -261,7 +257,7 @@ function PairingPage() {
         )}
       </div>
 
-      {/* 5部位のセンサータイル */}
+      {/* 4部位のセンサータイル */}
       <div
         style={{
           display: 'flex',
@@ -281,7 +277,6 @@ function PairingPage() {
             status={statuses[p.key]}
             active={!!flash[p.key]}
             impact={impacts[p.key]}
-            reserved={p.emit === null}
             onConnect={() => hubRef.current?.connect(p.key)}
             onRelease={() => hubRef.current?.release(p.key)}
           />
@@ -323,3 +318,171 @@ function PairingPage() {
   )
 }
 
+// ---- センサータイル（部位ごとの接続 UI＋入力テスト） ----------------------
+// リング（輪）＝リング本体のイメージ。入力が届いた瞬間に強く発光する。
+
+function SensorTile({
+  label,
+  emoji,
+  color,
+  status,
+  active,
+  impact,
+  onConnect,
+  onRelease,
+}: {
+  label: string
+  emoji: string
+  color: string
+  status: BleStatus
+  active: boolean
+  impact?: number
+  onConnect: () => void
+  onRelease: () => void
+}) {
+  const connected = status === 'connected'
+  return (
+    <div
+      style={{
+        width: '150px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '0.45rem',
+        padding: '0.7rem 0.5rem',
+        borderRadius: '12px',
+        border: `1px solid ${connected ? color : '#334155'}`,
+        background: connected ? `${color}14` : 'rgba(15,23,42,0.6)',
+      }}
+    >
+      {/* リング（輪） */}
+      <div
+        style={{
+          width: '58px',
+          height: '58px',
+          borderRadius: '50%',
+          border: `6px solid ${color}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.5rem',
+          boxShadow: active
+            ? `0 0 26px ${color}, inset 0 0 14px ${color}`
+            : connected
+              ? `0 0 8px ${color}66, inset 0 0 4px ${color}44`
+              : 'none',
+          opacity: connected ? 1 : 0.5,
+          transition: 'box-shadow 0.12s, opacity 0.2s',
+        }}
+      >
+        {emoji}
+      </div>
+      <span style={{ fontWeight: 900, fontSize: '0.95rem', color }}>{label}</span>
+      <BleBadge status={status} />
+      {connected && <ImpactMeter impact={impact ?? 0} flash={active} />}
+      {connected ? (
+        <button type="button" style={btn('#9ca3af')} onClick={onRelease}>
+          手放す
+        </button>
+      ) : (
+        <button
+          type="button"
+          style={btn(status === 'connecting' ? '#6b7280' : color)}
+          disabled={status === 'connecting' || status === 'unsupported'}
+          onClick={onConnect}
+        >
+          {status === 'connecting' ? '接続中…' : '📡 接続'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ---- 小物（battle-test と同系の BLE 表示） --------------------------------
+
+function btn(color: string): React.CSSProperties {
+  return {
+    padding: '0.3rem 0.9rem',
+    borderRadius: '8px',
+    border: `2px solid ${color}`,
+    background: 'transparent',
+    color,
+    fontWeight: 'bold',
+    fontSize: '0.8rem',
+    cursor: 'pointer',
+  }
+}
+
+function BleBadge({ status }: { status: BleStatus }) {
+  const map: Record<BleStatus, { label: string; color: string }> = {
+    idle: { label: '未接続', color: '#9ca3af' },
+    unsupported: { label: '非対応ブラウザ', color: '#f87171' },
+    connecting: { label: '接続中…', color: '#fbbf24' },
+    connected: { label: '接続済み', color: '#34d399' },
+    disconnected: { label: '切断（再接続中…）', color: '#fbbf24' },
+    error: { label: 'エラー', color: '#f87171' },
+  }
+  const { label, color } = map[status]
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        fontSize: '0.72rem',
+        color,
+        border: `1px solid ${color}55`,
+        borderRadius: '999px',
+        padding: '2px 10px',
+      }}
+    >
+      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: color }} />
+      {label}
+    </span>
+  )
+}
+
+// センサー生値のモニタ。ファームのしきい値(25)を黄線で示し、超えた瞬間が見える。
+function ImpactMeter({ impact, flash }: { impact: number; flash: boolean }) {
+  const MAX = 40 // 表示レンジ（m/s^2 相当）
+  const THRESHOLD = 25 // Arduino 側 IMPACT_THRESHOLD と合わせる
+  const pct = Math.min(100, (impact / MAX) * 100)
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+      <span style={{ fontSize: '0.7rem', color: '#9ca3af', fontFamily: 'monospace', width: '2.4em', textAlign: 'right' }}>
+        {impact.toFixed(1)}
+      </span>
+      <span
+        style={{
+          position: 'relative',
+          width: '90px',
+          height: '9px',
+          background: '#111827',
+          borderRadius: '5px',
+          overflow: 'hidden',
+          display: 'inline-block',
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: `${pct}%`,
+            background: flash ? '#f87171' : '#38bdf8',
+            transition: 'width 0.08s linear',
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            left: `${(THRESHOLD / MAX) * 100}%`,
+            top: 0,
+            bottom: 0,
+            width: '2px',
+            background: '#fbbf24',
+          }}
+        />
+      </span>
+    </span>
+  )
+}
