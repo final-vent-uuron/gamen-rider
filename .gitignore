@@ -8,3 +8,6 @@ dist
 src/assets/riders/
 public/model/
 test/
+
+# wrangler ローカルシークレット（REGISTER_PASSWORD 等）
+.dev.vars
