@@ -195,6 +195,9 @@ function BattlePage() {
 	const [camGuard, setCamGuard] = useState(false); // カメラがガードポーズを認識中か（表示用）
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
 	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
+	// 横向き中はセンサー入力（パンチ/キック/ジャンプ/走行）を無効化するための ref ミラー
+	//（振り向きジェスチャー＝両手振りだけを通す。横向きで腕を振っても誤パンチにならない）。
+	const camSideRef = useRef(false);
 	const [fvPhase, setFvPhase] = useState<FinalVentPhase>("idle"); // 右下カメラの FV シーケンス
 	const [fvPoseProgress, setFvPoseProgress] =
 		useState<FinalVentPoseProgress | null>(null);
@@ -748,6 +751,7 @@ function BattlePage() {
 				if (p === "card" || p === "pose" || p === "fire") {
 					setGuardPart("cam", false);
 					setCamGuard(false);
+					camSideRef.current = false;
 					setCamSide(false);
 				} else if (p === "idle") {
 					// mute 中にワーカーは on のまま変化しないことがあるので、解除時に最新値を戻す
@@ -772,7 +776,13 @@ function BattlePage() {
 		// 経由でそのまま引き継ぐ（画面遷移で GATT を切らない＝再ペアリング不要）。未接続分は
 		// start() の自動再接続、または HUD の「センサー追加」ボタン（hubRef.connectAny()）から。
 		const hubHandlers = {
-			onInput: handleInput,
+			// 横向き（振り向き態勢）中はセンサー入力を出さない。振り向きジェスチャーで腕を
+			// 振ったときの誤パンチ・誤ジャンプ防止（振り向き自体は onImpact のヒット記録 AND
+			// カメラ横向きで判定するので、ここで落としても影響しない）。キーボードは対象外。
+			onInput: (input: BattleInput) => {
+				if (camSideRef.current) return;
+				handleInput(input);
+			},
 			onStatus: (key: SensorPartKey, s: BleStatus) =>
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
 			onImpact: (key: SensorPartKey, impact: number, hit: boolean) => {
@@ -857,9 +867,11 @@ function BattlePage() {
 			// パンチ判定（ble.ts の同じしきい値）を出していたとき（AND 条件。誤爆防止）。
 			(side) => {
 				if (fv.isCamMuted()) {
+					camSideRef.current = false;
 					setCamSide(false);
 					return;
 				}
+				camSideRef.current = side;
 				setCamSide(side);
 				if (side) {
 					const now = Date.now();
@@ -913,7 +925,9 @@ function BattlePage() {
 				const leftHandRightFoot =
 					stepNow - limb.leftHand < RUN_HOLD_MS &&
 					stepNow - limb.rightFoot < RUN_HOLD_MS;
-				const stepping = rightHandLeftFoot || leftHandRightFoot;
+				// 横向き（振り向き態勢）中はセンサー走行も止める（腕振りを走行に誤検出しない）。
+				const stepping =
+					!camSideRef.current && (rightHandLeftFoot || leftHandRightFoot);
 				const selfFacing = predRef.current?.players[0]?.facing ?? 1;
 				const nextSensorDir: -1 | 0 | 1 = stepping
 					? selfFacing >= 0
