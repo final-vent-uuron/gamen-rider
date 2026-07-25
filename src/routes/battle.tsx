@@ -14,6 +14,7 @@ import {
 	applyThrow,
 	applyTurn,
 	SENSOR_PARTS,
+	acquireSensorHub,
 	battleCardsFor,
 	beginFinalVent,
 	connectBattle,
@@ -21,8 +22,8 @@ import {
 	createCameraGuardSource,
 	createFinalVentController,
 	createKeyboardSource,
-	createSensorHub,
 	createSfx,
+	detachSensorHub,
 	endFinalVent,
 	getPairedParts,
 	getStoredBgmVolume,
@@ -762,13 +763,14 @@ function BattlePage() {
 			fv.setMeterFull((me?.meter ?? 0) >= ARENA.meterFinalCost);
 		}
 
-		// BLE 加速度センサー（4部位）。ペアリング画面で許可済みなら getDevices で
-		// ダイアログ無しに自動再接続する。非対応環境・未許可のときは HUD の「センサー追加」
-		// ボタン（hubRef.connectAny()）から手動で繋ぐ。届いた入力はキーボードと同じ handleInput へ。
-		const hub = createSensorHub(handleInput, {
-			onStatus: (key, s) =>
+		// BLE 加速度センサー（4部位）。/pairing で繋いだ接続を共有ハブ（sensor-hub-shared）
+		// 経由でそのまま引き継ぐ（画面遷移で GATT を切らない＝再ペアリング不要）。未接続分は
+		// start() の自動再接続、または HUD の「センサー追加」ボタン（hubRef.connectAny()）から。
+		const hubHandlers = {
+			onInput: handleInput,
+			onStatus: (key: SensorPartKey, s: BleStatus) =>
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
-			onImpact: (key, impact, hit) => {
+			onImpact: (key: SensorPartKey, impact: number, hit: boolean) => {
 				// HUD ゲージ用の生値（高頻度なので ref に貯め、UI 反映は ~100ms に間引く）。
 				sensorImpactsRef.current = {
 					...sensorImpactsRef.current,
@@ -799,7 +801,8 @@ function BattlePage() {
 			sensorSet: () => sensorSetRef.current,
 			// 両手をほぼ同時に振ったとき（＝振り向きジェスチャー）は誤パンチを出さない。
 			bothHandPunchSuppressMs: BOTH_HAND_PUNCH_SUPPRESS_MS,
-		});
+		};
+		const hub = acquireSensorHub(hubHandlers);
 		hubRef.current = hub;
 		// 自分のライダーのセンサーセット名。/pairing から渡ってきていればそれをそのまま使い
 		// （画面遷移直後に「まだ何も繋がってない」空白時間ができるのを防ぐ）、無ければ
@@ -869,7 +872,8 @@ function BattlePage() {
 		return () => {
 			source.stop();
 			hubCancelled = true;
-			hub.stop(); // 切断のみ（許可は保持）。次の画面/再入場で自動再接続できる
+			// hub.stop() はしない: GATT を維持し、/result → 再戦や /pairing 再訪でも繋ぎ直し不要にする。
+			detachSensorHub(hubHandlers);
 			hubRef.current = null;
 			camSource.stop();
 			fv.stop();

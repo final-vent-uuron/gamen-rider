@@ -1,7 +1,7 @@
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 
-import { SENSOR_PARTS, createKeyboardSource, createSensorHub } from '../battle'
+import { SENSOR_PARTS, acquireSensorHub, createKeyboardSource, detachSensorHub } from '../battle'
 import { playHenshinBgm } from '../battle/bgm'
 import type { BattleInput, BleStatus, SensorHub, SensorPartKey } from '../battle'
 import { SensorTile } from '../battle/sensor-tile'
@@ -118,22 +118,21 @@ function PairingPage() {
       }
     }
 
-    // BLE センサー（4部位）。ペアリング済みなら start で自動再接続。各部位の接続は下のタイルの
-    // 「接続」ボタン（hub.connect(key)）から。届いた入力はモデルとタイルへ反映する。
-    const hub = createSensorHub(
-      // onInput はモデルの向き等に使わず、per 部位の onImpact 側で見た目を焚くのでここは空。
-      () => {},
-      {
-        onStatus: (key, status) => setStatuses((s) => ({ ...s, [key]: status })),
-        onImpact: (key, impact, hit) => {
-          setImpacts((m) => ({ ...m, [key]: impact }))
-          if (!hit) return
-          const def = SENSOR_PARTS.find((p) => p.key === key)
-          triggerVisual(key, ACTION_BY_PART[key], `${def?.emoji ?? ''} ${def?.label ?? ''}`)
-        },
-        sensorSet: () => sensorSetRef.current,
+    // BLE センサー（4部位）。共有ハブ（sensor-hub-shared）を使い、ここで繋いだ接続を
+    // /battle へそのまま持ち越す。各部位の接続は下のタイルの「接続」ボタン（hub.connect(key)）から。
+    const handlers = {
+      // onInput はモデルの向き等に使わず、per 部位の onImpact 側で見た目を焚くので未指定。
+      onStatus: (key: SensorPartKey, status: BleStatus) =>
+        setStatuses((s) => ({ ...s, [key]: status })),
+      onImpact: (key: SensorPartKey, impact: number, hit: boolean) => {
+        setImpacts((m) => ({ ...m, [key]: impact }))
+        if (!hit) return
+        const def = SENSOR_PARTS.find((p) => p.key === key)
+        triggerVisual(key, ACTION_BY_PART[key], `${def?.emoji ?? ''} ${def?.label ?? ''}`)
       },
-    )
+      sensorSet: () => sensorSetRef.current,
+    }
+    const hub = acquireSensorHub(handlers)
     hubRef.current = hub
     // 自分のライダーのセンサーセット名を R2 から引いてから自動接続を始める
     //（先に始めると他ライダー名の許可済みデバイスを拾い得るため）。
@@ -171,7 +170,8 @@ function PairingPage() {
     return () => {
       cancelled = true
       keyboard.stop()
-      hub.stop()
+      // hub.stop() はしない: GATT を切らずに /battle へ持ち越す（sensor-hub-shared 参照）。
+      detachSensorHub(handlers)
       hubRef.current = null
       window.clearTimeout(idleTimerRef.current)
       for (const t of Object.values(flashTimerRef.current)) window.clearTimeout(t)
