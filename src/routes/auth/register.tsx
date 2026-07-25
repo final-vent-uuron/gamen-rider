@@ -19,7 +19,7 @@ type ImageSource = 'camera' | 'upload'
 const DEFAULT_MIN_SCORE = 85 // 適当なポーズでも通ってしまう問題があったため少し厳しめ（元80）
 const DEFAULT_HOLD_MS = 700
 
-// 選べるセンサーセット名（BLE 名 <ライダー名>_RH/…LF/…BELT の <ライダー名> 部分。
+// 選べるセンサーセット名（BLE 名 <ライダー名>_RH/…LF の <ライダー名> 部分。
 // ロースターの名前と同じにしてある＝実機ラベルもこの表記に合わせること）
 const SENSOR_SETS = RIDER_ROSTER.map((r) => r.name)
 

@@ -9,11 +9,10 @@ import { RIDER_ROUTINES } from '../pose'
 import { riderSensorSet } from '../rider-registry'
 
 // センサーペアリング画面（変身成立 → バトルの間のステップ）。
-// 右手・左手・右足・左足・ベルトの計5デバイスを、それぞれ BLE でペアリングして試す。
+// 右手・左手・右足・左足の計4デバイスを、それぞれ BLE でペアリングして試す。
 // 入力が届くと対応するリングが光り、中央のモデルがその技のモーションを再生する
 // ＝センサーが通っていることが一目で分かる。
 //   - 手/足: 加速度センサー（PunchSensor / KickSensor 系）。パンチ/キック検出。
-//   - ベルト: BeltSensor（変身/ファイナルベント検出用に予約。入力割り当ては未確定）。
 // 導線: /select・/auth → /pairing → /battle。rider/name は /battle と同じクエリで持ち回す。
 
 export const Route = createFileRoute('/pairing')({
@@ -24,13 +23,12 @@ export const Route = createFileRoute('/pairing')({
   component: PairingPage,
 })
 
-// 部位 → 入力テスト時にモデルへ振らせるモーション（ベルトは専用モーション無し）。
+// 部位 → 入力テスト時にモデルへ振らせるモーション。
 const ACTION_BY_PART: Record<SensorPartKey, PresenterAction | null> = {
   rightHand: 'punch',
   leftHand: 'punch',
   rightFoot: 'kick',
   leftFoot: 'kick',
-  belt: null,
 }
 
 const PART_TILE_COLOR: Record<SensorPartKey, string> = {
@@ -38,7 +36,6 @@ const PART_TILE_COLOR: Record<SensorPartKey, string> = {
   leftHand: '#fb923c',
   rightFoot: '#38bdf8',
   leftFoot: '#22d3ee',
-  belt: '#a78bfa',
 }
 
 function emptyStatuses(): Record<SensorPartKey, BleStatus> {
@@ -47,7 +44,6 @@ function emptyStatuses(): Record<SensorPartKey, BleStatus> {
     leftHand: 'idle',
     rightFoot: 'idle',
     leftFoot: 'idle',
-    belt: 'idle',
   }
 }
 
@@ -96,7 +92,7 @@ function PairingPage() {
     }
   }, [riderId])
 
-  // 入力（5部位の BLE センサー＋キーボード）→ リング発光＋モデルのモーション再生。
+  // 入力（4部位の BLE センサー＋キーボード）→ リング発光＋モデルのモーション再生。
   useEffect(() => {
     // 部位のタイルを一瞬光らせる。
     const flashPart = (key: SensorPartKey) => {
@@ -121,7 +117,7 @@ function PairingPage() {
       }
     }
 
-    // BLE センサー（5部位）。ペアリング済みなら start で自動再接続。各部位の接続は下のタイルの
+    // BLE センサー（4部位）。ペアリング済みなら start で自動再接続。各部位の接続は下のタイルの
     // 「接続」ボタン（hub.connect(key)）から。届いた入力はモデルとタイルへ反映する。
     const hub = createSensorHub(
       // onInput はモデルの向き等に使わず、per 部位の onImpact 側で見た目を焚くのでここは空。
@@ -260,7 +256,7 @@ function PairingPage() {
         )}
       </div>
 
-      {/* 5部位のセンサータイル */}
+      {/* 4部位のセンサータイル */}
       <div
         style={{
           display: 'flex',
@@ -280,7 +276,6 @@ function PairingPage() {
             status={statuses[p.key]}
             active={!!flash[p.key]}
             impact={impacts[p.key]}
-            reserved={p.emit === null}
             onConnect={() => hubRef.current?.connect(p.key)}
             onRelease={() => hubRef.current?.release(p.key)}
           />
@@ -332,7 +327,6 @@ function SensorTile({
   status,
   active,
   impact,
-  reserved,
   onConnect,
   onRelease,
 }: {
@@ -342,7 +336,6 @@ function SensorTile({
   status: BleStatus
   active: boolean
   impact?: number
-  reserved: boolean // ベルト等、バトル入力が未割当の部位
   onConnect: () => void
   onRelease: () => void
 }) {
@@ -383,14 +376,9 @@ function SensorTile({
       >
         {emoji}
       </div>
-      <span style={{ fontWeight: 900, fontSize: '0.95rem', color }}>
-        {label}
-        {reserved && (
-          <span style={{ fontSize: '0.6rem', color: '#9ca3af', marginLeft: '4px' }}>(予約)</span>
-        )}
-      </span>
+      <span style={{ fontWeight: 900, fontSize: '0.95rem', color }}>{label}</span>
       <BleBadge status={status} />
-      {connected && !reserved && <ImpactMeter impact={impact ?? 0} flash={active} />}
+      {connected && <ImpactMeter impact={impact ?? 0} flash={active} />}
       {connected ? (
         <button type="button" style={btn('#9ca3af')} onClick={onRelease}>
           手放す
