@@ -26,6 +26,23 @@ export async function riderSensorSet(riderId: string): Promise<string | null> {
   }
 }
 
+/**
+ * ライダー登録画面の簡易パスワードをサーバーで照合する（POST /riders/unlock）。
+ * 正解は Worker のシークレット REGISTER_PASSWORD。フロントのバンドルには値を持たない。
+ * 通信エラー・サーバー未設定は throw（呼び出し側でメッセージ表示）。
+ */
+export async function verifyRegisterPassword(password: string): Promise<boolean> {
+  const res = await fetch(`${apiBase()}/riders/unlock`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+  if (res.ok) return true
+  if (res.status === 401) return false
+  const detail = (await res.json().catch(() => null)) as { error?: string } | null
+  throw new Error(detail?.error ?? `照合に失敗しました (${res.status})`)
+}
+
 /** 登録済みライダー一覧を画像（data URL）つきで返す。 */
 export async function listRiders(): Promise<RegisteredRiderWithImage[]> {
   const res = await fetch(`${apiBase()}/riders`)

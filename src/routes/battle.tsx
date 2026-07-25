@@ -13,7 +13,10 @@ import {
 	applyJump,
 	applyThrow,
 	applyTurn,
+	BgmVolumeControl,
+	FullscreenButton,
 	SENSOR_PARTS,
+	acquireSensorHub,
 	battleCardsFor,
 	beginFinalVent,
 	connectBattle,
@@ -21,14 +24,12 @@ import {
 	createCameraGuardSource,
 	createFinalVentController,
 	createKeyboardSource,
-	createSensorHub,
 	createSfx,
+	detachSensorHub,
 	endFinalVent,
 	getPairedParts,
-	getStoredBgmVolume,
 	meterStocks,
 	resolveFinalVentCardRefs,
-	setStoredBgmVolume,
 	stepBattle,
 } from "../battle";
 import type {
@@ -105,6 +106,18 @@ const TURN_HAND_WINDOW_MS = 500;
 // 検出されたら両方とも誤パンチとして出さない（ble.ts の bothHandPunchSuppressMs 参照）。
 // 片手だけなら delay 分だけ遅れて通常どおりパンチが出る。
 const BOTH_HAND_PUNCH_SUPPRESS_MS = 100;
+
+// 掴み: 両手センサーほぼ同時ヒットで ble.ts が throw を発火する。ただし振り向き
+//（両手振り＋カメラ横向き）と同じ腕の動きなので、この ms だけ待って横向きへ変わらなかった
+// ときだけ掴みとして確定する（横向きになったら振り向きに譲って破棄）。カメラの向き検出は
+// デバウンス込みで腕振りより遅れて届くため、TURN_HAND_WINDOW_MS(500) に近い値にしてある。
+const SENSOR_THROW_CONFIRM_MS = 400;
+
+// ジャンプ: カメラで顔（鼻）がフレーム上端より上に見切れたら発動（実際に跳ぶと頭が
+// 画角から出る想定。加速度センサーは使わない＝跳ぶとき両手が動いても誤入力にならない）。
+// 一度フレーム内に顔が戻るまでは再発動しない（エッジ検出）＋短いクールダウン。
+const JUMP_FACE_TOP_Y = 0.02; // 正規化 y がこの値未満 = 上に見切れたとみなす
+const JUMP_FACE_COOLDOWN_MS = 700;
 
 // 走行: 実際の走る動作（右手と左足、左手と右足が対になって振れるクロス歩行）に合わせ、
 // 対角の手足ペア（右手+左足 or 左手+右足）が直近 RUN_HOLD_MS 以内にどちらも反応してたら
@@ -189,6 +202,9 @@ function BattlePage() {
 	const [camGuard, setCamGuard] = useState(false); // カメラがガードポーズを認識中か（表示用）
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
 	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
+	// 横向き中はセンサー入力（パンチ/キック/ジャンプ/走行）を無効化するための ref ミラー
+	//（振り向きジェスチャー＝両手振りだけを通す。横向きで腕を振っても誤パンチにならない）。
+	const camSideRef = useRef(false);
 	const [fvPhase, setFvPhase] = useState<FinalVentPhase>("idle"); // 右下カメラの FV シーケンス
 	const [fvPoseProgress, setFvPoseProgress] =
 		useState<FinalVentPoseProgress | null>(null);
@@ -742,6 +758,7 @@ function BattlePage() {
 				if (p === "card" || p === "pose" || p === "fire") {
 					setGuardPart("cam", false);
 					setCamGuard(false);
+					camSideRef.current = false;
 					setCamSide(false);
 				} else if (p === "idle") {
 					// mute 中にワーカーは on のまま変化しないことがあるので、解除時に最新値を戻す
@@ -762,13 +779,33 @@ function BattlePage() {
 			fv.setMeterFull((me?.meter ?? 0) >= ARENA.meterFinalCost);
 		}
 
-		// BLE 加速度センサー（4部位）。ペアリング画面で許可済みなら getDevices で
-		// ダイアログ無しに自動再接続する。非対応環境・未許可のときは HUD の「センサー追加」
-		// ボタン（hubRef.connectAny()）から手動で繋ぐ。届いた入力はキーボードと同じ handleInput へ。
-		const hub = createSensorHub(handleInput, {
-			onStatus: (key, s) =>
+		// BLE 加速度センサー（4部位）。/pairing で繋いだ接続を共有ハブ（sensor-hub-shared）
+		// 経由でそのまま引き継ぐ（画面遷移で GATT を切らない＝再ペアリング不要）。未接続分は
+		// start() の自動再接続、または HUD の「センサー追加」ボタン（hubRef.connectAny()）から。
+		let sensorThrowTimer = 0; // 掴み確定待ちのタイマー（横向きに変わったら破棄）
+		// 顔見切れジャンプ用（エッジ検出＋クールダウン）
+		let faceWasUp = false;
+		let lastFaceJumpAt = 0;
+		const hubHandlers = {
+			// 横向き（振り向き態勢）中はセンサー入力を出さない。振り向きジェスチャーで腕を
+			// 振ったときの誤パンチ防止（振り向き自体は onImpact のヒット記録 AND
+			// カメラ横向きで判定するので、ここで落としても影響しない）。キーボードは対象外。
+			onInput: (input: BattleInput) => {
+				if (camSideRef.current) return;
+				// 両手同時振り＝掴み。振り向きと同じ腕の動きなので少し待って確定させる。
+				if (input.kind === "throw") {
+					window.clearTimeout(sensorThrowTimer);
+					sensorThrowTimer = window.setTimeout(() => {
+						if (camSideRef.current) return; // 横向きに変わった＝振り向きだった
+						handleInput(input);
+					}, SENSOR_THROW_CONFIRM_MS);
+					return;
+				}
+				handleInput(input);
+			},
+			onStatus: (key: SensorPartKey, s: BleStatus) =>
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
-			onImpact: (key, impact, hit) => {
+			onImpact: (key: SensorPartKey, impact: number, hit: boolean) => {
 				// HUD ゲージ用の生値（高頻度なので ref に貯め、UI 反映は ~100ms に間引く）。
 				sensorImpactsRef.current = {
 					...sensorImpactsRef.current,
@@ -797,9 +834,10 @@ function BattlePage() {
 					lastLimbStepAtRef.current.leftFoot = Date.now();
 			},
 			sensorSet: () => sensorSetRef.current,
-			// 両手をほぼ同時に振ったとき（＝振り向きジェスチャー）は誤パンチを出さない。
+			// 両手ほぼ同時ヒットはパンチにせず掴み（throw）として発火させる。
 			bothHandPunchSuppressMs: BOTH_HAND_PUNCH_SUPPRESS_MS,
-		});
+		};
+		const hub = acquireSensorHub(hubHandlers);
 		hubRef.current = hub;
 		// 自分のライダーのセンサーセット名。/pairing から渡ってきていればそれをそのまま使い
 		// （画面遷移直後に「まだ何も繋がってない」空白時間ができるのを防ぐ）、無ければ
@@ -838,6 +876,19 @@ function BattlePage() {
 				fv.onLandmarks(lm, performance.now());
 				const muted = fv.isCamMuted();
 				skeleton.push(lm, muted ? "#a78bfa" : guarding ? "#7fdfff" : "#4ade80");
+				// ジャンプ: 顔（鼻）がフレーム上端より上に見切れた瞬間に発動（実際に跳ぶ想定。
+				// エッジ検出＝顔が戻るまで再発動しない。FV のカード/ポーズ相中は無効）。
+				const nose = lm?.[LM.NOSE];
+				const faceUp = !muted && !!nose && nose.y < JUMP_FACE_TOP_Y;
+				if (
+					faceUp &&
+					!faceWasUp &&
+					Date.now() - lastFaceJumpAt >= JUMP_FACE_COOLDOWN_MS
+				) {
+					lastFaceJumpAt = Date.now();
+					handleInput({ kind: "jump" });
+				}
+				faceWasUp = faceUp;
 			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
@@ -847,9 +898,11 @@ function BattlePage() {
 			// パンチ判定（ble.ts の同じしきい値）を出していたとき（AND 条件。誤爆防止）。
 			(side) => {
 				if (fv.isCamMuted()) {
+					camSideRef.current = false;
 					setCamSide(false);
 					return;
 				}
+				camSideRef.current = side;
 				setCamSide(side);
 				if (side) {
 					const now = Date.now();
@@ -869,8 +922,10 @@ function BattlePage() {
 		return () => {
 			source.stop();
 			hubCancelled = true;
-			hub.stop(); // 切断のみ（許可は保持）。次の画面/再入場で自動再接続できる
+			// hub.stop() はしない: GATT を維持し、/result → 再戦や /pairing 再訪でも繋ぎ直し不要にする。
+			detachSensorHub(hubHandlers);
 			hubRef.current = null;
+			window.clearTimeout(sensorThrowTimer);
 			camSource.stop();
 			fv.stop();
 			fvRef.current = null;
@@ -902,7 +957,9 @@ function BattlePage() {
 				const leftHandRightFoot =
 					stepNow - limb.leftHand < RUN_HOLD_MS &&
 					stepNow - limb.rightFoot < RUN_HOLD_MS;
-				const stepping = rightHandLeftFoot || leftHandRightFoot;
+				// 横向き（振り向き態勢）中はセンサー走行も止める（腕振りを走行に誤検出しない）。
+				const stepping =
+					!camSideRef.current && (rightHandLeftFoot || leftHandRightFoot);
 				const selfFacing = predRef.current?.players[0]?.facing ?? 1;
 				const nextSensorDir: -1 | 0 | 1 = stepping
 					? selfFacing >= 0
@@ -1230,11 +1287,8 @@ function BattlePage() {
 						← Back
 					</Link>
 					<BgmVolumeControl
-						onChange={(v) => {
-							// bgm 未生成の一瞬でも localStorage に残し、createBgm が拾えるようにする
-							if (bgmRef.current) bgmRef.current.setVolume(v);
-							else setStoredBgmVolume(v);
-						}}
+						// 保存は共通コンポーネント側で済むので、再生中の battle BGM への反映だけ行う
+						onChange={(v) => bgmRef.current?.setVolume(v)}
 					/>
 					<FullscreenButton />
 				</div>
@@ -1459,87 +1513,6 @@ function SensorHudPanel({
 }
 
 // フルスクリーン切り替え（会場のデモ用。ブラウザの UI を消して対戦画面だけにする）。
-function FullscreenButton() {
-	const [fs, setFs] = useState(false);
-	useEffect(() => {
-		const onChange = () => setFs(!!document.fullscreenElement);
-		document.addEventListener("fullscreenchange", onChange);
-		onChange();
-		return () => document.removeEventListener("fullscreenchange", onChange);
-	}, []);
-	return (
-		<button
-			type="button"
-			onClick={() => {
-				if (document.fullscreenElement) document.exitFullscreen();
-				else document.documentElement.requestFullscreen();
-			}}
-			style={{
-				// ステージ（3D シーン）の上に置くので視認できる程度の下地を敷く
-				background: "rgba(0,0,0,0.45)",
-				border: "1px solid #334155",
-				borderRadius: "6px",
-				color: "#e5e7eb",
-				fontSize: "0.78rem",
-				padding: "2px 10px",
-				cursor: "pointer",
-				whiteSpace: "nowrap",
-			}}
-		>
-			{fs ? "✕ 全画面解除" : "⛶ 全画面"}
-		</button>
-	);
-}
-
-// BGM マスター音量（0〜100%）。localStorage に保存し、リザルトの win-bgm にも引き継ぐ。
-function BgmVolumeControl({ onChange }: { onChange: (v: number) => void }) {
-	const [master, setMaster] = useState(() => getStoredBgmVolume());
-	const pct = Math.round(master * 100);
-	return (
-		<label
-			title="BGM 音量"
-			style={{
-				display: "inline-flex",
-				alignItems: "center",
-				gap: "0.35rem",
-				background: "rgba(0,0,0,0.45)",
-				border: "1px solid #334155",
-				borderRadius: "6px",
-				color: "#e5e7eb",
-				fontSize: "0.78rem",
-				padding: "2px 8px",
-				whiteSpace: "nowrap",
-				cursor: "default",
-				userSelect: "none",
-			}}
-		>
-			<span aria-hidden="true">{pct === 0 ? "🔇" : "♪"}</span>
-			<span style={{ minWidth: "2.4em", textAlign: "right", color: "#cbd5e1" }}>
-				{pct}
-			</span>
-			<input
-				type="range"
-				min={0}
-				max={100}
-				step={1}
-				value={pct}
-				aria-label="BGM 音量"
-				onChange={(e) => {
-					const v = Number(e.target.value) / 100;
-					setMaster(v);
-					onChange(v);
-				}}
-				style={{
-					width: "88px",
-					accentColor: "#a78bfa",
-					cursor: "pointer",
-					verticalAlign: "middle",
-				}}
-			/>
-		</label>
-	);
-}
-
 function WaitingHint() {
 	return (
 		<div

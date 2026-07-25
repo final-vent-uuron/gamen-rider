@@ -79,6 +79,9 @@ export function getStoredBgmVolume(): number {
 	}
 }
 
+// 音量変更の通知イベント。再生中のループ BGM（home / henshin）が拾ってその場で追従する。
+const VOLUME_EVENT = "gamen-rider:bgm-volume";
+
 /** マスター音量を localStorage に保存する（UI からも直接呼べる）。 */
 export function setStoredBgmVolume(master: number): void {
 	if (typeof window === "undefined") return;
@@ -87,6 +90,7 @@ export function setStoredBgmVolume(master: number): void {
 	} catch {
 		/* quota / private mode */
 	}
+	window.dispatchEvent(new Event(VOLUME_EVENT));
 }
 
 // play() が自動再生ポリシーで拒否されたら、最初のユーザー操作で一度だけリトライする。
@@ -266,9 +270,18 @@ function loopingTrack(file: string, base: number, volume?: number): () => void {
 	const a = new Audio(`${BGM_DIR}/${file}`);
 	a.loop = true;
 	a.volume = clamp01(volume ?? base * getStoredBgmVolume());
+	// volume 未指定（＝マスター追従）のときは、再生中の音量変更（タイトルのスライダー等）にも追従する。
+	const onVolume =
+		volume === undefined
+			? () => {
+					a.volume = clamp01(base * getStoredBgmVolume());
+				}
+			: null;
+	if (onVolume) window.addEventListener(VOLUME_EVENT, onVolume);
 	playWithUnlock(a, () => !stopped);
 	return () => {
 		stopped = true;
+		if (onVolume) window.removeEventListener(VOLUME_EVENT, onVolume);
 		a.pause();
 		a.src = "";
 	};

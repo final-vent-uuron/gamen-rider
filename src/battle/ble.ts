@@ -284,14 +284,18 @@ export interface SensorHubOptions {
   // 自動接続の両方から除外される（大文字小文字は無視）。
   // 値は R2 から非同期に決まるため getter で渡す（呼び出し時点の値を見る）。null = 制限なし。
   sensorSet?: () => string | null
-  // 両手ほぼ同時ヒットの誤パンチ抑制（振り向きジェスチャー対策）。指定すると、片手の PUNCH
-  // 検出をこの ms だけ遅らせて発火し、その間にもう片方の手も検出されていたら（＝両手を
-  // 同時に振った＝振り向きジェスチャーとみなし）両方ともパンチを出さない（emit を呼ばない。
-  // ヒットの記録自体＝onImpact は遅延なく従来どおり呼ぶので、振り向きの AND 判定には影響しない）。
-  // 片手だけなら delay 分だけ遅れて通常どおり発火する。対象は rightHand/leftHand のみ。
-  // 省略時は従来どおり即時発火（pairing 等、この抑制が要らないページはオプトアウトされる）。
+  // 両手ほぼ同時ヒット＝掴み（throw）。指定すると、片手の PUNCH 検出をこの ms だけ遅らせて
+  // 発火し、その間にもう片方の手も検出されていたら両方のパンチを出さず、代わりに throw を
+  // 1回だけ発火する（2発目の検出時点で即時）。同じ腕の動きが振り向きジェスチャー
+  //（両手振り＋カメラ横向き）でもあるため、横向き時の扱いは受け手（battle.tsx）が
+  // camSide で振り分ける。ヒットの記録自体＝onImpact は遅延なく従来どおり呼ぶので、
+  // 振り向きの AND 判定には影響しない。片手だけなら delay 分だけ遅れて通常どおりパンチ。
+  // 省略時は従来どおり即時発火（pairing 等、この判定が要らないページはオプトアウトされる）。
   bothHandPunchSuppressMs?: number
 }
+
+// 両手同時掴みの連続発火抑止。
+const BOTH_HAND_THROW_COOLDOWN_MS = 600
 
 // 4部位を同時に扱うセンサーハブ。部位ごとに GATT 接続を保持し、届いた PUNCH 通知を
 // SENSOR_PARTS.emit でバトル入力へ変換して onInput へ流す（キーボードと同じ InputHandler）。
@@ -323,11 +327,12 @@ export function createSensorHub(
   const conns = new Map<SensorPartKey, Conn>()
   const setStatus = (key: SensorPartKey, s: BleStatus) => opts.onStatus?.(key, s)
 
-  // 両手同時サスペンド用: 直近の片手パンチ検出時刻（rightHand/leftHand のみ使う）。
+  // 両手同時判定用: 直近の片手パンチ検出時刻（rightHand/leftHand のみ使う）＋ throw 発火時刻。
   const lastHandPunchAt: Record<'rightHand' | 'leftHand', number> = {
     rightHand: 0,
     leftHand: 0,
   }
+  let lastThrowEmitAt = 0
   const isHandKey = (k: SensorPartKey): k is 'rightHand' | 'leftHand' =>
     k === 'rightHand' || k === 'leftHand'
   const otherHandKey = (k: 'rightHand' | 'leftHand') =>
@@ -354,13 +359,23 @@ export function createSensorHub(
       if (suppressMs && isHandKey(def.key)) {
         const key = def.key
         const hitAt = Date.now()
+        const otherHandAt = lastHandPunchAt[otherHandKey(key)]
         lastHandPunchAt[key] = hitAt
-        window.setTimeout(() => {
-          if (!active) return
-          const otherAt = lastHandPunchAt[otherHandKey(key)]
-          if (Math.abs(otherAt - hitAt) < suppressMs) return // 両手ほぼ同時＝振り向きジェスチャー扱い
-          onInput(def.emit!(msg.impact))
-        }, suppressMs)
+        if (hitAt - otherHandAt < suppressMs) {
+          // 両手ほぼ同時＝掴み。2発目の検出時点で即発火（1発目のパンチは下の遅延判定で消える）。
+          // 振り向き（両手振り＋横向き）との振り分けは受け手（battle.tsx の camSide）が行う。
+          if (hitAt - lastThrowEmitAt >= BOTH_HAND_THROW_COOLDOWN_MS) {
+            lastThrowEmitAt = hitAt
+            onInput({ kind: 'throw' })
+          }
+        } else {
+          window.setTimeout(() => {
+            if (!active) return
+            const otherAt = lastHandPunchAt[otherHandKey(key)]
+            if (Math.abs(otherAt - hitAt) < suppressMs) return // 掴み/振り向きに化けたのでパンチは出さない
+            onInput(def.emit!(msg.impact))
+          }, suppressMs)
+        }
       } else {
         onInput(def.emit(msg.impact))
       }

@@ -16,7 +16,7 @@
 //   将来複数ルームにしたければ ?room=<id> で分ければよい（idFromName で別インスタンスになる）。
 
 import { BattleRoom } from './battle-room.ts'
-import { handleNfcBind, handleRiders } from './riders.ts'
+import { handleNfcBind, handleRegisterUnlock, handleRiders } from './riders.ts'
 
 // Durable Object クラスは Worker モジュールから export されている必要がある。
 export { BattleRoom }
@@ -24,6 +24,9 @@ export { BattleRoom }
 export interface Env {
   BATTLE_ROOM: DurableObjectNamespace
   RIDER_BUCKET: R2Bucket
+  // /auth/register の簡易パスワード（シークレット。wrangler secret put REGISTER_PASSWORD、
+  // ローカルは .dev.vars）。フロントには値を渡さず /riders/unlock で照合だけ行う。
+  REGISTER_PASSWORD?: string
 }
 
 function battleRoom(env: Env, url: URL): DurableObjectStub {
@@ -40,6 +43,9 @@ export default {
     }
     if (url.pathname === '/riders/nfc-bind') {
       return handleNfcBind(request, env.RIDER_BUCKET)
+    }
+    if (url.pathname === '/riders/unlock') {
+      return handleRegisterUnlock(request, env.REGISTER_PASSWORD)
     }
     if (url.pathname === '/riders') {
       return handleRiders(request, env.RIDER_BUCKET)

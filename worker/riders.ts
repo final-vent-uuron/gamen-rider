@@ -141,6 +141,36 @@ export async function handleRiders(
 }
 
 /**
+ * ライダー登録画面（/auth/register）の簡易パスワード照合。
+ * パスワードそのものをフロントのバンドルに埋めないため、照合だけサーバーで行う。
+ * 正解は Worker のシークレット REGISTER_PASSWORD（wrangler secret put REGISTER_PASSWORD
+ * -c wrangler.battle.jsonc / ローカルは .dev.vars）。未設定時は常に 500 で拒否する。
+ */
+export async function handleRegisterUnlock(
+	request: Request,
+	password: string | undefined,
+): Promise<Response> {
+	if (request.method === "OPTIONS") {
+		return new Response(null, { status: 204, headers: CORS_HEADERS });
+	}
+	if (request.method !== "POST")
+		return json({ error: "method not allowed" }, 405);
+	if (!password?.trim())
+		return json(
+			{ ok: false, error: "サーバーにパスワードが未設定です（REGISTER_PASSWORD）" },
+			500,
+		);
+	let input: { password?: unknown };
+	try {
+		input = (await request.json()) as { password?: unknown };
+	} catch {
+		return json({ error: "JSON ボディが必要です" }, 400);
+	}
+	const ok = typeof input.password === "string" && input.password === password;
+	return ok ? json({ ok: true }) : json({ ok: false }, 401);
+}
+
+/**
  * NFC タグの紐付け（enroll）。Swift アプリのセットアップ画面から一度だけ呼ぶ想定:
  * 対象ライダーを選び、物理タグを読ませて {riderId, nfcId} を送る。
  * 対象ライダーが未登録なら 404（先に /auth/register で登録しておく必要がある）。

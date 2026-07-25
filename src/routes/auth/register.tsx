@@ -5,13 +5,14 @@ import type { NormalizedLandmark, PoseLandmarker } from '@mediapipe/tasks-vision
 
 import { createPoseLandmarker, poseSimilarity } from '../../pose'
 import type { CustomStep, MediaPipeModules, RefPoint } from '../../pose'
-import { RIDER_ROSTER, listRiders, saveRider } from '../../rider-registry'
+import { RIDER_ROSTER, listRiders, saveRider, verifyRegisterPassword } from '../../rider-registry'
 
 export const Route = createFileRoute('/auth/register')({ component: RegisterGate })
 
 // 簡易パスワードゲート。画面からの遷移ボタンは無く、URL 直打ち＋パスワードでだけ入れる
-// （ハッカソン運用: 来場者が誤ってライダー登録をいじらないための軽い柵。セキュリティ目的ではない）。
-const REGISTER_PASSWORD = 'final-vent'
+// （ハッカソン運用: 来場者が誤ってライダー登録をいじらないための軽い柵）。
+// パスワードの値はフロントに持たず、バトル Worker（POST /riders/unlock）でシークレット
+// REGISTER_PASSWORD と照合する。変更は `wrangler secret put REGISTER_PASSWORD -c wrangler.battle.jsonc`。
 const UNLOCK_KEY = 'register-unlock' // sessionStorage（タブを閉じるまで再入力不要）
 
 function RegisterGate() {
@@ -19,16 +20,26 @@ function RegisterGate() {
     () => typeof window !== 'undefined' && sessionStorage.getItem(UNLOCK_KEY) === '1',
   )
   const [input, setInput] = useState('')
-  const [wrong, setWrong] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [gateError, setGateError] = useState<string | null>(null)
 
   if (unlocked) return <RegisterPage />
 
-  const submit = () => {
-    if (input === REGISTER_PASSWORD) {
-      sessionStorage.setItem(UNLOCK_KEY, '1')
-      setUnlocked(true)
-    } else {
-      setWrong(true)
+  const submit = async () => {
+    if (checking || !input) return
+    setChecking(true)
+    setGateError(null)
+    try {
+      if (await verifyRegisterPassword(input)) {
+        sessionStorage.setItem(UNLOCK_KEY, '1')
+        setUnlocked(true)
+      } else {
+        setGateError('パスワードが違います')
+      }
+    } catch (err) {
+      setGateError(err instanceof Error ? err.message : '照合に失敗しました')
+    } finally {
+      setChecking(false)
     }
   }
 
@@ -53,15 +64,15 @@ function RegisterGate() {
         placeholder="パスワード"
         onChange={(e) => {
           setInput(e.target.value)
-          setWrong(false)
+          setGateError(null)
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') submit()
+          if (e.key === 'Enter') void submit()
         }}
         style={{
           padding: '0.6rem 1rem',
           borderRadius: '8px',
-          border: `1px solid ${wrong ? '#f87171' : '#334155'}`,
+          border: `1px solid ${gateError ? '#f87171' : '#334155'}`,
           background: 'rgba(15,23,42,0.8)',
           color: '#fff',
           fontSize: '1rem',
@@ -69,21 +80,22 @@ function RegisterGate() {
           textAlign: 'center',
         }}
       />
-      {wrong && <span style={{ color: '#f87171', fontSize: '0.8rem' }}>パスワードが違います</span>}
+      {gateError && <span style={{ color: '#f87171', fontSize: '0.8rem' }}>{gateError}</span>}
       <button
         type="button"
-        onClick={submit}
+        onClick={() => void submit()}
+        disabled={checking}
         style={{
           padding: '0.55rem 2rem',
           borderRadius: '8px',
           border: 'none',
-          background: 'linear-gradient(90deg, #a78bfa, #7c3aed)',
+          background: checking ? '#475569' : 'linear-gradient(90deg, #a78bfa, #7c3aed)',
           color: '#fff',
           fontWeight: 700,
-          cursor: 'pointer',
+          cursor: checking ? 'default' : 'pointer',
         }}
       >
-        入る
+        {checking ? '確認中…' : '入る'}
       </button>
       <Link to="/" style={{ color: '#64748b', fontSize: '0.8rem', textDecoration: 'none' }}>
         ← トップへ戻る
