@@ -117,7 +117,7 @@ export function SensorTile({
   status: BleStatus
   active: boolean
   impact?: number
-  reserved: boolean // ベルト等、バトル入力が未割当の部位
+  reserved?: boolean // バトル入力が未割当の部位（省略時 false）
   onConnect: () => void
   onRelease: () => void
 }) {

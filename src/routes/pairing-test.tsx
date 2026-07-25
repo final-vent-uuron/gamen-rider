@@ -20,7 +20,6 @@ const ACTION_BY_PART: Record<SensorPartKey, PresenterAction | null> = {
   leftHand: 'punch',
   rightFoot: 'kick',
   leftFoot: 'kick',
-  belt: null,
 }
 
 const PART_TILE_COLOR: Record<SensorPartKey, string> = {
@@ -28,7 +27,6 @@ const PART_TILE_COLOR: Record<SensorPartKey, string> = {
   leftHand: '#fb923c',
   rightFoot: '#38bdf8',
   leftFoot: '#22d3ee',
-  belt: '#a78bfa',
 }
 
 function emptyStatuses(): Record<SensorPartKey, BleStatus> {
@@ -37,7 +35,6 @@ function emptyStatuses(): Record<SensorPartKey, BleStatus> {
     leftHand: 'idle',
     rightFoot: 'idle',
     leftFoot: 'idle',
-    belt: 'idle',
   }
 }
 
