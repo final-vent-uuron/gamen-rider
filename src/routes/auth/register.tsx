@@ -11,7 +11,7 @@ export const Route = createFileRoute('/auth/register')({ component: RegisterGate
 
 // 簡易パスワードゲート。画面からの遷移ボタンは無く、URL 直打ち＋パスワードでだけ入れる
 // （ハッカソン運用: 来場者が誤ってライダー登録をいじらないための軽い柵。セキュリティ目的ではない）。
-const REGISTER_PASSWORD = 'final-vent'
+const REGISTER_PASSWORD = 'final-ooe'
 const UNLOCK_KEY = 'register-unlock' // sessionStorage（タブを閉じるまで再入力不要）
 
 function RegisterGate() {
