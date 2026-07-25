@@ -13,6 +13,8 @@ import {
 	applyJump,
 	applyThrow,
 	applyTurn,
+	BgmVolumeControl,
+	FullscreenButton,
 	SENSOR_PARTS,
 	acquireSensorHub,
 	battleCardsFor,
@@ -26,10 +28,8 @@ import {
 	detachSensorHub,
 	endFinalVent,
 	getPairedParts,
-	getStoredBgmVolume,
 	meterStocks,
 	resolveFinalVentCardRefs,
-	setStoredBgmVolume,
 	stepBattle,
 } from "../battle";
 import type {
@@ -1287,11 +1287,8 @@ function BattlePage() {
 						← Back
 					</Link>
 					<BgmVolumeControl
-						onChange={(v) => {
-							// bgm 未生成の一瞬でも localStorage に残し、createBgm が拾えるようにする
-							if (bgmRef.current) bgmRef.current.setVolume(v);
-							else setStoredBgmVolume(v);
-						}}
+						// 保存は共通コンポーネント側で済むので、再生中の battle BGM への反映だけ行う
+						onChange={(v) => bgmRef.current?.setVolume(v)}
 					/>
 					<FullscreenButton />
 				</div>
@@ -1516,87 +1513,6 @@ function SensorHudPanel({
 }
 
 // フルスクリーン切り替え（会場のデモ用。ブラウザの UI を消して対戦画面だけにする）。
-function FullscreenButton() {
-	const [fs, setFs] = useState(false);
-	useEffect(() => {
-		const onChange = () => setFs(!!document.fullscreenElement);
-		document.addEventListener("fullscreenchange", onChange);
-		onChange();
-		return () => document.removeEventListener("fullscreenchange", onChange);
-	}, []);
-	return (
-		<button
-			type="button"
-			onClick={() => {
-				if (document.fullscreenElement) document.exitFullscreen();
-				else document.documentElement.requestFullscreen();
-			}}
-			style={{
-				// ステージ（3D シーン）の上に置くので視認できる程度の下地を敷く
-				background: "rgba(0,0,0,0.45)",
-				border: "1px solid #334155",
-				borderRadius: "6px",
-				color: "#e5e7eb",
-				fontSize: "0.78rem",
-				padding: "2px 10px",
-				cursor: "pointer",
-				whiteSpace: "nowrap",
-			}}
-		>
-			{fs ? "✕ 全画面解除" : "⛶ 全画面"}
-		</button>
-	);
-}
-
-// BGM マスター音量（0〜100%）。localStorage に保存し、リザルトの win-bgm にも引き継ぐ。
-function BgmVolumeControl({ onChange }: { onChange: (v: number) => void }) {
-	const [master, setMaster] = useState(() => getStoredBgmVolume());
-	const pct = Math.round(master * 100);
-	return (
-		<label
-			title="BGM 音量"
-			style={{
-				display: "inline-flex",
-				alignItems: "center",
-				gap: "0.35rem",
-				background: "rgba(0,0,0,0.45)",
-				border: "1px solid #334155",
-				borderRadius: "6px",
-				color: "#e5e7eb",
-				fontSize: "0.78rem",
-				padding: "2px 8px",
-				whiteSpace: "nowrap",
-				cursor: "default",
-				userSelect: "none",
-			}}
-		>
-			<span aria-hidden="true">{pct === 0 ? "🔇" : "♪"}</span>
-			<span style={{ minWidth: "2.4em", textAlign: "right", color: "#cbd5e1" }}>
-				{pct}
-			</span>
-			<input
-				type="range"
-				min={0}
-				max={100}
-				step={1}
-				value={pct}
-				aria-label="BGM 音量"
-				onChange={(e) => {
-					const v = Number(e.target.value) / 100;
-					setMaster(v);
-					onChange(v);
-				}}
-				style={{
-					width: "88px",
-					accentColor: "#a78bfa",
-					cursor: "pointer",
-					verticalAlign: "middle",
-				}}
-			/>
-		</label>
-	);
-}
-
 function WaitingHint() {
 	return (
 		<div

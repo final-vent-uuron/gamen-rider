@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 
+import { BgmVolumeControl, FullscreenButton } from "../battle/av-controls";
 import { playHomeBgm } from "../battle/bgm";
 import { WEBWORLD_SKY, WebWorldBackdrop } from "../webworld-backdrop";
 import type { CodeFragment } from "../webworld-backdrop";
@@ -41,6 +42,22 @@ function Home() {
 		>
 			{/* Webワールドの背景（電脳空間。リザルトと共通） */}
 			<WebWorldBackdrop fragments={TITLE_FRAGMENTS} />
+
+			{/* 右上: BGM 音量・全画面（/battle と同じ小物。音量は再生中のタイトル BGM にも即反映） */}
+			<div
+				style={{
+					position: "absolute",
+					top: "12px",
+					right: "12px",
+					display: "flex",
+					alignItems: "center",
+					gap: "0.5rem",
+					zIndex: 2,
+				}}
+			>
+				<BgmVolumeControl />
+				<FullscreenButton />
+			</div>
 
 			{/* タイトルロゴ */}
 			<div
