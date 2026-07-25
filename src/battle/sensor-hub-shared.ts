@@ -18,7 +18,6 @@ export interface SensorHubHandlers {
   onImpact?: (key: SensorPartKey, impact: number, hit: boolean) => void
   sensorSet?: () => string | null
   bothHandPunchSuppressMs?: number
-  bothFootJumpMs?: number
 }
 
 let hub: SensorHub | null = null
@@ -44,9 +43,6 @@ export function acquireSensorHub(handlers: SensorHubHandlers): SensorHub {
       // 値はページごとに違う（/pairing は抑制なし）ので、イベント時点の値を引く getter にする。
       get bothHandPunchSuppressMs() {
         return current.bothHandPunchSuppressMs
-      },
-      get bothFootJumpMs() {
-        return current.bothFootJumpMs
       },
     })
   } else {

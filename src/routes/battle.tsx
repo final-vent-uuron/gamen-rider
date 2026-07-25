@@ -107,10 +107,17 @@ const TURN_HAND_WINDOW_MS = 500;
 // 片手だけなら delay 分だけ遅れて通常どおりパンチが出る。
 const BOTH_HAND_PUNCH_SUPPRESS_MS = 100;
 
-// ジャンプ: 両足センサーがこの ms 以内にほぼ同時にヒット（＝両足で踏み切る）したらキックの
-// 代わりに jump を出す（ble.ts の bothFootJumpMs 参照）。片足だけなら通常どおりキック。
-// 手の抑制（100ms）より少し広めなのは、踏み切りの左右差が腕振りより出やすいため。
-const BOTH_FOOT_JUMP_MS = 150;
+// 掴み: 両手センサーほぼ同時ヒットで ble.ts が throw を発火する。ただし振り向き
+//（両手振り＋カメラ横向き）と同じ腕の動きなので、この ms だけ待って横向きへ変わらなかった
+// ときだけ掴みとして確定する（横向きになったら振り向きに譲って破棄）。カメラの向き検出は
+// デバウンス込みで腕振りより遅れて届くため、TURN_HAND_WINDOW_MS(500) に近い値にしてある。
+const SENSOR_THROW_CONFIRM_MS = 400;
+
+// ジャンプ: カメラで顔（鼻）がフレーム上端より上に見切れたら発動（実際に跳ぶと頭が
+// 画角から出る想定。加速度センサーは使わない＝跳ぶとき両手が動いても誤入力にならない）。
+// 一度フレーム内に顔が戻るまでは再発動しない（エッジ検出）＋短いクールダウン。
+const JUMP_FACE_TOP_Y = 0.02; // 正規化 y がこの値未満 = 上に見切れたとみなす
+const JUMP_FACE_COOLDOWN_MS = 700;
 
 // 走行: 実際の走る動作（右手と左足、左手と右足が対になって振れるクロス歩行）に合わせ、
 // 対角の手足ペア（右手+左足 or 左手+右足）が直近 RUN_HOLD_MS 以内にどちらも反応してたら
@@ -775,12 +782,25 @@ function BattlePage() {
 		// BLE 加速度センサー（4部位）。/pairing で繋いだ接続を共有ハブ（sensor-hub-shared）
 		// 経由でそのまま引き継ぐ（画面遷移で GATT を切らない＝再ペアリング不要）。未接続分は
 		// start() の自動再接続、または HUD の「センサー追加」ボタン（hubRef.connectAny()）から。
+		let sensorThrowTimer = 0; // 掴み確定待ちのタイマー（横向きに変わったら破棄）
+		// 顔見切れジャンプ用（エッジ検出＋クールダウン）
+		let faceWasUp = false;
+		let lastFaceJumpAt = 0;
 		const hubHandlers = {
 			// 横向き（振り向き態勢）中はセンサー入力を出さない。振り向きジェスチャーで腕を
-			// 振ったときの誤パンチ・誤ジャンプ防止（振り向き自体は onImpact のヒット記録 AND
+			// 振ったときの誤パンチ防止（振り向き自体は onImpact のヒット記録 AND
 			// カメラ横向きで判定するので、ここで落としても影響しない）。キーボードは対象外。
 			onInput: (input: BattleInput) => {
 				if (camSideRef.current) return;
+				// 両手同時振り＝掴み。振り向きと同じ腕の動きなので少し待って確定させる。
+				if (input.kind === "throw") {
+					window.clearTimeout(sensorThrowTimer);
+					sensorThrowTimer = window.setTimeout(() => {
+						if (camSideRef.current) return; // 横向きに変わった＝振り向きだった
+						handleInput(input);
+					}, SENSOR_THROW_CONFIRM_MS);
+					return;
+				}
 				handleInput(input);
 			},
 			onStatus: (key: SensorPartKey, s: BleStatus) =>
@@ -814,10 +834,8 @@ function BattlePage() {
 					lastLimbStepAtRef.current.leftFoot = Date.now();
 			},
 			sensorSet: () => sensorSetRef.current,
-			// 両手をほぼ同時に振ったとき（＝振り向きジェスチャー）は誤パンチを出さない。
+			// 両手ほぼ同時ヒットはパンチにせず掴み（throw）として発火させる。
 			bothHandPunchSuppressMs: BOTH_HAND_PUNCH_SUPPRESS_MS,
-			// 両足ほぼ同時ヒット＝ジャンプ（キックには化けない）。
-			bothFootJumpMs: BOTH_FOOT_JUMP_MS,
 		};
 		const hub = acquireSensorHub(hubHandlers);
 		hubRef.current = hub;
@@ -858,6 +876,19 @@ function BattlePage() {
 				fv.onLandmarks(lm, performance.now());
 				const muted = fv.isCamMuted();
 				skeleton.push(lm, muted ? "#a78bfa" : guarding ? "#7fdfff" : "#4ade80");
+				// ジャンプ: 顔（鼻）がフレーム上端より上に見切れた瞬間に発動（実際に跳ぶ想定。
+				// エッジ検出＝顔が戻るまで再発動しない。FV のカード/ポーズ相中は無効）。
+				const nose = lm?.[LM.NOSE];
+				const faceUp = !muted && !!nose && nose.y < JUMP_FACE_TOP_Y;
+				if (
+					faceUp &&
+					!faceWasUp &&
+					Date.now() - lastFaceJumpAt >= JUMP_FACE_COOLDOWN_MS
+				) {
+					lastFaceJumpAt = Date.now();
+					handleInput({ kind: "jump" });
+				}
+				faceWasUp = faceUp;
 			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
@@ -894,6 +925,7 @@ function BattlePage() {
 			// hub.stop() はしない: GATT を維持し、/result → 再戦や /pairing 再訪でも繋ぎ直し不要にする。
 			detachSensorHub(hubHandlers);
 			hubRef.current = null;
+			window.clearTimeout(sensorThrowTimer);
 			camSource.stop();
 			fv.stop();
 			fvRef.current = null;
