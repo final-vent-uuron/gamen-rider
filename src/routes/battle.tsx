@@ -675,8 +675,10 @@ function BattlePage() {
 		const source = createKeyboardSource(handleInput);
 		source.start();
 
-		// ファイナルベント: メーター満タン時に右下カメラでカード→ポーズ→発動。
-		// キーボード L/F とカード UI は開発用バイパスとして残す。
+		// ファイナルベント: メーター満タンの間、右下カメラでカードを探し続ける（この間は
+		// 誰も凍結しない＝自動発動ではない）。実際にカードをかざして認識できた瞬間に
+		// ポーズ相へ進み、そこで初めて SA3 風に全員凍結して発動シーケンスへ入る。
+		// キーボード L/F とカード UI は開発用バイパス（カード無しで即発動）として残す。
 		const fireFinal = () => {
 			const now = Date.now();
 			const selfId = youIdRef.current;
@@ -725,8 +727,11 @@ function BattlePage() {
 				setFvPhase(p);
 				const selfId = youIdRef.current;
 				const now = Date.now();
-				// SA3 風: 溜め開始で全員凍結をサーバーへ通知（＋ローカル予測）
-				if (p === "card" || p === "pose") {
+				// メーター満タン＝即発動ではなく、自分がカードを実際にかざして認識されるまでは
+				// 誰も凍結しない（card 相＝カード探索中はこのプレイヤーのカメラがローカルで
+				// 探しているだけ。他プレイヤーは通常通り動ける）。カードが通って pose 相に
+				// 進んだ、まさに「かざした」瞬間から SA3 風に全員凍結してサーバーへ通知する。
+				if (p === "pose") {
 					net.sendFinalVent(true, p);
 					applyPred((s) => beginFinalVent(s, selfId, p, now));
 				} else if (p === "idle") {
