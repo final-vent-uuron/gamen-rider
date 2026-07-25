@@ -107,6 +107,11 @@ const TURN_HAND_WINDOW_MS = 500;
 // 片手だけなら delay 分だけ遅れて通常どおりパンチが出る。
 const BOTH_HAND_PUNCH_SUPPRESS_MS = 100;
 
+// ジャンプ: 両足センサーがこの ms 以内にほぼ同時にヒット（＝両足で踏み切る）したらキックの
+// 代わりに jump を出す（ble.ts の bothFootJumpMs 参照）。片足だけなら通常どおりキック。
+// 手の抑制（100ms）より少し広めなのは、踏み切りの左右差が腕振りより出やすいため。
+const BOTH_FOOT_JUMP_MS = 150;
+
 // 走行: 実際の走る動作（右手と左足、左手と右足が対になって振れるクロス歩行）に合わせ、
 // 対角の手足ペア（右手+左足 or 左手+右足）が直近 RUN_HOLD_MS 以内にどちらも反応してたら
 // 向いている方向へ前進する。片方のペアが揃えば良く、両ペア同時である必要はない
@@ -801,6 +806,8 @@ function BattlePage() {
 			sensorSet: () => sensorSetRef.current,
 			// 両手をほぼ同時に振ったとき（＝振り向きジェスチャー）は誤パンチを出さない。
 			bothHandPunchSuppressMs: BOTH_HAND_PUNCH_SUPPRESS_MS,
+			// 両足ほぼ同時ヒット＝ジャンプ（キックには化けない）。
+			bothFootJumpMs: BOTH_FOOT_JUMP_MS,
 		};
 		const hub = acquireSensorHub(hubHandlers);
 		hubRef.current = hub;

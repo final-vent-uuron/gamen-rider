@@ -291,7 +291,16 @@ export interface SensorHubOptions {
   // 片手だけなら delay 分だけ遅れて通常どおり発火する。対象は rightHand/leftHand のみ。
   // 省略時は従来どおり即時発火（pairing 等、この抑制が要らないページはオプトアウトされる）。
   bothHandPunchSuppressMs?: number
+  // 両足ほぼ同時ヒット＝ジャンプ（両足で踏み切るジェスチャー）。指定すると、片足の PUNCH
+  // 検出をこの ms だけ遅らせて発火し、その間にもう片方の足も検出されていたら両方のキックを
+  // 出さず、代わりに jump を1回だけ発火する（2発目の検出時点で即時）。片足だけなら delay 分
+  // 遅れて通常どおりキックになる。着地の衝撃で連続ジャンプにならないよう短いクールダウンあり。
+  // 省略時は従来どおり即時キック発火。
+  bothFootJumpMs?: number
 }
+
+// 両足同時ジャンプの連続発火抑止（踏み切り＋着地で2回飛ばないための最小間隔）。
+const BOTH_FOOT_JUMP_COOLDOWN_MS = 600
 
 // 4部位を同時に扱うセンサーハブ。部位ごとに GATT 接続を保持し、届いた PUNCH 通知を
 // SENSOR_PARTS.emit でバトル入力へ変換して onInput へ流す（キーボードと同じ InputHandler）。
@@ -333,6 +342,17 @@ export function createSensorHub(
   const otherHandKey = (k: 'rightHand' | 'leftHand') =>
     k === 'rightHand' ? 'leftHand' : 'rightHand'
 
+  // 両足同時ジャンプ用: 直近の片足キック検出時刻＋最後に jump を出した時刻。
+  const lastFootKickAt: Record<'rightFoot' | 'leftFoot', number> = {
+    rightFoot: 0,
+    leftFoot: 0,
+  }
+  let lastJumpEmitAt = 0
+  const isFootKey = (k: SensorPartKey): k is 'rightFoot' | 'leftFoot' =>
+    k === 'rightFoot' || k === 'leftFoot'
+  const otherFootKey = (k: 'rightFoot' | 'leftFoot') =>
+    k === 'rightFoot' ? 'leftFoot' : 'rightFoot'
+
   const makeConn = (def: SensorPartDef): Conn => {
     const c: Conn = {
       def,
@@ -351,6 +371,7 @@ export function createSensorHub(
       opts.onImpact?.(def.key, msg.impact, msg.punch)
       if (!msg.punch || !active || !def.emit) return
       const suppressMs = opts.bothHandPunchSuppressMs
+      const jumpMs = opts.bothFootJumpMs
       if (suppressMs && isHandKey(def.key)) {
         const key = def.key
         const hitAt = Date.now()
@@ -361,6 +382,25 @@ export function createSensorHub(
           if (Math.abs(otherAt - hitAt) < suppressMs) return // 両手ほぼ同時＝振り向きジェスチャー扱い
           onInput(def.emit!(msg.impact))
         }, suppressMs)
+      } else if (jumpMs && isFootKey(def.key)) {
+        const key = def.key
+        const hitAt = Date.now()
+        const otherAt = lastFootKickAt[otherFootKey(key)]
+        lastFootKickAt[key] = hitAt
+        if (hitAt - otherAt < jumpMs) {
+          // 両足ほぼ同時＝ジャンプ。2発目の検出時点で即発火（1発目のキックは下の遅延判定で消える）。
+          if (hitAt - lastJumpEmitAt >= BOTH_FOOT_JUMP_COOLDOWN_MS) {
+            lastJumpEmitAt = hitAt
+            onInput({ kind: 'jump' })
+          }
+        } else {
+          window.setTimeout(() => {
+            if (!active) return
+            const other = lastFootKickAt[otherFootKey(key)]
+            if (Math.abs(other - hitAt) < jumpMs) return // ジャンプに化けたのでキックは出さない
+            onInput(def.emit!(msg.impact))
+          }, jumpMs)
+        }
       } else {
         onInput(def.emit(msg.impact))
       }
