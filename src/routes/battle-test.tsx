@@ -7,6 +7,7 @@ import {
   applyJump,
   applyThrow,
   applyTurn,
+  flipMoveIntent,
   createBattle,
   createBleSensorSource,
   createKeyboardSource,
@@ -103,9 +104,12 @@ function BattleTestPage() {
         case 'abare':
           stateRef.current = applyAbare(s, YOU, now)
           break
-        case 'turn':
-          stateRef.current = applyTurn(s, YOU, now)
+        case 'turn': {
+          const { state, turned } = applyTurn(s, YOU, now)
+          stateRef.current = state
+          if (turned) moveDirRef.current = flipMoveIntent(moveDirRef.current)
           break
+        }
         case 'guard':
           guardRef.current = input.on
           break

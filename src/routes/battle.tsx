@@ -15,6 +15,7 @@ import {
 	applyTurn,
 	BgmVolumeControl,
 	FullscreenButton,
+	flipMoveIntent,
 	SENSOR_PARTS,
 	acquireSensorHub,
 	battleCardsFor,
@@ -677,10 +678,16 @@ function BattlePage() {
 					net.sendAbare();
 					applyPred((s) => applyAbare(s, selfId, now));
 					break;
-				case "turn":
+				case "turn": {
+					// 振り向き成功時は進行方向も反転（サーバーの moveIntent 反転と予測を揃える）。
 					net.sendTurn();
-					applyPred((s) => applyTurn(s, selfId, now));
+					applyPred((s) => {
+						const { state, turned } = applyTurn(s, selfId, now);
+						if (turned) moveDirRef.current = flipMoveIntent(moveDirRef.current);
+						return state;
+					});
 					break;
+				}
 				case "final-vent":
 					net.sendAttack("final");
 					applyPred((s) => applyAttack(s, selfId, "final", now));
@@ -911,8 +918,13 @@ function BattlePage() {
 						now - hands.rightHand <= TURN_HAND_WINDOW_MS &&
 						now - hands.leftHand <= TURN_HAND_WINDOW_MS;
 					if (bothHandsSwung) {
+						// 横向き＋両手振りで振り向く。成功時は進行方向も反転。
 						net.sendTurn();
-						applyPred((s) => applyTurn(s, youIdRef.current, now));
+						applyPred((s) => {
+							const { state, turned } = applyTurn(s, youIdRef.current, now);
+							if (turned) moveDirRef.current = flipMoveIntent(moveDirRef.current);
+							return state;
+						});
 					}
 				}
 			},
@@ -1948,8 +1960,8 @@ function ControlsHelp() {
 		["Shift / S / ↓", "ガード(押しっぱ・耐久あり。持ちすぎ/被弾で割れる)"],
 		["📷 構え", "カメラにボクシングの構え(両拳を顔の前)でガード"],
 		["U", "掴み(グラスプ・当たれば掴み攻撃・ガード崩し)"],
-		["T", "振り向き"],
-		["📷 横向き", "カメラに体を横に向けても振り向き"],
+		["T", "振り向き（進行方向も反転）"],
+		["📷 横向き", "横向き＋両手振りで振り返り＋進行方向反転"],
 		["L / F", "ファイナルベント(5ゲージ)"],
 	];
 	return (

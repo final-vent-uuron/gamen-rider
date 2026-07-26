@@ -20,6 +20,7 @@ import {
   applyJump,
   applyThrow,
   applyTurn,
+  flipMoveIntent,
   beginFinalVent,
   createBattle,
   endFinalVent,
@@ -163,9 +164,16 @@ export class BattleRoom extends DurableObject<Env> {
       case 'guard':
         this.guardIntent[conn.id] = msg.on === true
         break
-      case 'turn':
-        this.battle = applyTurn(this.battle, conn.id, Date.now())
+      case 'turn': {
+        // 振り向き成功時は進行方向（moveIntent）も反転する。
+        // これをしないと次ティックの stepBattle が旧 dir で facing を上書きしてしまう。
+        const { state, turned } = applyTurn(this.battle, conn.id, Date.now())
+        this.battle = state
+        if (turned) {
+          this.moveIntent[conn.id] = flipMoveIntent(this.moveIntent[conn.id] ?? 0)
+        }
         break
+      }
       case 'throw':
         this.battle = applyThrow(this.battle, conn.id, Date.now())
         break
