@@ -32,6 +32,9 @@ BUCKET=gamen-rider-models
 FILES=(
   gamen-rider-python-animation.v2.glb
   gamen-rider-arduino-add-animation-fix.v2.glb
+  arduino-add-animation.glb
+  flutter-add-animation.glb
+  swift-add-animation.glb
   flutter.glb
   test.v2.glb
 )
@@ -45,6 +48,11 @@ case "${1:-}" in
     ;;
   upload)
     for f in "${FILES[@]}"; do
+      # 手元に無いファイルはスキップ（R2 に直接上げた分も FILES には載せて一覧を保つため）
+      if [ ! -f "public/model/$f" ]; then
+        echo "==> skip $f (public/model に無い)"
+        continue
+      fi
       echo "==> $f"
       npx wrangler r2 object put "$BUCKET/$f" --file "public/model/$f" \
         --content-type model/gltf-binary \
