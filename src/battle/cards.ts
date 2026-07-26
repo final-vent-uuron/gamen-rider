@@ -4,7 +4,8 @@
 // kind は表示チップと解禁条件（final はゲージ満タンのみ）のヒント。
 //
 // ファイナルベントの「かざすカード」参照画像は変身フローと同じ登録ライダー
-// （listRiders → resolveFinalVentCardRefs）。キーボード L/F とカード UI は開発用バイパス。
+// （listRiders → resolveFinalVentCardRefs）。ゲージ満タン後は任意タイミングで
+// かざして発動（満タン＝即待ちにはしない）。キーボード L/F とカード UI は開発用バイパス。
 
 export type BattleCardKind = 'attack' | 'special' | 'final'
 

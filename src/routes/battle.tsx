@@ -697,9 +697,9 @@ function BattlePage() {
 		const source = createKeyboardSource(handleInput);
 		source.start();
 
-		// ファイナルベント: メーター満タンの間、右下カメラでカードを探し続ける（この間は
-		// 誰も凍結しない＝自動発動ではない）。実際にカードをかざして認識できた瞬間に
-		// ポーズ相へ進み、そこで初めて SA3 風に全員凍結して発動シーケンスへ入る。
+		// ファイナルベント: メーター満タン中は通常戦闘のまま裏でカードを監視する。
+		// かざして認識できた瞬間にポーズ相へ進み、そこで初めて SA3 風に全員凍結する。
+		// （満タン＝即 CARD 待ちにはしない。打ちたいタイミングでカードをかざす。）
 		// キーボード L/F とカード UI は開発用バイパス（カード無しで即発動）として残す。
 		const fireFinal = () => {
 			const now = Date.now();
@@ -749,25 +749,22 @@ function BattlePage() {
 				setFvPhase(p);
 				const selfId = youIdRef.current;
 				const now = Date.now();
-				// メーター満タン＝即発動ではなく、自分がカードを実際にかざして認識されるまでは
-				// 誰も凍結しない（card 相＝カード探索中はこのプレイヤーのカメラがローカルで
-				// 探しているだけ。他プレイヤーは通常通り動ける）。カードが通って pose 相に
-				// 進んだ、まさに「かざした」瞬間から SA3 風に全員凍結してサーバーへ通知する。
+				// カード認識 → pose に入った瞬間だけ SA3 風に全員凍結。失敗／発動後は idle で解除。
 				if (p === "pose") {
 					net.sendFinalVent(true, p);
 					applyPred((s) => beginFinalVent(s, selfId, p, now));
-				} else if (p === "idle") {
+				} else if (p === "idle" || p === "card") {
 					// キャンセル／タイムアウト／発動後の復帰。発動時は attack 側で既に消えていることが多い
 					net.sendFinalVent(false);
 					applyPred((s) => endFinalVent(s, selfId));
 				}
-				// カード／ポーズ相に入ったら cam ガードを即オフ（次の landmark まで残らないように）
-				if (p === "card" || p === "pose" || p === "fire") {
+				// ポーズ相だけ cam ガードをオフ（満タンの裏監視中はガード継続）
+				if (p === "pose" || p === "fire") {
 					setGuardPart("cam", false);
 					setCamGuard(false);
 					camSideRef.current = false;
 					setCamSide(false);
-				} else if (p === "idle") {
+				} else if (p === "idle" || p === "card") {
 					// mute 中にワーカーは on のまま変化しないことがあるので、解除時に最新値を戻す
 					setGuardPart("cam", lastCamGuarding);
 					setCamGuard(lastCamGuarding);
@@ -778,7 +775,7 @@ function BattlePage() {
 		});
 		fvRef.current = fv;
 		fv.start();
-		// 接続時点ですでに満タンなら即アーム（meter useEffect より先に作られる場合がある）
+		// 接続時点ですでに満タンなら解禁だけ伝える（meter useEffect より先に作られる場合がある）
 		{
 			const me = battleRef.current.players.find(
 				(p) => p.id === youIdRef.current,
@@ -1171,8 +1168,8 @@ function BattlePage() {
 		? battle.players.find((p) => p.id === battle.winnerId) ?? null
 		: null;
 
-	// メーター満タンで FV シーケンスをアーム（OpenCV もここで lazy load）。
-	// 他プレイヤーが溜め中なら自分はアームしない（SA3 は同時に1人だけ）。
+	// メーター満タンで FV 解禁（裏監視＋matcher lazy load）。CARD 待ちには閉じ込めない。
+	// 他プレイヤーが溜め中なら自分は解禁しない（SA3 は同時に1人だけ）。
 	useEffect(() => {
 		const vent = battle.finalVent;
 		const ventingOther =
@@ -1180,6 +1177,15 @@ function BattlePage() {
 		const full = !ventingOther && (self?.meter ?? 0) >= ARENA.meterFinalCost;
 		fvRef.current?.setMeterFull(full);
 	}, [self?.meter, battle.finalVent]);
+
+	const fvReady =
+		(self?.meter ?? 0) >= ARENA.meterFinalCost &&
+		fvPhase === "idle" &&
+		!(
+			battle.finalVent &&
+			Date.now() < battle.finalVent.until &&
+			battle.finalVent.playerId !== youIdRef.current
+		);
 
 	const ventWatch = (() => {
 		const v = battle.finalVent;
@@ -1376,6 +1382,7 @@ function BattlePage() {
 				>
 					<FinalVentCam
 						highlight={finalActive}
+						ready={fvReady}
 						guarding={camGuard}
 						poseStatus={camPose}
 						facingSide={camSide}
@@ -2318,6 +2325,7 @@ function CamStatusBar({
 
 function FinalVentCam({
 	highlight,
+	ready,
 	guarding,
 	poseStatus,
 	facingSide,
@@ -2327,6 +2335,7 @@ function FinalVentCam({
 	canvasRef,
 }: {
 	highlight: boolean;
+	ready: boolean; // ゲージ満タンで FV 解禁（通常戦闘中・かざせば発動可）
 	guarding: boolean;
 	poseStatus: CameraGuardStatus; // ポーズ解析（骨格・ガード判定）の読み込み状態
 	facingSide: boolean; // カメラに対して横向き（向き検出）
@@ -2373,6 +2382,14 @@ function FinalVentCam({
 							badgeFg: "#fff",
 						}
 					: null;
+	// 満タン解禁中は通常戦闘のまま。GUARD 表示は隠さず、解禁だけ示す。
+	const readyChrome =
+		!phaseChrome && ready
+			? {
+					border: "3px solid #a78bfa88",
+					shadow: "0 0 14px #a78bfa55",
+				}
+			: null;
 
 	async function enable() {
 		try {
@@ -2421,16 +2438,20 @@ function FinalVentCam({
 					? "3px solid #a78bfa"
 					: phaseChrome
 						? phaseChrome.border
-						: guarding
-							? "3px solid #7fdfff"
-							: "2px solid #334155",
+						: readyChrome
+							? readyChrome.border
+							: guarding
+								? "3px solid #7fdfff"
+								: "2px solid #334155",
 				boxShadow: highlight
 					? "0 0 20px #a78bfa"
 					: phaseChrome
 						? phaseChrome.shadow
-						: guarding
-							? "0 0 20px #7fdfff"
-							: "0 4px 12px rgba(0,0,0,0.4)",
+						: readyChrome
+							? readyChrome.shadow
+							: guarding
+								? "0 0 20px #7fdfff"
+								: "0 4px 12px rgba(0,0,0,0.4)",
 				transition: "border 0.2s, box-shadow 0.2s",
 			}}
 		>
@@ -2519,6 +2540,25 @@ function FinalVentCam({
 						</div>
 					)}
 				</>
+			)}
+			{/* ゲージ満タン＝解禁中（通常戦闘継続。かざしたときだけ発動） */}
+			{readyChrome && (
+				<span
+					style={{
+						position: "absolute",
+						left: "6px",
+						top: "4px",
+						fontSize: "0.7rem",
+						fontWeight: 900,
+						color: "#fff",
+						background: "#7c3aed",
+						padding: "1px 8px",
+						borderRadius: "4px",
+						letterSpacing: "0.08em",
+					}}
+				>
+					READY
+				</span>
 			)}
 			{/* 横向き検出中の表示（FV シーケンス中は隠す） */}
 			{facingSide && !phaseChrome && (

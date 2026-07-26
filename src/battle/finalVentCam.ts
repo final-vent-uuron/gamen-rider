@@ -1,8 +1,9 @@
 // バトル右下カメラでのファイナルベント発動シーケンス。
-// メーター満タン → カード（ORB）→ ポーズ手順（変身と同じ流れ判定）→ sendAttack("final")。
+// メーター満タン中は通常戦闘のまま裏でカードを監視し、かざした瞬間に
+// ポーズ手順（変身と同じ流れ判定）→ sendAttack("final") へ進む（任意タイミング発動）。
 // かざすカードの参照は変身フローと同じ登録ライダー画像（/auth/register → registry）。
 // ポーズ手順は localStorage（finalVentPose.ts）のキャラ別登録。未登録時は前突き出し 1 ステップ。
-// ガード用 MediaPipe と同じ <video> を共有し、カード／ポーズ相では cam ガードを mute する。
+// ガード用 MediaPipe と同じ <video> を共有し、ポーズ相では cam ガードを mute する。
 
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision'
 
@@ -205,15 +206,6 @@ export function createFinalVentController(
     })
   }
 
-  const tryArm = () => {
-    if (!running || !meterFull) return
-    if (performance.now() < cooldownUntil) return
-    if (phase === 'idle') {
-      ensureMatcher()
-      setPhase('card')
-    }
-  }
-
   const disarm = () => {
     if (phase === 'idle') return
     setPhase('idle')
@@ -224,13 +216,14 @@ export function createFinalVentController(
     cooldownUntil = performance.now() + FIRE_COOLDOWN_MS
     opts.onFire()
     setPhase('idle')
-    window.setTimeout(() => {
-      if (running && meterFull) tryArm()
-    }, FIRE_COOLDOWN_MS)
   }
 
+  // 満タン中は idle のまま裏でカードを監視する（CARD 待ち UI に閉じ込めない）。
+  // かざして認識できた瞬間だけ pose へ進み、そこで初めて全員凍結する。
   const tickCard = (now: number) => {
-    if (phase !== 'card' || !matcherReady || !matcher) return
+    if (!meterFull || !matcherReady || !matcher) return
+    if (phase !== 'idle' && phase !== 'card') return
+    if (performance.now() < cooldownUntil) return
     if (now - cardPhaseAt >= CARD_TIMEOUT_MS) {
       matcher.reset()
       cardPhaseAt = now
@@ -246,21 +239,27 @@ export function createFinalVentController(
   const loop = (now: number) => {
     if (!running) return
     rafId = requestAnimationFrame(loop)
-    if (phase === 'card') tickCard(now)
+    if (phase === 'idle' || phase === 'card') tickCard(now)
   }
 
   return {
     setMeterFull(full) {
       meterFull = full
       if (!running) return
-      if (full) tryArm()
-      else disarm()
+      if (full) {
+        // 解禁だけ。CARD 相へは進めず、通常戦闘＋裏監視を続ける。
+        ensureMatcher()
+        cardPhaseAt = performance.now()
+      } else {
+        disarm()
+      }
     },
 
     onLandmarks(lm, now) {
       if (!running || phase !== 'pose') return
       if (now - posePhaseAt >= poseTimeoutMs) {
-        setPhase('card')
+        // 失敗したら凍結を解き、通常戦闘へ戻す（またかざせば再挑戦できる）
+        setPhase('idle')
         return
       }
       ensureRunner()
@@ -271,7 +270,8 @@ export function createFinalVentController(
     },
 
     isCamMuted() {
-      return phase === 'card' || phase === 'pose' || phase === 'fire'
+      // ポーズ中だけガードを止める。満タンの裏監視中はガード継続。
+      return phase === 'pose' || phase === 'fire'
     },
 
     phase() {
@@ -282,7 +282,10 @@ export function createFinalVentController(
       if (running) return
       running = true
       rafId = requestAnimationFrame(loop)
-      if (meterFull) tryArm()
+      if (meterFull) {
+        ensureMatcher()
+        cardPhaseAt = performance.now()
+      }
     },
 
     stop() {
