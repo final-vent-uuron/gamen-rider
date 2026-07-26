@@ -146,7 +146,7 @@ function Home() {
 				>
 					開発用
 				</span>
-				<div
+				{/* <div
 					style={{
 						display: "flex",
 						gap: "0.5rem",
@@ -177,7 +177,7 @@ function Home() {
 							),
 						)
 					}
-				</div>
+				</div> */}
 			</div>
 		</div>
 	);
