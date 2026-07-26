@@ -199,7 +199,7 @@ function BattlePage() {
 	const [camPose, setCamPose] = useState<CameraGuardStatus>("loading"); // ポーズ解析の読み込み状態（表示用）
 	const [camSide, setCamSide] = useState(false); // カメラに対して横向きか（向き検出）
 	// 横向き中はセンサー入力（パンチ/キック/ジャンプ/走行）を無効化するための ref ミラー
-	//（振り向きジェスチャー＝両手振りだけを通す。横向きで腕を振っても誤パンチにならない）。
+	//（振り向きはカメラ横向き検出で発火。横向きで腕を振っても誤パンチにならない）。
 	const camSideRef = useRef(false);
 	const [fvPhase, setFvPhase] = useState<FinalVentPhase>("idle"); // 右下カメラの FV シーケンス
 	const [fvPoseProgress, setFvPoseProgress] =
