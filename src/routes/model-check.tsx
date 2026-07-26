@@ -13,6 +13,7 @@ import { modelUrl } from "../model-assets";
 const MODEL_FILES = [
 	"gamen-rider-python-animation.v2.glb",
 	"gamen-rider-arduino-add-animation-fix.v2.glb",
+	"swift-add-animation.glb",
 	"test.v2.glb",
 	"flutter.glb",
 ] as const;

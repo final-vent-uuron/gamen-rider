@@ -135,8 +135,40 @@ export const RIDER_MODELS: Record<string, RiderModel> = {
 	// ライダー別に差し替えたくなったら riderId をキーにここへ登録する。
 	// 未登録のライダーは fallbackModel（あれば）→ box プレースホルダの順で描画される。
 	// キーは /select の言語ライダー id（arduino / swift / python / flutter）。
-	// swift は GLB 未用意のため未登録 → 共通モデル(python)にフォールバック。
 	python: DEFAULT_RIDER_MODEL,
+	swift: {
+		// モーション収録版（2026-07-26 R2 アップロード）。arduino/flutter のモーションパックと
+		// ほぼ同構成だが収録差あり（実測。model-check の ?model=swift-add-animation.glb で確認可）:
+		//   - 必殺は special ではなく final-vent という名前
+		//   - grasp（掴みかかり）/ grasp-reaction / skill / error-mode / jump.001 は未収録
+		//   - 収録: death / final-vent / grasp-attack / guard / idle / jump / large-reaction /
+		//           left-kick / left-punch / left-punch.001 / right-kick / right-punch / run /
+		//           small-reaction / turn（mixamo.com はゴミクリップ。使わない）
+		url: modelUrl("swift-add-animation.glb"),
+		height: 0.5,
+		rotateY: Math.PI / 2,
+		clips: {
+			idle: "idle",
+			walk: "run",
+			down: "death",
+			jump: "jump",
+			punch: ["left-punch", "right-punch"],
+			kick: ["left-kick", "right-kick"],
+			guard: "guard",
+			turn: "turn",
+			hit: "small-reaction",
+			"hit-air": "large-reaction",
+			thrown: "large-reaction", // grasp-reaction 未収録 → 吹き飛びリアクションで代用
+			"throw-hit": "grasp-attack",
+			final: "final-vent",
+			// throw（掴みかかり）は grasp 未収録 → idle フォールバック。
+			// shot / abare はバトルから外れているため未登録のままでよい。
+		},
+		stripRootMotion: ["left-kick", "right-kick", "grasp-attack"],
+		freezeHipsTranslation: ["run", "jump", "large-reaction", "turn", "guard"],
+		alignHipsToIdle: ["left-punch", "right-punch"],
+		flattenLateralTilt: ["run", "left-punch", "right-punch"],
+	},
 	arduino: {
 		// モーション大量収録版（2026-07-19 R2 アップロード）。
 		// 収録: death / error-mode / grasp / grasp-attack / grasp-reaction / idle / jump /

@@ -154,27 +154,29 @@ function Home() {
 						justifyContent: "center",
 					}}
 				>
-					{(
+					{
 						// ライダー登録（/auth/register）への遷移ボタンは意図的に置かない
 						//（URL 直打ち＋簡易パスワードでのみ入れる運営用画面）。
-						[{ to: "/select", label: "キャラ選択（デモ）" }] as const
-					).map((l) => (
-						<Link
-							key={l.to}
-							to={l.to}
-							style={{
-								padding: "0.35rem 0.9rem",
-								background: "rgba(15,23,42,0.6)",
-								color: "#94a3b8",
-								textDecoration: "none",
-								borderRadius: "6px",
-								fontSize: "0.8rem",
-								border: "1px solid #1e293b",
-							}}
-						>
-							{l.label}
-						</Link>
-					))}
+						([{ to: "/select", label: "キャラ選択（デモ）" }] as const).map(
+							(l) => (
+								<Link
+									key={l.to}
+									to={l.to}
+									style={{
+										padding: "0.35rem 0.9rem",
+										background: "rgba(15,23,42,0.6)",
+										color: "#94a3b8",
+										textDecoration: "none",
+										borderRadius: "6px",
+										fontSize: "0.8rem",
+										border: "1px solid #1e293b",
+									}}
+								>
+									{l.label}
+								</Link>
+							),
+						)
+					}
 				</div>
 			</div>
 		</div>
