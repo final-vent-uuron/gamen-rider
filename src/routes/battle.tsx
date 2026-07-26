@@ -99,20 +99,15 @@ const EMPTY_BATTLE: BattleState = {
 // 実時間で前進させつつ、最新 st - 遅延 へゆっくり寄せる（時計ドリフト・バースト到着を吸収）。
 const INTERP_DELAY_MS = 120;
 
-// 振り向き: カメラで横向きを検知した瞬間、直近このミリ秒以内に両手センサーが
-// パンチ判定（ble.ts の PUNCH しきい値）を出していないと振り向かない（誤爆防止のAND条件）。
-const TURN_HAND_WINDOW_MS = 500;
-
 // 振り向きジェスチャー対策: 片手のパンチ検出をこの ms だけ遅らせ、その間にもう片方の手も
 // 検出されたら両方とも誤パンチとして出さない（ble.ts の bothHandPunchSuppressMs 参照）。
 // 片手だけなら delay 分だけ遅れて通常どおりパンチが出る。
 const BOTH_HAND_PUNCH_SUPPRESS_MS = 100;
 
-// 掴み: 両手センサーほぼ同時ヒットで ble.ts が throw を発火する。ただし振り向き
-//（両手振り＋カメラ横向き）と同じ腕の動きなので、この ms だけ待って横向きへ変わらなかった
-// ときだけ掴みとして確定する（横向きになったら振り向きに譲って破棄）。カメラの向き検出は
-// デバウンス込みで腕振りより遅れて届くため、TURN_HAND_WINDOW_MS(500) に近い値にしてある。
-const SENSOR_THROW_CONFIRM_MS = 400;
+// 掴み: 両手センサーほぼ同時ヒットで ble.ts が throw を発火する。振り向き（カメラ横向き）
+// と同じ腕の動きになり得るので、この ms だけ待って横向きへ変わらなかったときだけ掴みとして
+// 確定する（横向きになったら振り向きに譲って破棄）。カメラ向き検出のデバウンス遅れを見込む。
+const SENSOR_THROW_CONFIRM_MS = 800;
 
 // ジャンプ: カメラで顔（鼻）がフレーム上端より上に見切れたら発動（実際に跳ぶと頭が
 // 画角から出る想定。加速度センサーは使わない＝跳ぶとき両手が動いても誤入力にならない）。
@@ -246,12 +241,6 @@ function BattlePage() {
 	const hubRef = useRef<SensorHub | null>(null); // バトル中の 4部位センサーハブ（接続ボタンから connectAny() を呼ぶ）
 	// 自分のライダーのセンサーセット名（<ライダー名>。R2 から非同期に取得）。他ライダー名のデバイス除外用。
 	const sensorSetRef = useRef<string | null>(null);
-	// 振り向き判定用: 両手加速度センサーの直近ヒット時刻（パンチ検出＝ble.ts 側のしきい値と同じ判定を流用）。
-	// カメラで横向きを検知した瞬間、両方が TURN_HAND_WINDOW_MS 以内に振られていたら振り向く。
-	const lastHandHitAtRef = useRef<{ rightHand: number; leftHand: number }>({
-		rightHand: 0,
-		leftHand: 0,
-	});
 	// 走行判定用: 4肢それぞれの直近「動き」時刻（パンチ/キック判定より緩い閾値。onImpact の
 	// 生値で判定）。対角ペア（右手+左足 / 左手+右足）が揃ってるかを見る＝クロス歩行の検知。
 	// キーボードの移動入力より弱い優先度で合成する（キーボード入力中はそちらを優先）。
@@ -791,12 +780,12 @@ function BattlePage() {
 		let faceWasUp = false;
 		let lastFaceJumpAt = 0;
 		const hubHandlers = {
-			// 横向き（振り向き態勢）中はセンサー入力を出さない。振り向きジェスチャーで腕を
-			// 振ったときの誤パンチ防止（振り向き自体は onImpact のヒット記録 AND
-			// カメラ横向きで判定するので、ここで落としても影響しない）。キーボードは対象外。
+			// 横向き（振り向き態勢）中はセンサー入力を出さない。腕振りの誤パンチ防止。
+			// 振り向き自体はカメラ横向き検出で発火するので、ここで落としても影響しない。
+			// キーボードは対象外。
 			onInput: (input: BattleInput) => {
 				if (camSideRef.current) return;
-				// 両手同時振り＝掴み。振り向きと同じ腕の動きなので少し待って確定させる。
+				// 両手同時振り＝掴み。横向きに変わったら振り向き側がタイマーを破棄する。
 				if (input.kind === "throw") {
 					window.clearTimeout(sensorThrowTimer);
 					sensorThrowTimer = window.setTimeout(() => {
@@ -809,7 +798,7 @@ function BattlePage() {
 			},
 			onStatus: (key: SensorPartKey, s: BleStatus) =>
 				setSensorStatuses((prev) => ({ ...prev, [key]: s })),
-			onImpact: (key: SensorPartKey, impact: number, hit: boolean) => {
+			onImpact: (key: SensorPartKey, impact: number, _hit: boolean) => {
 				// HUD ゲージ用の生値（高頻度なので ref に貯め、UI 反映は ~100ms に間引く）。
 				sensorImpactsRef.current = {
 					...sensorImpactsRef.current,
@@ -820,14 +809,9 @@ function BattlePage() {
 					lastImpactUiRef.current = uiNow;
 					setSensorImpacts(sensorImpactsRef.current);
 				}
-				// 振り向き判定（両手同時パンチ AND カメラ横向き）用に、手のヒット時刻を記録する。
-				if (hit && key === "rightHand")
-					lastHandHitAtRef.current.rightHand = Date.now();
-				if (hit && key === "leftHand")
-					lastHandHitAtRef.current.leftHand = Date.now();
 				// 走行判定用: パンチ/キック判定(hit)を待たず、生インパクトが軽い閾値を超えた
 				// 時点で「その肢が動いた」とみなす（パンチ/キック検出＝firmware側の別経路なので
-				// 干渉しない。turn 判定の hit ベース記録とは独立に並行して記録する）。
+				// 干渉しない）。
 				if (key === "rightHand" && impact >= RUN_STEP_THRESHOLD)
 					lastLimbStepAtRef.current.rightHand = Date.now();
 				else if (key === "leftHand" && impact >= RUN_STEP_THRESHOLD)
@@ -896,10 +880,9 @@ function BattlePage() {
 			},
 			// 解析の読み込み状態（カメラ上のバッジ表示。骨格が出ない原因の切り分け用）
 			setCamPose,
-			// 体の向き（カメラに対して横向きか）。正面 → 横向きの瞬間が振り向きの候補になる。
+			// 体の向き（カメラに対して横向きか）。正面 → 横向きの瞬間に振り向く。
 			// デバウンス済みの変化時のみ呼ばれるので、横向き 1 回につき 1 回だけ送られる。
-			// 実際に振り向くのは、かつ両手センサーが直近 TURN_HAND_WINDOW_MS 以内に
-			// パンチ判定（ble.ts の同じしきい値）を出していたとき（AND 条件。誤爆防止）。
+			// 両手同時振りの掴み待ちはここで破棄（横向き＝振り向きに譲る）。
 			(side) => {
 				if (fv.isCamMuted()) {
 					camSideRef.current = false;
@@ -909,20 +892,16 @@ function BattlePage() {
 				camSideRef.current = side;
 				setCamSide(side);
 				if (side) {
+					// 掴み確定待ちをキャンセル（振り向きと腕振りが同じなので横向きが優先）。
+					window.clearTimeout(sensorThrowTimer);
+					sensorThrowTimer = 0;
 					const now = Date.now();
-					const hands = lastHandHitAtRef.current;
-					const bothHandsSwung =
-						now - hands.rightHand <= TURN_HAND_WINDOW_MS &&
-						now - hands.leftHand <= TURN_HAND_WINDOW_MS;
-					if (bothHandsSwung) {
-						// 横向き＋両手振りで振り向く。成功時は進行方向も反転。
-						net.sendTurn();
-						applyPred((s) => {
-							const { state, turned } = applyTurn(s, youIdRef.current, now);
-							if (turned) moveDirRef.current = flipMoveIntent(moveDirRef.current);
-							return state;
-						});
-					}
+					net.sendTurn();
+					applyPred((s) => {
+						const { state, turned } = applyTurn(s, youIdRef.current, now);
+						if (turned) moveDirRef.current = flipMoveIntent(moveDirRef.current);
+						return state;
+					});
 				}
 			},
 		);
@@ -1968,7 +1947,7 @@ function ControlsHelp() {
 		["📷 構え", "カメラにボクシングの構え(両拳を顔の前)でガード"],
 		["U", "掴み(グラスプ・当たれば掴み攻撃・ガード崩し)"],
 		["T", "振り向き（進行方向も反転）"],
-		["📷 横向き", "横向き＋両手振りで振り返り＋進行方向反転"],
+		["📷 横向き", "カメラに体を横に向けると振り返り＋進行方向反転"],
 		["L / F", "ファイナルベント(5ゲージ)"],
 	];
 	return (
