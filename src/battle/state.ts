@@ -1251,21 +1251,35 @@ export function applyJump(state: BattleState, playerId: string, now: number): Ba
 }
 
 // 振り向き（facing 反転）。カメラの体の向き検出（正面 → 横向き）から呼ぶ。
-// 位置は変えず向きだけ反転する。行動可能時のみ（硬直・被弾中は無効）。
-// 移動中は stepBattle が moveIntent で facing を上書きするため、実質は静止中の入力。
-export function applyTurn(state: BattleState, playerId: string, now: number): BattleState {
-  if (state.winnerId) return state
-  if (now < (state.intrusionUntil ?? 0)) return state // 乱入演出中は行動不可
-  if (now < (state.cutin?.until ?? 0)) return state // カットイン演出中は行動不可
-  if (isFinalVentActive(state, now)) return state // FV 溜め中は行動不可
+// 位置は変えず向きと水平速度だけ反転する。行動可能時のみ（硬直・被弾中は無効）。
+// 進行方向（moveIntent）の反転は呼び出し側（battle-room / クライアント予測）が担当する。
+// turned = true のときだけ moveIntent を反転すること（失敗時に二重反転しない）。
+export function applyTurn(
+  state: BattleState,
+  playerId: string,
+  now: number,
+): { state: BattleState; turned: boolean } {
+  if (state.winnerId) return { state, turned: false }
+  if (now < (state.intrusionUntil ?? 0)) return { state, turned: false } // 乱入演出中は行動不可
+  if (now < (state.cutin?.until ?? 0)) return { state, turned: false } // カットイン演出中は行動不可
+  if (isFinalVentActive(state, now)) return { state, turned: false } // FV 溜め中は行動不可
   let changed = false
   const players = state.players.map((p) => {
     if (p.id !== playerId) return p
     if (!canActNow(p, now)) return p
     changed = true
-    return { ...p, facing: (p.facing === 1 ? -1 : 1) as 1 | -1 }
+    return {
+      ...p,
+      facing: (p.facing === 1 ? -1 : 1) as 1 | -1,
+      vx: -p.vx, // 空中の水平慣性も進行方向に合わせて反転
+    }
   })
-  return changed ? { ...state, players } : state
+  return changed ? { state: { ...state, players }, turned: true } : { state, turned: false }
+}
+
+// 振り向き成功時に移動意図を反転する（0 ならそのまま）。
+export function flipMoveIntent(dir: -1 | 0 | 1): -1 | 0 | 1 {
+  return dir === 0 ? 0 : ((-dir) as -1 | 1)
 }
 
 function checkWinner(state: BattleState): BattleState {
