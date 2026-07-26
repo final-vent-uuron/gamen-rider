@@ -1149,12 +1149,25 @@ function BattlePage() {
 
 	// メーター満タンで FV 解禁（裏監視＋matcher lazy load）。CARD 待ちには閉じ込めない。
 	// 他プレイヤーが溜め中なら自分は解禁しない（SA3 は同時に1人だけ）。
+	// NFC でサーバーが先に pose 相を立てた場合は、ローカル FV コントローラも追従して
+	// MediaPipe ポーズ認証を開始する（カード認識スキップ＝スマホ NFC がカード相当）。
 	useEffect(() => {
 		const vent = battle.finalVent;
 		const ventingOther =
 			vent && Date.now() < vent.until && vent.playerId !== youIdRef.current;
 		const full = !ventingOther && (self?.meter ?? 0) >= ARENA.meterFinalCost;
 		fvRef.current?.setMeterFull(full);
+		if (
+			vent &&
+			Date.now() < vent.until &&
+			vent.playerId === youIdRef.current &&
+			vent.phase === "pose"
+		) {
+			const local = fvRef.current?.phase();
+			if (local === "idle" || local === "card") {
+				fvRef.current?.enterPoseFromCard();
+			}
+		}
 	}, [self?.meter, battle.finalVent]);
 
 	const fvReady =

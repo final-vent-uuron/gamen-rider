@@ -4,11 +4,12 @@
 //   - /ws            : WebSocket アップグレードを Durable Object（対戦部屋）へ橋渡し
 //   - /riders        : 登録ライダーの保存/一覧（R2）
 //   - /riders/nfc-bind: ファイナルベント用 NFC タグの紐付け（Swift アプリの enroll から）
-//   - /riders/nfc    : NFC タップでの Final Vent 発動（POST 一発版。常時接続を持ちたく
-//                       ない呼び出し元向け。GET で直近の結果ログも取れる。同じことは
-//                       WS の {t:'nfc-final'} でもできる。/riders/nfc-final は後方互換の別名）
+//   - /riders/nfc    : NFC タップでカード認証相当＝ポーズ相開始（POST 一発版。常時接続を
+//                       持ちたくない呼び出し元向け。GET で直近の結果ログも取れる。同じことは
+//                       WS の {t:'nfc-final'} でもできる。/riders/nfc-final は後方互換の別名。
+//                       ダメージ発動は PC 側のポーズ認証後）
 //
-// /riders/nfc（発動）と /ws はどちらも対戦中の生きた状態（接続中プレイヤー・ゲージ等）を持つ
+// /riders/nfc（カード認証）と /ws はどちらも対戦中の生きた状態（接続中プレイヤー・ゲージ等）を持つ
 // Durable Object 本体への橋渡しが必要なので、R2 だけで完結する /riders 系とは別に
 // Durable Object（BattleRoom）へ forward する。/riders/nfc-bind（紐付け）は R2 だけで完結する。
 //
@@ -37,7 +38,7 @@ function battleRoom(env: Env, url: URL): DurableObjectStub {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
-    // /riders/nfc-final は旧パス（後方互換のため残す）。/riders/nfc が今の正式な発動先。
+    // /riders/nfc-final は旧パス（後方互換のため残す）。/riders/nfc が今の正式なカード認証先。
     if (url.pathname === '/ws' || url.pathname === '/riders/nfc' || url.pathname === '/riders/nfc-final') {
       return battleRoom(env, url).fetch(request)
     }
