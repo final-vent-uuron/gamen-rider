@@ -15,7 +15,7 @@ const DETECT_INTERVAL_MS = 66 // 解析周期（~15fps）。推論は別スレ�
 const BITMAP_WIDTH = 320 // 転送前に縮小（lite モデルの入力は小さいので精度への影響なし・転送も軽い）
 const ON_FRAMES = 2 // 連続何回「構え」を見たら guard on（誤爆防止）
 const OFF_FRAMES = 3 // 連続何回見失ったら guard off（ちらつき防止）
-const FACING_FRAMES = 2 // 向き（正面/横）の切り替えに必要な連続フレーム数
+const FACING_FRAMES = 3 // 向き（正面/横）の切り替えに必要な連続フレーム数
 
 // ポーズ解析パイプラインの状態。UI に出して「なぜ骨格が出ないか」を見えるようにする。
 export type CameraGuardStatus = 'loading' | 'ready' | 'error'
