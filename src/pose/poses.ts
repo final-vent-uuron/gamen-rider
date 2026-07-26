@@ -132,9 +132,9 @@ export function isBoxingGuard(lm: Lm): boolean {
 // 体のヨー回転でほぼ変わらないので、スケールの基準に使う（カメラとの距離にも影響されない）。
 export type BodyFacing = 'front' | 'side'
 const FACING_MIN_VIS = 0.4 // 手前側（よく見えている方）の肩に要求する可視性。これ未満は判定しない
-const FACING_HIDDEN_VIS = 0.3 // 奥側の肩がこれ未満 = 体に隠れている ＝ それ自体が横向きの証拠
-const FACING_SIDE_RATIO = 0.5 // 肩幅 / 胴長 がこれ未満なら横向き（正面はおおむね 0.7 前後）
-const FACING_SIDE_YAW_DEG = 50 // 肩の z 差から出すヨー角がこれ以上なら横向き（正面 ~0-30°）
+const FACING_HIDDEN_VIS = 0.25 // 奥側の肩がこれ未満 = 体に隠れている ＝ それ自体が横向きの証拠
+const FACING_SIDE_RATIO = 0.42 // 肩幅 / 胴長 がこれ未満なら横向き（正面はおおむね 0.7 前後）
+const FACING_SIDE_YAW_DEG = 60 // 肩の z 差から出すヨー角がこれ以上なら横向き（正面 ~0-30°）
 
 // 向き判定に使う生の計測値。UI のデバッグ表示・しきい値調整用に公開する。
 export interface FacingMetrics {
@@ -177,7 +177,7 @@ export function bodyFacing(lm: Lm): BodyFacing | null {
   // 奥側の可視性低下はむしろ横向きの証拠として使う。
   if (Math.max(m.leftVis, m.rightVis) < FACING_MIN_VIS) return null // 体ごと見失い → 現状維持
   if (Math.min(m.leftVis, m.rightVis) < FACING_HIDDEN_VIS) return 'side' // 片側が隠れている
-  if (m.yawDeg >= FACING_SIDE_YAW_DEG) return 'side' // 肩の奥行き差が大きい（浅い横向きも拾う）
+  if (m.yawDeg >= FACING_SIDE_YAW_DEG) return 'side' // 肩の奥行き差が大きい（明確な横向きのみ）
   return m.ratio < FACING_SIDE_RATIO ? 'side' : 'front'
 }
 
