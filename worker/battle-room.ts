@@ -58,10 +58,11 @@ type ClientMsg =
   | { t: 'final-vent'; on?: unknown; phase?: unknown } // SA3 風溜め開始/更新/解除
   | { t: 'reset' }
   | { t: 'ping' } // ハートビート（生存確認のみ。ゲームへの影響なし）
-  // NFC 連携（Swift 製スマホアプリ）: カード＋ポーズの代わりに NFC タップで Final Vent を撃つ。
+  // NFC 連携（Swift 製スマホアプリ）: カード認識の代わりに NFC タップでポーズ相へ進む。
+  // 発動本体は PC 側カメラのポーズ認証後（クライアントが sendAttack('final')）。
   // riderId は送らせない（公開済みの固定4文字列を誰でも打ててしまうため）。物理タグの固有ID
-  // だけを受け取り、事前に /riders/nfc で紐付け済みのライダーをサーバー側で引き当てる
-  // ＝実際にタグを持っている人にしか撃てない。
+  // だけを受け取り、事前に /riders/nfc-bind で紐付け済みのライダーをサーバー側で引き当てる
+  // ＝実際にタグを持っている人にしかポーズ相に入れない。
   | { t: 'nfc-final'; nfcId?: unknown; tagId?: unknown }
 
 export class BattleRoom extends DurableObject<Env> {
@@ -203,9 +204,9 @@ export class BattleRoom extends DurableObject<Env> {
     }
   }
 
-  // /riders/nfc（発動）のハンドラ。/riders/nfc-final は同じ処理への後方互換エイリアス。
-  //   POST: 常時接続を持たない呼び出し元（受信ループ不要にしたい Swift アプリ等）向けの発動一撃版。
-  //         処理内容は WS の 'nfc-final' と同じ（triggerNfcFinal 共有）。
+  // /riders/nfc（カード認証→ポーズ相）のハンドラ。/riders/nfc-final は同じ処理への後方互換エイリアス。
+  //   POST: 常時接続を持たない呼び出し元（受信ループ不要にしたい Swift アプリ等）向け。
+  //         処理内容は WS の 'nfc-final' と同じ（triggerNfcFinal 共有）。即ダメージはしない。
   //   GET : 直近の結果ログを返す。検証ページ（/nfc-test）がポーリングして、実際に届いた
   //         リクエストの結果をブラウザ側でも見えるようにするため。
   private async handleNfcFinalHttp(request: Request): Promise<Response> {
@@ -243,7 +244,9 @@ export class BattleRoom extends DurableObject<Env> {
 
   // nfc-final の中身（WS メッセージ・HTTP POST 共通）。
   // nfcId → 紐付け済みライダー → 対戦中の該当プレイヤーを引き当て、ゲージ満タンなら
-  // Final Vent を適用する。理由がわかるよう毎回 console.log ＋ nfcLog に記録する
+  // カード認識相当としてポーズ相（SA3 風凍結）を開始する。ダメージ発動はしない
+  //（PC カメラのポーズ認証後にクライアントが sendAttack('final')）。
+  // 理由がわかるよう毎回 console.log ＋ nfcLog に記録する
   //（wrangler tail でも /nfc-test のポーリングでも見える）。
   private async triggerNfcFinal(
     nfcId: string,
@@ -273,8 +276,24 @@ export class BattleRoom extends DurableObject<Env> {
       this.logNfc(nfcId, result)
       return result
     }
-    this.battle = applyAttack(this.battle, player.id, 'final', Date.now())
-    console.log(`[nfc-final] riderId=${riderId} -> OK 発動`)
+    const now = Date.now()
+    const prev = this.battle.finalVent
+    // 既に自分のポーズ待ちなら冪等に成功扱い（二重タップ対策）
+    if (prev && now < prev.until && prev.playerId === player.id && prev.phase === 'pose') {
+      console.log(`[nfc-final] riderId=${riderId} -> OK ポーズ待ち（継続）`)
+      const result = { ok: true, riderId, reason: 'pose-pending' }
+      this.logNfc(nfcId, result)
+      return result
+    }
+    this.battle = beginFinalVent(this.battle, player.id, 'pose', now)
+    const vent = this.battle.finalVent
+    if (!vent || now >= vent.until || vent.playerId !== player.id || vent.phase !== 'pose') {
+      console.log(`[nfc-final] riderId=${riderId} -> busy（他プレイヤーの FV 溜め中など）`)
+      const result = { ok: false, riderId, reason: 'busy' }
+      this.logNfc(nfcId, result)
+      return result
+    }
+    console.log(`[nfc-final] riderId=${riderId} -> OK ポーズ待ち開始`)
     const result = { ok: true, riderId }
     this.logNfc(nfcId, result)
     return result

@@ -1,7 +1,8 @@
 // NFC ファイナルベント連携の検証ページ（開発用）。
-// Swift アプリが本来やること（① 紐付け: POST /riders/nfc-bind、② 発動: POST /riders/nfc。
-// /riders/nfc-final は旧パスの後方互換エイリアス。WS の {t:'nfc-final'} でも発動できるが
+// Swift アプリが本来やること（① 紐付け: POST /riders/nfc-bind、② カード認証: POST /riders/nfc。
+// /riders/nfc-final は旧パスの後方互換エイリアス。WS の {t:'nfc-final'} でも同じだが
 // HTTP 版が本命）をブラウザから素振りできる。
+// NFC はカード認識の代わり。成功するとポーズ相へ入り、PC カメラのポーズ認証後に発動する。
 //
 // API ベース URL は画面上で明示的に選べるようにしてある（rider-registry の bindRiderNfc や
 // battle/net.ts の defaultWsUrl は環境から自動判定するため、実際にどこを叩いたか分かりにくい
@@ -222,8 +223,8 @@ function NfcTestPage() {
         <h1 style={{ margin: 0, fontSize: '1.4rem' }}>NFC ファイナルベント 検証ページ</h1>
       </div>
       <p style={{ width: '100%', maxWidth: '820px', color: '#9ca3af', fontSize: '0.85rem', margin: 0 }}>
-        Swift アプリが叩く2本（① 紐付け、② 発動）をブラウザから代わりに叩いて確認する開発用ページ。
-        どの URL を叩いたかは各ボタンの直下に必ず表示される。
+        Swift アプリが叩く2本（① 紐付け、② カード認証→ポーズ待ち）をブラウザから代わりに叩いて確認する開発用ページ。
+        NFC 成功後はバトル画面でポーズを取るとファイナルベントが発動する。どの URL を叩いたかは各ボタンの直下に必ず表示される。
       </p>
 
       {/* 実機からの本物のリクエスト結果（自動更新）。これが今回の本題: サーバーが記録した
@@ -281,7 +282,7 @@ function NfcTestPage() {
         <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} style={inputStyle} />
         <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
           今の設定なら POST 先は <code>{apiBase}/riders/nfc-bind</code>（紐付け）と{' '}
-          <code>{apiBase}/riders/nfc</code>（発動）
+          <code>{apiBase}/riders/nfc</code>（カード認証）
         </span>
       </section>
 
@@ -323,9 +324,12 @@ function NfcTestPage() {
         </span>
       </section>
 
-      {/* 2-A. 発動（HTTP・本命） */}
+      {/* 2-A. カード認証（HTTP・本命）→ サーバーがポーズ相開始。発動はポーズ後 */}
       <section style={panelStyle}>
-        <h2 style={h2Style}>② 発動（HTTP・Swift アプリが実際に使う版）</h2>
+        <h2 style={h2Style}>② カード認証（HTTP・Swift アプリが実際に使う版）</h2>
+        <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
+          成功すると即ダメージではなくポーズ待ちになる。バトル画面のカメラ前で FV ポーズを取ると発動する。
+        </span>
         <code style={urlStyle}>POST {apiBase}/riders/nfc</code>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label style={{ ...fieldStyle, flex: '1 1 220px' }}>
@@ -344,9 +348,9 @@ function NfcTestPage() {
         )}
       </section>
 
-      {/* 2-B. 発動（WS・任意。対戦状況をリアルタイムで見たいときだけ） */}
+      {/* 2-B. カード認証（WS・任意。対戦状況をリアルタイムで見たいときだけ） */}
       <section style={panelStyle}>
-        <h2 style={h2Style}>② 発動（WS・任意 / 対戦状況のライブ確認用）</h2>
+        <h2 style={h2Style}>② カード認証（WS・任意 / 対戦状況のライブ確認用）</h2>
         <code style={urlStyle}>WS {toWs(apiBase)}/ws</code>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label style={fieldStyle}>

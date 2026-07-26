@@ -60,6 +60,8 @@ export interface FinalVentPoseProgress {
 
 export interface FinalVentController {
   setMeterFull(full: boolean): void
+  /** NFC 等でカード認証済みになったとき、ORB 認識と同じくポーズ相へ進める */
+  enterPoseFromCard(): boolean
   onLandmarks(lm: NormalizedLandmark[] | null, now: number): void
   isCamMuted(): boolean
   phase(): FinalVentPhase
@@ -253,6 +255,17 @@ export function createFinalVentController(
       } else {
         disarm()
       }
+    },
+
+    // スマホ NFC など「カード相当」の外部認証。ORB でカードを読んだのと同じく pose へ進む。
+    enterPoseFromCard() {
+      if (!running || !meterFull) return false
+      if (phase === 'pose' || phase === 'fire') return false
+      if (performance.now() < cooldownUntil) return false
+      // ポーズ手順の lazy load を促す（満タン時に既に走っていることが多い）
+      ensureMatcher()
+      setPhase('pose')
+      return true
     },
 
     onLandmarks(lm, now) {
